@@ -5,7 +5,8 @@
 //! Retour arrière ou Alt+← (précédent), Alt+→ (suivant), Alt+↑ (dossier parent),
 //! Ctrl+H (fichiers cachés), F5 (relire), Ctrl+Q (quitter), lettres (aller à),
 //! Espace (aperçu d'une image), Suppr (corbeille), Ctrl+Z (annuler la mise à la
-//! corbeille). Dans la corbeille : Entrée remet l'élément à sa place.
+//! corbeille). Dans la corbeille : bouton « Remettre » ou Ctrl+Retour arrière
+//! pour remettre l'élément à sa place ; double-clic l'ouvre comme ailleurs.
 //! Souris : clic, double-clic pour ouvrir, molette, glisser la barre d'outils
 //! pour déplacer la fenêtre.
 
@@ -81,6 +82,8 @@ enum Hit {
     Eject(PathBuf),
     /// Vider la corbeille (second clic pour confirmer)
     EmptyTrash,
+    /// Remettre l'élément sélectionné de la corbeille à sa place
+    Restore,
     Crumb(PathBuf),
     Back,
     Forward,
@@ -316,9 +319,6 @@ impl Files {
             self.navigated();
             return;
         }
-        if self.in_trash() {
-            return self.restore_selected();
-        }
         if is_image_path(&path) {
             spawn_sibling("apercu", &path);
             return;
@@ -366,6 +366,8 @@ impl Files {
             Keysym::Return | Keysym::KP_Enter => return self.open_selected(),
             Keysym::Left if alt => self.browser.back(),
             Keysym::Right if alt => self.browser.forward(),
+            // Comme Cmd+Suppr sur macOS : remettre à sa place depuis la corbeille
+            Keysym::BackSpace if ctrl && self.in_trash() => return self.restore_selected(),
             Keysym::BackSpace => self.browser.back(),
             Keysym::F5 => self.browser.reload(),
             Keysym::Delete | Keysym::KP_Delete => return self.trash_selected(),
@@ -435,6 +437,7 @@ impl Files {
             }
             Some(Hit::Eject(path)) => self.eject(&path),
             Some(Hit::EmptyTrash) => self.empty_trash(),
+            Some(Hit::Restore) => self.restore_selected(),
             Some(Hit::Back) => {
                 self.browser.back();
                 self.navigated();
@@ -506,7 +509,7 @@ impl Files {
         self.navigated();
     }
 
-    /// Dans la corbeille, Entrée ou double-clic remet l'élément à sa place.
+    /// Dans la corbeille : remet l'élément sélectionné à sa place.
     fn restore_selected(&mut self) {
         let Some(entry) = self.browser.entries.get(self.browser.selected) else {
             return;
@@ -843,6 +846,21 @@ impl Files {
                 fg,
             );
             hit(bx, mid - bh / 2.0, lw, bh, Hit::EmptyTrash);
+            // « Remettre » : l'élément sélectionné retourne à son emplacement
+            let rl = "Remettre";
+            let rw = self.regular.measure(rl, 13.0 * s) + 24.0 * s;
+            let rx = bx - rw - 8.0 * s;
+            c.fill_rounded(rx, mid - bh / 2.0, rw, bh, 8.0 * s, theme::SUBTLE);
+            self.regular.draw_in(
+                &mut c,
+                rl,
+                rx + 12.0 * s,
+                mid - bh / 2.0,
+                bh,
+                13.0 * s,
+                theme::TEXT,
+            );
+            hit(rx, mid - bh / 2.0, rw, bh, Hit::Restore);
         }
         c.fill_rounded(x0, TOOLBAR_H * s - s, w as f32 - x0, s, 0.0, LINE);
 

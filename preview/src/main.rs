@@ -126,6 +126,10 @@ struct Apercu {
     /// Dernière image mise à la corbeille (Ctrl+Z la remet)
     last_trashed: Option<PathBuf>,
     fullscreen: bool,
+    qh: QueueHandle<Apercu>,
+    /// Image en attente d'affichage, et dessin demandé entre-temps
+    frame_pending: bool,
+    dirty: bool,
     width: u32,
     height: u32,
     scale: i32,
@@ -158,11 +162,23 @@ fn folder_images(path: &Path) -> Vec<PathBuf> {
 }
 
 fn main() {
-    let Some(arg) = std::env::args().nth(1) else {
-        eprintln!("usage : apercu IMAGE");
-        std::process::exit(2);
+    // Sans argument (lancé depuis le lanceur) : la première image de ~/Images
+    let start = match std::env::args().nth(1) {
+        Some(arg) => std::path::absolute(PathBuf::from(arg)).unwrap_or_default(),
+        None => {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+            let dir = ["Images", "Pictures", "Téléchargements", "Downloads"]
+                .iter()
+                .map(|d| home.join(d))
+                .find(|d| d.is_dir())
+                .unwrap_or(home);
+            // Une image fictive dans le dossier suffit à en lister le contenu
+            folder_images(&dir.join("_"))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| dir.join("_"))
+        }
     };
-    let start = std::path::absolute(PathBuf::from(arg)).unwrap_or_default();
     let mut list = folder_images(&start);
     if !list.contains(&start) {
         list.insert(0, start.clone());
@@ -259,6 +275,9 @@ fn main() {
         message: None,
         last_trashed: None,
         fullscreen: false,
+        qh: qh.clone(),
+        frame_pending: false,
+        dirty: false,
         width: 1200,
         height: 800,
         scale: 1,
@@ -710,10 +729,21 @@ impl Apercu {
 
     // --- Dessin ---------------------------------------------------------------
 
+    /// Demande un dessin : immédiat, puis au plus un par rafraîchissement
+    /// d'écran (une souris rapide envoie bien plus d'événements que d'images).
     fn draw(&mut self) {
+        if self.frame_pending {
+            self.dirty = true;
+            return;
+        }
+        self.render();
+    }
+
+    fn render(&mut self) {
         if !self.configured {
             return;
         }
+        self.dirty = false;
         let s = self.scale.max(1) as f32;
         let (w, h) = (self.width * s as u32, self.height * s as u32);
         let Some(mut pool) = self.pool.take() else {
@@ -773,6 +803,16 @@ impl Apercu {
                     Rgba::hex(0xffffff, 0.9),
                 );
                 let label = format!("{} × {}", (r - l) as u32, (b - t) as u32);
+                // Dimensions sur une pastille sombre, lisibles sur toute image
+                let lw = self.regular.measure(&label, theme::FONT_SMALL * s) + 16.0 * s;
+                c.fill_rounded(
+                    rl + 6.0 * s,
+                    rb - 28.0 * s,
+                    lw,
+                    22.0 * s,
+                    11.0 * s,
+                    Rgba::hex(0x000000, 0.6),
+                );
                 self.regular.draw_in(
                     &mut c,
                     &label,
@@ -828,6 +868,8 @@ impl Apercu {
         let surface = self.window.wl_surface();
         surface.set_buffer_scale(s as i32);
         surface.damage_buffer(0, 0, w as i32, h as i32);
+        surface.frame(&self.qh, surface.clone());
+        self.frame_pending = true;
         if buffer.attach_to(surface).is_ok() {
             self.window.commit();
         }
@@ -1195,7 +1237,12 @@ impl CompositorHandler for Apercu {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.frame_pending = false;
+        if self.dirty {
+            self.render();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,

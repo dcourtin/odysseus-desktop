@@ -25,6 +25,12 @@ impl Canvas<'_> {
 
     /// Rectangle aux coins arrondis, anticrénelé (distance signée à une boîte arrondie).
     pub fn fill_rounded(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, c: Rgba) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        if radius < 0.5 {
+            return self.fill_rect(x, y, w, h, c);
+        }
         let r = radius.min(w / 2.0).min(h / 2.0);
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
@@ -34,6 +40,27 @@ impl Canvas<'_> {
                 let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
                 let dist = (dx * dx + dy * dy).sqrt() - r;
                 self.blend(px, py, c, (0.5 - dist).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Rectangle droit (rapide : une couleur précalculée par ligne, bornes coupées).
+    pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, c: Rgba) {
+        let x0 = (x.round().max(0.0) as u32).min(self.width);
+        let y0 = (y.round().max(0.0) as u32).min(self.height);
+        let x1 = ((x + w).round().max(0.0) as u32).min(self.width);
+        let y1 = ((y + h).round().max(0.0) as u32).min(self.height);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let src = premultiply(c, 1.0);
+        let inv = 255 - src[3] as u32;
+        let stride = self.width as usize * 4;
+        for row in self.buf[y0 as usize * stride..y1 as usize * stride].chunks_exact_mut(stride) {
+            for px in row[x0 as usize * 4..x1 as usize * 4].as_chunks_mut::<4>().0 {
+                for (dst, s) in px.iter_mut().zip(src) {
+                    *dst = (s as u32 + (*dst as u32 * inv + 127) / 255) as u8;
+                }
             }
         }
     }
@@ -78,9 +105,11 @@ impl Canvas<'_> {
         let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
         for py in y.floor() as i32..(y + h).ceil() as i32 {
             for px in x.floor() as i32..(x + w).ceil() as i32 {
-                let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
-                let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
-                let dist = (dx * dx + dy * dy).sqrt() - r;
+                // Distance signée exacte (négative à l'intérieur, même sans arrondi)
+                let qx = (px as f32 + 0.5 - cx).abs() - hx;
+                let qy = (py as f32 + 0.5 - cy).abs() - hy;
+                let (dx, dy) = (qx.max(0.0), qy.max(0.0));
+                let dist = (dx * dx + dy * dy).sqrt() + qx.max(qy).min(0.0) - r;
                 // dans la bande [-width, 0] de la distance signée
                 let outer = (0.5 - dist).clamp(0.0, 1.0);
                 let inner = (0.5 - (dist + width)).clamp(0.0, 1.0);
