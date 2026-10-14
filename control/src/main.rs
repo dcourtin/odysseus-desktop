@@ -116,6 +116,9 @@ struct Control {
     /// Image en attente d'affichage, et dessin demandé entre-temps
     frame_pending: bool,
     dirty: bool,
+    /// Fond du panneau (ombre, cadre) déjà dessiné, pour cette taille de tampon :
+    /// le plus coûteux d'une image, et il ne change pas
+    background: Option<(u32, u32, Vec<u8>)>,
     layer: LayerSurface,
     loop_handle: LoopHandle<'static, Control>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -234,6 +237,7 @@ fn main() {
         qh: qh.clone(),
         frame_pending: false,
         dirty: false,
+        background: None,
         shm,
         layer,
         loop_handle: handle,
@@ -648,23 +652,28 @@ impl Control {
             width: w,
             height: h,
         };
-        canvas.clear();
         self.zones.clear();
-
-        // Panneau
-        let (px, py, pw, ph) = (MARGIN, MARGIN, W, self.height as f32 - 2.0 * MARGIN);
-        let r = theme::PANEL_RADIUS * s;
-        canvas.shadow(px * s, (py + 4.0) * s, pw * s, ph * s, r, 22.0 * s, 0.45);
-        canvas.fill_rounded(px * s, py * s, pw * s, ph * s, r, theme::PANEL);
-        canvas.stroke_rounded(
-            px * s,
-            py * s,
-            pw * s,
-            ph * s,
-            r,
-            s.max(1.0),
-            theme::PANEL_BORDER,
-        );
+        match &self.background {
+            Some((bw, bh, pixels)) if (*bw, *bh) == (w, h) => canvas.buf.copy_from_slice(pixels),
+            _ => {
+                canvas.clear();
+                // Panneau
+                let (px, py, pw, ph) = (MARGIN, MARGIN, W, self.height as f32 - 2.0 * MARGIN);
+                let r = theme::PANEL_RADIUS * s;
+                canvas.shadow(px * s, (py + 4.0) * s, pw * s, ph * s, r, 22.0 * s, 0.45);
+                canvas.fill_rounded(px * s, py * s, pw * s, ph * s, r, theme::PANEL);
+                canvas.stroke_rounded(
+                    px * s,
+                    py * s,
+                    pw * s,
+                    ph * s,
+                    r,
+                    s.max(1.0),
+                    theme::PANEL_BORDER,
+                );
+                self.background = Some((w, h, canvas.buf.to_vec()));
+            }
+        }
 
         let mut d = Drawer {
             canvas: &mut canvas,
@@ -1659,11 +1668,15 @@ impl PointerHandler for Control {
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     if self.dragging {
+                        // Le curseur suit la souris au pixel près ; le son, par pas de 1 %
                         if let Some(v) = self.slider_value(x)
-                            && self.volume.is_none_or(|old| (old - v).abs() >= 0.01)
+                            && self.volume != Some(v)
                         {
+                            let step = |v: f32| (v * 100.0).round();
+                            if self.volume.is_none_or(|old| step(old) != step(v)) {
+                                self.send(Act::Volume(v));
+                            }
                             self.volume = Some(v);
-                            self.send(Act::Volume(v));
                             self.draw();
                         }
                         continue;

@@ -34,12 +34,45 @@ impl Canvas<'_> {
         let r = radius.min(w / 2.0).min(h / 2.0);
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
+        let src = premultiply(c, 1.0);
+        let (left, right) = (x.floor() as i32, (x + w).ceil() as i32);
         for py in y.floor() as i32..(y + h).ceil() as i32 {
-            for px in x.floor() as i32..(x + w).ceil() as i32 {
+            let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
+            // Pixels entièrement couverts de la ligne, remplis d'un bloc ; seuls
+            // les bords (arrondis, anticrénelage) sont calculés un par un
+            let ri = r - 0.5;
+            let (mut a, mut b) = (right, right);
+            if dy < ri {
+                let half = hx + (ri * ri - dy * dy).sqrt();
+                a = (cx - half - 0.5).ceil() as i32;
+                b = ((cx + half - 0.5).floor() as i32 + 1).max(a);
+            }
+            for px in (left..a.min(right)).chain(b.max(left)..right) {
                 let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
-                let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
                 let dist = (dx * dx + dy * dy).sqrt() - r;
                 self.blend(px, py, c, (0.5 - dist).clamp(0.0, 1.0));
+            }
+            self.fill_span(py, a.max(left), b.min(right), src);
+        }
+    }
+
+    /// Pixels [x0, x1) de la ligne y, entièrement couverts (couleur prémultipliée)
+    fn fill_span(&mut self, y: i32, x0: i32, x1: i32, src: [u8; 4]) {
+        if y < 0 || y as u32 >= self.height {
+            return;
+        }
+        let (x0, x1) = (
+            x0.max(0) as usize,
+            (x1.max(0) as usize).min(self.width as usize),
+        );
+        if x0 >= x1 {
+            return;
+        }
+        let inv = 255 - src[3] as u32;
+        let row = y as usize * self.width as usize * 4;
+        for px in self.buf[row + x0 * 4..row + x1 * 4].as_chunks_mut::<4>().0 {
+            for (dst, s) in px.iter_mut().zip(src) {
+                *dst = (s as u32 + (*dst as u32 * inv + 127) / 255) as u8;
             }
         }
     }
