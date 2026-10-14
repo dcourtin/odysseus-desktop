@@ -242,8 +242,14 @@ impl Files {
                 .arg(&path)
                 .process_group(0)
                 .spawn();
-            if let Err(e) = result {
-                self.browser.message = Some(format!("Impossible d'ouvrir l'éditeur : {e}"));
+            match result {
+                // Attente dans un fil : pas de processus zombie
+                Ok(mut child) => {
+                    std::thread::spawn(move || child.wait());
+                }
+                Err(e) => {
+                    self.browser.message = Some(format!("Impossible d'ouvrir l'éditeur : {e}"))
+                }
             }
         } else {
             self.browser.message =

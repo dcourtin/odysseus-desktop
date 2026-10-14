@@ -198,8 +198,12 @@ fn spawn_sibling(name: &str, args: &[&str]) {
         .and_then(|p| p.parent().map(|d| d.join(name)));
     match path {
         Some(path) if path.exists() => {
-            if let Err(e) = std::process::Command::new(path).args(args).spawn() {
-                eprintln!("shell-bar : {name} ({e})");
+            match std::process::Command::new(path).args(args).spawn() {
+                // Attente dans un fil : pas de processus zombie
+                Ok(mut child) => {
+                    std::thread::spawn(move || child.wait());
+                }
+                Err(e) => eprintln!("shell-bar : {name} ({e})"),
             }
         }
         _ => eprintln!("shell-bar : {name} introuvable"),

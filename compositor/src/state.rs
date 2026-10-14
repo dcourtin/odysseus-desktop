@@ -260,9 +260,12 @@ impl Odysseus {
             Some(path) => cmd.env("SWAYSOCK", path),
             None => cmd.env_remove("SWAYSOCK"),
         };
-        let result = cmd.spawn();
-        if let Err(e) = result {
-            tracing::warn!("impossible de lancer « {command} » : {e}");
+        match cmd.spawn() {
+            // Attente dans un fil : pas de processus zombie
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+            }
+            Err(e) => tracing::warn!("impossible de lancer « {command} » : {e}"),
         }
     }
 

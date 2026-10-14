@@ -108,7 +108,12 @@ fn toggle_existing() -> bool {
         return false;
     };
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
-    if comm.trim() != "launcher" {
+    // Un processus zombie (terminé, pas encore récupéré) ne compte pas
+    let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|st| st.rsplit(')').next().map(|r| r.trim_start().starts_with('Z')))
+        .unwrap_or(true);
+    if zombie || comm.trim() != "launcher" {
         return false;
     }
     let _ = std::process::Command::new("kill")

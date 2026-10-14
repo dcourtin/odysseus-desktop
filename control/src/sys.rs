@@ -510,7 +510,7 @@ pub fn set_volume(volume: f32) {
         .arg(format!(
             "wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ {v}"
         ))
-        .spawn();
+        .status();
 }
 
 pub fn toggle_mute() {
