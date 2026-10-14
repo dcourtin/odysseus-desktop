@@ -4,7 +4,8 @@
 # Sortie : Super+Maj+e ; retour à un autre tty : Ctrl+Alt+F1…F12.
 
 ROOT="$HOME/odysseus-desktop/target/release"
-LOGDIR="$HOME/.local/state/odysseus"
+# Journaux : ODYSSEUS_LOGDIR permet à une session de test de ne pas toucher aux vrais
+LOGDIR="${ODYSSEUS_LOGDIR:-$HOME/.local/state/odysseus}"
 mkdir -p "$LOGDIR"
 # Journal de la session précédente gardé pour diagnostiquer un plantage
 [ -f "$LOGDIR/compositor.log" ] && mv -f "$LOGDIR/compositor.log" "$LOGDIR/compositor.log.old"

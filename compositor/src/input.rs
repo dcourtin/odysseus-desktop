@@ -422,6 +422,7 @@ impl Odysseus {
     }
 
     fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: u32) {
+        self.hot_corner(pos);
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
         // Pendant une sélection de capture, aucun client ne reçoit le pointeur
@@ -442,4 +443,35 @@ impl Odysseus {
         );
         pointer.frame(self);
     }
+
+    /// Coin actif en haut à droite, comme sur macOS : le centre de
+    /// notifications s'ouvre. Il se réarme quand le pointeur s'éloigne ; rien
+    /// pendant un glisser (aimantation d'une fenêtre dans le coin), une
+    /// capture ou le verrouillage.
+    fn hot_corner(&mut self, pos: Point<f64, Logical>) {
+        let corner = self.space.outputs().find_map(|o| {
+            let g = self.space.output_geometry(o)?;
+            g.contains(pos.to_i32_round())
+                .then(|| ((g.loc.x + g.size.w) as f64 - pos.x, pos.y - g.loc.y as f64))
+        });
+        let Some((dx, dy)) = corner else {
+            return;
+        };
+        if dx <= HOT_CORNER && dy <= HOT_CORNER {
+            let busy = self.seat.get_pointer().unwrap().is_grabbed()
+                || self.selection.is_some()
+                || self.is_locked();
+            if !self.hot_corner_used && !busy {
+                self.hot_corner_used = true;
+                tracing::info!("coin actif : centre de notifications");
+                self.spawn_sibling("odysseus-notify", &["--center", "show"]);
+            }
+        } else if dx > HOT_CORNER_REARM || dy > HOT_CORNER_REARM {
+            self.hot_corner_used = false;
+        }
+    }
 }
+
+/// Coin actif : taille du coin, et distance pour le réarmer (pixels logiques)
+const HOT_CORNER: f64 = 2.0;
+const HOT_CORNER_REARM: f64 = 60.0;

@@ -17,13 +17,25 @@ pub fn dnd_file() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".local/state/odysseus/dnd"))
 }
 
-const USAGE: &str = "usage : odysseus-notify [--center | --dnd on|off|toggle | --volume |
+/// Nombre de notifications non vues depuis l'ouverture du centre (lu par la barre)
+pub fn unseen_file() -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    Some(PathBuf::from(dir).join("odysseus-notifications-non-vues"))
+}
+
+const USAGE: &str = "usage : odysseus-notify [--center [show] | --dnd on|off|toggle | --volume |
        --send TITRE [TEXTE] [--image FICHIER] [--open FICHIER]]
   --image : vignette de la notification ; --open : un clic ouvre le fichier (Aperçu)";
 
 pub fn run(args: &[String]) -> i32 {
     let result = match args[0].as_str() {
-        "--center" => call(OWN_IFACE, "ToggleCenter", |m| m).map(|_| ()),
+        "--center" => {
+            let method = match args.get(1).map(String::as_str) {
+                Some("show") => "ShowCenter",
+                _ => "ToggleCenter",
+            };
+            call(OWN_IFACE, method, |m| m).map(|_| ())
+        }
         "--dnd" => {
             let on = match args.get(1).map(String::as_str) {
                 Some("on") => Ok(true),

@@ -68,7 +68,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | Mod+k (ou l'icône clavier de la barre) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
 | clic sur les icônes de la barre | centre de contrôle |
-| clic sur l'heure | centre de notifications |
+| cloche de la barre, clic sur l'heure, ou souris dans le coin en haut à droite | centre de notifications (point sur la cloche : notifications non vues) |
 | Ctrl+Alt+F1…F12 | changer de tty |
 | Mod+Maj+e | quitter |
 

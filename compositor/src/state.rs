@@ -92,6 +92,8 @@ pub struct Odysseus {
     /// Image du curseur demandée par le client sous le pointeur
     pub cursor_status: CursorImageStatus,
     /// Glisser-déposer entre clients : image qui suit le pointeur
+    /// Coin actif (haut à droite) déclenché, en attente que le pointeur s'éloigne
+    pub hot_corner_used: bool,
     pub dnd_icon: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
     /// Session logind (mode tty) : changement de terminal virtuel
     pub session: Option<LibSeatSession>,
@@ -245,6 +247,7 @@ impl Odysseus {
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
             dnd_icon: None,
+            hot_corner_used: false,
             session: None,
             selection: None,
             capture_request: None,

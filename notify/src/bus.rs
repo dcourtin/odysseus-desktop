@@ -25,6 +25,7 @@ pub enum Request {
     Notify(Incoming, Message),
     Close(u32),
     ToggleCenter,
+    ShowCenter,
     SetDnd(bool),
     GetDnd(Message),
 }
@@ -53,6 +54,7 @@ const INTROSPECTION: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS 
  </interface>
  <interface name="fr.odysseus.Notifications">
   <method name="ToggleCenter"/>
+  <method name="ShowCenter"/>
   <method name="SetDoNotDisturb"><arg direction="in" type="b"/></method>
   <method name="GetDoNotDisturb"><arg direction="out" type="b"/></method>
  </interface>
@@ -126,6 +128,10 @@ impl Bus {
                 }
                 "ToggleCenter" => {
                     requests.push(Request::ToggleCenter);
+                    self.reply(msg.method_return());
+                }
+                "ShowCenter" => {
+                    requests.push(Request::ShowCenter);
                     self.reply(msg.method_return());
                 }
                 "SetDoNotDisturb" => {

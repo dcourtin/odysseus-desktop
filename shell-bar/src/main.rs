@@ -72,6 +72,7 @@ struct Bar {
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
     keys_zone: (f64, f64),
+    bell_zone: (f64, f64),
     clock_zone: (f64, f64),
     /// Connexion IPC pour les requêtes et commandes (None hors de sway)
     ipc: Option<sway::Ipc>,
@@ -128,6 +129,7 @@ fn main() {
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
         keys_zone: (0.0, 0.0),
+        bell_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
         ipc,
         workspaces,
@@ -195,6 +197,26 @@ fn main() {
 }
 
 /// Lance un programme d'odysseus installé à côté de la barre.
+/// « Ne pas déranger » actif, et notifications non vues (fichiers tenus par
+/// odysseus-notify, relus à chaque dessin : une fois par seconde)
+fn notification_state() -> (bool, bool) {
+    let dnd = std::env::var_os("HOME").is_some_and(|h| {
+        std::path::Path::new(&h)
+            .join(".local/state/odysseus/dnd")
+            .exists()
+    });
+    let unseen = std::env::var_os("XDG_RUNTIME_DIR")
+        .and_then(|d| {
+            std::fs::read_to_string(
+                std::path::Path::new(&d).join("odysseus-notifications-non-vues"),
+            )
+            .ok()
+        })
+        .and_then(|t| t.trim().parse::<usize>().ok())
+        .is_some_and(|n| n > 0);
+    (dnd, unseen)
+}
+
 fn spawn_sibling(name: &str, args: &[&str]) {
     let path = std::env::current_exe()
         .ok()
@@ -249,7 +271,8 @@ impl Bar {
     }
 
     fn click(&mut self, x: f64) {
-        if x >= self.clock_zone.0 && x < self.clock_zone.1 {
+        let bell = x >= self.bell_zone.0 && x < self.bell_zone.1;
+        if bell || (x >= self.clock_zone.0 && x < self.clock_zone.1) {
             spawn_sibling("odysseus-notify", &["--center"]);
             return;
         }
@@ -336,11 +359,35 @@ impl Bar {
             .draw(&mut canvas, &clock, clock_x, px, theme::palette().text);
         self.clock_zone = (((clock_x - 6.0 * sf) / sf) as f64, self.width as f64);
 
-        // Centre de contrôle, puis aide-mémoire des raccourcis à sa gauche
+        // Cloche du centre de notifications (barrée en « Ne pas déranger »,
+        // pastille quand des notifications n'ont pas été vues), puis centre de
+        // contrôle et aide-mémoire des raccourcis à sa gauche
         let icon_px = 15.0 * sf;
         let step = 26.0 * sf;
         let cy = h as f32 / 2.0;
-        let ix = clock_x - 18.0 * sf - step / 2.0;
+        let bx = clock_x - 14.0 * sf - step / 2.0;
+        let (dnd, unseen) = notification_state();
+        self.icons.icon(
+            &mut canvas,
+            if dnd { icon::BELL_OFF } else { icon::BELL },
+            bx,
+            cy,
+            icon_px,
+            theme::palette().text,
+        );
+        if unseen && !dnd {
+            canvas.fill_circle(
+                bx + 6.0 * sf,
+                cy - 6.0 * sf,
+                3.5 * sf,
+                theme::palette().accent,
+            );
+        }
+        self.bell_zone = (
+            ((bx - step / 2.0) / sf) as f64,
+            ((clock_x - 6.0 * sf) / sf) as f64,
+        );
+        let ix = bx - step;
         let right = ix + step / 2.0;
         self.icons.icon(
             &mut canvas,

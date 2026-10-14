@@ -114,6 +114,8 @@ struct App {
     fonts: Fonts,
     bus: Bus,
     store: Store,
+    /// Dernière valeur écrite pour la barre
+    unseen_published: Option<usize>,
     banners: Option<Panel>,
     banner_hits: Vec<Hit>,
     center: Option<Center>,
@@ -210,6 +212,7 @@ fn main() {
         },
         bus,
         store,
+        unseen_published: None,
         banners: None,
         banner_hits: Vec::new(),
         center: None,
@@ -286,6 +289,7 @@ impl App {
                     self.refresh();
                 }
                 Request::ToggleCenter => self.toggle_center(),
+                Request::ShowCenter => self.show_center(),
                 Request::SetDnd(on) => self.set_dnd(on),
                 Request::GetDnd(msg) => {
                     let reply = msg.method_return().append1(self.store.dnd);
@@ -314,6 +318,23 @@ impl App {
         let hovered = self.hovered_banner();
         self.store.tick(hovered);
         self.refresh();
+        self.publish_unseen();
+    }
+
+    /// Nombre de notifications non vues, lu par la barre (point sur la cloche)
+    fn publish_unseen(&mut self) {
+        // Centre ouvert : ce qui arrive est vu
+        if self.center.is_some() {
+            self.store.unseen = 0;
+        }
+        if self.unseen_published == Some(self.store.unseen) {
+            return;
+        }
+        if let Some(path) = client::unseen_file()
+            && std::fs::write(&path, self.store.unseen.to_string()).is_ok()
+        {
+            self.unseen_published = Some(self.store.unseen);
+        }
     }
 
     /// Bannière sous le pointeur
@@ -494,7 +515,21 @@ impl App {
         }
     }
 
+    /// Coin actif de l'écran : ouvre le centre (ou annule sa fermeture), sans
+    /// jamais le refermer.
+    fn show_center(&mut self) {
+        match self.center.as_mut() {
+            Some(center) => {
+                if center.closing.take().is_some() {
+                    self.draw_center();
+                }
+            }
+            None => self.open_center(),
+        }
+    }
+
     fn open_center(&mut self) {
+        self.store.unseen = 0;
         // Les bannières affichées rejoignent le centre, comme sur macOS
         for n in self.store.banners.iter_mut() {
             if n.leaving.is_none() {

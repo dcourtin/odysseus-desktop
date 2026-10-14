@@ -106,6 +106,9 @@ pub struct Store {
     /// Centre de notifications, la plus récente en premier
     pub history: Vec<Notification>,
     pub dnd: bool,
+    /// Arrivées dans l'historique depuis la dernière ouverture du centre
+    /// (point sur la cloche de la barre)
+    pub unseen: usize,
 }
 
 impl Store {
@@ -217,6 +220,7 @@ impl Store {
         n.deadline = None;
         self.history.insert(0, n);
         self.history.truncate(MAX_HISTORY);
+        self.unseen = (self.unseen + 1).min(self.history.len());
     }
 
     /// Bannières arrivées à échéance : elles partent (animation) vers l'historique.
@@ -279,6 +283,7 @@ impl Store {
         }
         let before = self.history.len();
         self.history.retain(|n| n.id != id);
+        self.unseen = self.unseen.min(self.history.len());
         found || self.history.len() != before
     }
 
