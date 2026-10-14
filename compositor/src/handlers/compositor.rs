@@ -115,7 +115,14 @@ impl Odysseus {
         );
         self.unplaced.remove(&root.id());
         self.opening.insert(root.id(), std::time::Instant::now());
-        self.space.map_element(window, loc, true);
+        let placed = match self.initial_state.remove(&root.id()) {
+            Some(state) => self.apply_initial_state(&window, state),
+            None => false,
+        };
+        if !placed {
+            self.space.map_element(window.clone(), loc, true);
+        }
+        self.focus_window(&window);
     }
 }
 

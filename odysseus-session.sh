@@ -6,6 +6,8 @@
 ROOT="$HOME/odysseus-desktop/target/release"
 LOGDIR="$HOME/.local/state/odysseus"
 mkdir -p "$LOGDIR"
+# Journal de la session précédente gardé pour diagnostiquer un plantage
+[ -f "$LOGDIR/compositor.log" ] && mv -f "$LOGDIR/compositor.log" "$LOGDIR/compositor.log.old"
 
 export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-fr}"
 export XCURSOR_THEME="${XCURSOR_THEME:-Bibata-Modern-Classic}"
@@ -16,4 +18,4 @@ export XDG_SESSION_TYPE=wayland
 export RUST_LOG="${RUST_LOG:-info}"
 unset WAYLAND_DISPLAY DISPLAY
 
-exec "$ROOT/compositor" -c "$ROOT/shell-bar & foot" > "$LOGDIR/compositor.log" 2>&1
+exec "$ROOT/compositor" -c "$ROOT/shell-bar" > "$LOGDIR/compositor.log" 2>&1

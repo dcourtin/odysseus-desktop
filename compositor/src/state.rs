@@ -59,6 +59,12 @@ pub struct Odysseus {
     pub unplaced: HashSet<ObjectId>,
     /// Début de l'animation d'ouverture de chaque fenêtre récente
     pub opening: HashMap<ObjectId, Instant>,
+    /// Fenêtres agrandies ou en plein écran : position et taille à restaurer
+    pub restore: HashMap<ObjectId, smithay::utils::Rectangle<i32, Logical>>,
+    /// Agrandie / plein écran demandé avant le premier affichage
+    pub initial_state: HashMap<ObjectId, crate::windows::InitialState>,
+    /// Fenêtres en plein écran
+    pub fullscreen: HashSet<ObjectId>,
     /// Touche des raccourcis : Alt en mode imbriqué (sway garde Super), Super sur tty
     pub mod_key: ModKey,
     /// Image du curseur demandée par le client sous le pointeur
@@ -150,6 +156,9 @@ impl Odysseus {
             seat,
             unplaced: HashSet::new(),
             opening: HashMap::new(),
+            restore: HashMap::new(),
+            initial_state: HashMap::new(),
+            fullscreen: HashSet::new(),
             // Le backend winit tourne toujours dans un autre compositeur
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
@@ -266,8 +275,15 @@ impl Odysseus {
                     .map(|(s, p)| (s, (p + layer_loc + output_loc).to_f64()))
             })
         };
+        let top_hidden = self.top_is_fullscreen();
         in_layer(WlrLayer::Overlay)
-            .or_else(|| in_layer(WlrLayer::Top))
+            .or_else(|| {
+                if top_hidden {
+                    None
+                } else {
+                    in_layer(WlrLayer::Top)
+                }
+            })
             .or_else(|| {
                 self.space
                     .element_under(pos)

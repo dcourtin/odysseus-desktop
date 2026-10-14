@@ -103,6 +103,7 @@ pub fn init_winit(
                             wallpaper.as_ref(),
                             &state.opening,
                             &state.closing,
+                            state.top_is_fullscreen(),
                         );
                         damage_tracker
                             .render_output(

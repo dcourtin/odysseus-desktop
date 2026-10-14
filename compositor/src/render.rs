@@ -397,6 +397,7 @@ pub fn output_elements(
     wallpaper: Option<&crate::wallpaper::Wallpaper>,
     opening: &HashMap<ObjectId, Instant>,
     closing: &[Closing],
+    hide_top_layer: bool,
 ) -> Vec<OdysseusElement> {
     let scale = output.current_scale().fractional_scale();
     let b = theme::WINDOW_BORDER;
@@ -410,7 +411,10 @@ pub fn output_elements(
     let context = renderer.context_id();
 
     let mut elements = layer_elements(output, renderer, scale, Layer::Overlay);
-    elements.extend(layer_elements(output, renderer, scale, Layer::Top));
+    // Fenêtre plein écran au premier plan : la barre s'efface
+    if !hide_top_layer {
+        elements.extend(layer_elements(output, renderer, scale, Layer::Top));
+    }
 
     // Fenêtres en cours de fermeture : fondu et rétrécissement de 100 % à 94 %
     for c in closing.iter().rev() {

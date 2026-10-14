@@ -18,8 +18,9 @@ use crate::{
     state::{ModKey, Odysseus},
 };
 
-/// Code evdev du bouton gauche
+/// Codes evdev des boutons gauche et droit
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 /// Actions déclenchées par les raccourcis du compositeur
 #[derive(Clone, Copy, Debug)]
@@ -33,6 +34,8 @@ enum Action {
     Workspace(usize),
     MoveToWorkspace(usize),
     Launcher,
+    ToggleMaximize,
+    CycleWindows,
 }
 
 impl ModKey {
@@ -85,6 +88,8 @@ impl Odysseus {
                             let action = match handle.modified_sym() {
                                 Keysym::Return => Some(Action::Terminal),
                                 Keysym::space => Some(Action::Launcher),
+                                Keysym::f => Some(Action::ToggleMaximize),
+                                Keysym::Tab => Some(Action::CycleWindows),
                                 Keysym::q | Keysym::Q => Some(Action::CloseWindow),
                                 Keysym::E if mods.shift => Some(Action::Quit),
                                 Keysym::S if mods.shift => Some(Action::Capture),
@@ -175,6 +180,11 @@ impl Odysseus {
                                 initial_window_location,
                             };
                             pointer.set_grab(self, grab, serial, Focus::Clear);
+                        } else if button == BTN_RIGHT
+                            && self.mod_key.held(&keyboard.modifier_state())
+                        {
+                            // Mod + clic droit maintenu : redimensionner
+                            self.start_mod_resize(window, button, serial);
                         }
                     } else {
                         self.space.elements().for_each(|window| {
@@ -271,6 +281,12 @@ impl Odysseus {
                     None => tracing::warn!("lanceur introuvable à côté du compositeur"),
                 }
             }
+            Action::ToggleMaximize => {
+                if let Some(window) = self.focused_window() {
+                    self.toggle_maximize(&window);
+                }
+            }
+            Action::CycleWindows => self.cycle_windows(),
             Action::Workspace(n) => self.switch_workspace(n),
             Action::MoveToWorkspace(n) => self.move_focused_to_workspace(n),
             Action::SwitchVt(vt) => {

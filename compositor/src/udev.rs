@@ -351,6 +351,7 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         udev.wallpaper.as_ref(),
         &state.opening,
         &state.closing,
+        state.top_is_fullscreen(),
     ));
 
     if state.capture_pending || crate::capture::requested_by_file() {

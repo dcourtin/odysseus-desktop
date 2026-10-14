@@ -11,7 +11,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             Resource,
-            protocol::{wl_seat, wl_surface::WlSurface},
+            protocol::{wl_output, wl_seat, wl_surface::WlSurface},
         },
     },
     utils::{Rectangle, Serial},
@@ -69,6 +69,45 @@ impl XdgShellHandler for Odysseus {
             self.closing.push(closing);
         }
         self.space.unmap_elem(&window);
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for(&surface)
+            && !self.is_maximized_or_fullscreen(&window)
+        {
+            self.toggle_maximize(&window);
+        } else if self.unplaced.contains(&surface.wl_surface().id()) {
+            self.request_initial_state(&surface, Some(crate::windows::InitialState::Maximized));
+        }
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for(&surface)
+            && self.is_maximized_or_fullscreen(&window)
+        {
+            self.toggle_maximize(&window);
+        } else if self.unplaced.contains(&surface.wl_surface().id()) {
+            self.request_initial_state(&surface, None);
+        }
+    }
+
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _output: Option<wl_output::WlOutput>,
+    ) {
+        match self.window_for(&surface) {
+            Some(window) => self.set_fullscreen(&window, true),
+            None => {
+                self.request_initial_state(&surface, Some(crate::windows::InitialState::Fullscreen))
+            }
+        }
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for(&surface) {
+            self.set_fullscreen(&window, false);
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
@@ -253,5 +292,21 @@ impl Odysseus {
         popup.with_pending_state(|state| {
             state.geometry = state.positioner.get_unconstrained_geometry(target);
         });
+    }
+}
+
+impl Odysseus {
+    /// Fenêtre (déjà placée) correspondant à une surface xdg.
+    fn window_for(&self, surface: &ToplevelSurface) -> Option<Window> {
+        if self.unplaced.contains(&surface.wl_surface().id()) {
+            return None;
+        }
+        self.space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .is_some_and(|t| t.wl_surface() == surface.wl_surface())
+            })
+            .cloned()
     }
 }

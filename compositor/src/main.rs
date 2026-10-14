@@ -12,6 +12,7 @@ mod render;
 mod state;
 mod udev;
 mod wallpaper;
+mod windows;
 mod winit;
 mod workspaces;
 
