@@ -200,6 +200,10 @@ fn main() {
         last_frame: Instant::now(),
     };
 
+    // Une notification a pu arriver pendant la réservation du nom (démarrage à la
+    // demande par D-Bus) : déjà lue, elle n'activerait plus le descripteur
+    app.handle_bus();
+
     loop {
         if let Err(e) = event_loop.dispatch(None, &mut app) {
             eprintln!("odysseus-notify : connexion au compositeur perdue ({e})");
