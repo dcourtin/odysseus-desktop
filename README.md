@@ -84,3 +84,8 @@ Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
 Pour lancer la barre au démarrage de sway, ajouter dans `~/.config/sway/config` :
 
     exec ~/odysseus-desktop/target/release/shell-bar
+
+## Licence
+
+MIT — © 2026 David Courtin. Voir [LICENSE](LICENSE). Le compositeur est parti de
+*smallvil* (Smithay, MIT) : voir `compositor/LICENSE-smithay.txt`.
