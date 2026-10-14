@@ -2,6 +2,18 @@
 
 Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copier.
 
+> ⚠️ **Travail d'exploration — à ne pas utiliser en production.**
+> Ce dépôt est un terrain d'expérimentation personnel, construit pour une seule
+> machine (Linux From Scratch, GPU AMD, écran 4K, clavier AZERTY). Il n'est ni
+> audité, ni testé au-delà de cette machine, ni maintenu pour d'autres usages :
+> l'écran de verrouillage, la gestion de session et le compositeur n'offrent
+> aucune garantie de sécurité ou de stabilité. Les chemins, réglages et choix
+> matériels y sont souvent codés en dur. À lire, à piocher, à s'en inspirer —
+> pas à déployer.
+>
+> *Exploratory work — not for production use. Personal experiment built for a
+> single machine; no security or stability guarantees.*
+
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
