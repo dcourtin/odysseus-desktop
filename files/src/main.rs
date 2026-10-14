@@ -3,7 +3,9 @@
 //!
 //! Clavier : flèches, Pg.préc/Pg.suiv, Début/Fin, Entrée (ouvrir),
 //! Retour arrière ou Alt+← (précédent), Alt+→ (suivant), Alt+↑ (dossier parent),
-//! Ctrl+H (fichiers cachés), F5 (relire), Ctrl+Q (quitter), lettres (aller à).
+//! Ctrl+H (fichiers cachés), F5 (relire), Ctrl+Q (quitter), lettres (aller à),
+//! Espace (aperçu d'une image), Suppr (corbeille), Ctrl+Z (annuler la mise à la
+//! corbeille). Dans la corbeille : Entrée remet l'élément à sa place.
 //! Souris : clic, double-clic pour ouvrir, molette, glisser la barre d'outils
 //! pour déplacer la fenêtre.
 
@@ -77,6 +79,8 @@ enum Hit {
     Place(PathBuf),
     /// Démonter un disque externe (point de montage)
     Eject(PathBuf),
+    /// Vider la corbeille (second clic pour confirmer)
+    EmptyTrash,
     Crumb(PathBuf),
     Back,
     Forward,
@@ -102,6 +106,10 @@ struct Files {
     hits: Vec<((f64, f64, f64, f64), Hit)>,
     last_click: Option<(Instant, usize)>,
     typed: (String, Instant),
+    /// Dernier élément mis à la corbeille (Ctrl+Z le remet)
+    last_trashed: Option<PathBuf>,
+    /// « Vider la corbeille » armé : un second clic confirme
+    empty_armed: Option<Instant>,
     width: u32,
     height: u32,
     scale: i32,
@@ -126,11 +134,42 @@ fn places(home: &Path) -> Vec<(String, PathBuf)> {
             list.push((label.to_string(), p));
         }
     }
+    if let Some(trash) = common::trash::files_dir() {
+        let _ = std::fs::create_dir_all(&trash);
+        let _ = std::fs::create_dir_all(trash.with_file_name("info"));
+        list.push(("Corbeille".to_string(), trash));
+    }
     list.push(("Racine".to_string(), PathBuf::from("/")));
     if Path::new("/sources").is_dir() {
         list.push(("Sources".to_string(), PathBuf::from("/sources")));
     }
     list
+}
+
+fn is_image_path(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        matches!(
+            e.to_ascii_lowercase().as_str(),
+            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff"
+        )
+    })
+}
+
+/// Lance un programme d'odysseus installé à côté de Fichiers (Aperçu…).
+fn spawn_sibling(name: &str, arg: &Path) {
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(name)))
+    else {
+        return;
+    };
+    if let Ok(mut child) = std::process::Command::new(exe)
+        .arg(arg)
+        .process_group(0)
+        .spawn()
+    {
+        std::thread::spawn(move || child.wait());
+    }
 }
 
 /// Disques externes montés pour l'utilisateur (/run/media/<utilisateur>/…).
@@ -215,6 +254,8 @@ fn main() {
         hits: Vec::new(),
         last_click: None,
         typed: (String::new(), Instant::now()),
+        last_trashed: None,
+        empty_armed: None,
         width: 960,
         height: 620,
         scale: 1,
@@ -275,6 +316,13 @@ impl Files {
             self.navigated();
             return;
         }
+        if self.in_trash() {
+            return self.restore_selected();
+        }
+        if is_image_path(&path) {
+            spawn_sibling("apercu", &path);
+            return;
+        }
         if is_text(&path, entry.size) {
             let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
@@ -320,6 +368,17 @@ impl Files {
             Keysym::Right if alt => self.browser.forward(),
             Keysym::BackSpace => self.browser.back(),
             Keysym::F5 => self.browser.reload(),
+            Keysym::Delete | Keysym::KP_Delete => return self.trash_selected(),
+            Keysym::z if ctrl => return self.undo_trash(),
+            // Espace : aperçu rapide d'une image
+            Keysym::space => {
+                if let Some(entry) = self.browser.entries.get(self.browser.selected)
+                    && is_image_path(&entry.path)
+                {
+                    spawn_sibling("apercu", &entry.path.clone());
+                }
+                return;
+            }
             Keysym::h if ctrl => self.browser.toggle_hidden(),
             Keysym::q if ctrl => {
                 self.exit = true;
@@ -375,6 +434,7 @@ impl Files {
                 self.navigated();
             }
             Some(Hit::Eject(path)) => self.eject(&path),
+            Some(Hit::EmptyTrash) => self.empty_trash(),
             Some(Hit::Back) => {
                 self.browser.back();
                 self.navigated();
@@ -393,6 +453,94 @@ impl Files {
                 }
             }
         }
+    }
+
+    fn in_trash(&self) -> bool {
+        common::trash::files_dir().is_some_and(|t| self.browser.cwd == t)
+    }
+
+    fn trash_selected(&mut self) {
+        if self.in_trash() {
+            self.browser.message =
+                Some("Déjà dans la corbeille : « Vider la corbeille » pour supprimer".into());
+            return self.draw();
+        }
+        let Some(entry) = self.browser.entries.get(self.browser.selected) else {
+            return;
+        };
+        let (path, name) = (entry.path.clone(), entry.name.clone());
+        match common::trash::trash(&path) {
+            Ok(()) => {
+                self.last_trashed = Some(path);
+                self.browser.reload();
+                self.browser.message = Some(format!(
+                    "« {name} » mis à la corbeille — Ctrl+Z pour annuler"
+                ));
+            }
+            Err(e) => self.browser.message = Some(e),
+        }
+        self.navigated();
+    }
+
+    fn undo_trash(&mut self) {
+        let Some(original) = self.last_trashed.take() else {
+            return;
+        };
+        let item = common::trash::list()
+            .into_iter()
+            .find(|i| i.original == original);
+        self.browser.message = Some(match item.map(|i| common::trash::restore(&i)) {
+            Some(Ok(())) => format!(
+                "« {} » remis en place",
+                original
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            ),
+            Some(Err(e)) => e,
+            None => "Introuvable dans la corbeille".into(),
+        });
+        let keep = self.browser.message.take();
+        self.browser.reload();
+        self.browser.message = keep;
+        self.navigated();
+    }
+
+    /// Dans la corbeille, Entrée ou double-clic remet l'élément à sa place.
+    fn restore_selected(&mut self) {
+        let Some(entry) = self.browser.entries.get(self.browser.selected) else {
+            return;
+        };
+        let path = entry.path.clone();
+        let item = common::trash::list().into_iter().find(|i| i.path == path);
+        let message = match item {
+            Some(item) => match common::trash::restore(&item) {
+                Ok(()) => format!("Remis dans {}", item.original.display()),
+                Err(e) => e,
+            },
+            None => "Origine inconnue".into(),
+        };
+        self.browser.reload();
+        self.browser.message = Some(message);
+        self.navigated();
+    }
+
+    fn empty_trash(&mut self) {
+        let armed = self
+            .empty_armed
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(4));
+        if !armed {
+            self.empty_armed = Some(Instant::now());
+            return self.draw();
+        }
+        self.empty_armed = None;
+        let message = match common::trash::empty() {
+            Ok(n) => format!("Corbeille vidée ({n} élément(s))"),
+            Err(e) => format!("Impossible de vider la corbeille : {e}"),
+        };
+        self.browser.reload();
+        self.browser.message = Some(message);
+        self.navigated();
     }
 
     /// Démonte un disque externe (systemd, autorisé par polkit) ; on quitte
@@ -662,6 +810,39 @@ impl Files {
                 );
                 cx += sep_w;
             }
+        }
+        // Corbeille : bouton « Vider » à droite (second clic pour confirmer)
+        if common::trash::files_dir().is_some_and(|t| self.browser.cwd == t)
+            && !self.browser.entries.is_empty()
+        {
+            let armed = self
+                .empty_armed
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(4));
+            let label = if armed {
+                "Confirmer ?"
+            } else {
+                "Vider la corbeille"
+            };
+            let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
+            let bx = w as f32 - lw - 16.0 * s;
+            let bh = 28.0 * s;
+            let bg = if armed { theme::DANGER } else { theme::SUBTLE };
+            let fg = if armed {
+                theme::BACKGROUND
+            } else {
+                theme::TEXT
+            };
+            c.fill_rounded(bx, mid - bh / 2.0, lw, bh, 8.0 * s, bg);
+            self.regular.draw_in(
+                &mut c,
+                label,
+                bx + 12.0 * s,
+                mid - bh / 2.0,
+                bh,
+                13.0 * s,
+                fg,
+            );
+            hit(bx, mid - bh / 2.0, lw, bh, Hit::EmptyTrash);
         }
         c.fill_rounded(x0, TOOLBAR_H * s - s, w as f32 - x0, s, 0.0, LINE);
 

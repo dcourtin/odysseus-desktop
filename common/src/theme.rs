@@ -119,4 +119,15 @@ pub mod icon {
     pub const SUN_MOON: char = '\u{e2b2}';
     pub const SLEEP: char = '\u{e410}';
     pub const APP: char = '\u{e426}';
+    pub const ROTATE_CW: char = '\u{e149}';
+    pub const ROTATE_CCW: char = '\u{e148}';
+    pub const CROP: char = '\u{e0ab}';
+    pub const INFO: char = '\u{e0f9}';
+    pub const TRASH: char = '\u{e18e}';
+    pub const ZOOM_IN: char = '\u{e1b6}';
+    pub const ZOOM_OUT: char = '\u{e1b7}';
+    pub const MAXIMIZE: char = '\u{e112}';
+    pub const SAVE: char = '\u{e14d}';
+    pub const IMAGE: char = '\u{e0f6}';
+    pub const UNDO: char = '\u{e2a1}';
 }

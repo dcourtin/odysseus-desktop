@@ -26,10 +26,15 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 |---|---|
 | ![Lanceur](docs/captures/lanceur.png) | ![Fichiers](docs/captures/fichiers.png) |
 
+| Aperçu (visionneuse d'images) |
+|---|
+| ![Aperçu](docs/captures/apercu.png) |
+
 ![Écran de verrouillage](docs/captures/verrou.png)
 
 *Captures faites par le compositeur lui-même (Impr. écran), en 4K à l'échelle 1,5,
-avec le fond d'écran dégradé par défaut. Notifications et disque « Archives » de démonstration.*
+avec le fond d'écran dégradé par défaut. Notifications et disque « Archives » de démonstration ;
+l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpeg.*
 
 | Dossier | Rôle | État |
 |---|---|---|
@@ -40,7 +45,8 @@ avec le fond d'écran dégradé par défaut. Notifications et disque « Archives
 | `control/` | `odysseus-control` : centre de contrôle (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
-| `files/` | Fichiers : explorateur (favoris, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |
+| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |
+| `preview/` | `apercu` : visionneuse d'images (dossier parcouru aux flèches, zoom vers le pointeur, rotation, recadrage, infos EXIF, corbeille) | fonctionne |
 
 ## Raccourcis (Mod = Super sur tty, Alt dans une fenêtre sway)
 
@@ -65,6 +71,11 @@ avec le fond d'écran dégradé par défaut. Notifications et disque « Archives
 Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
 connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
 `nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
+
+Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
+format freedesktop), Ctrl+Z (annuler). Aperçu : ← → (image précédente / suivante),
+molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
+(recadrer), I (infos), F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / une copie).
 
 Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
 (`ODYSSEUS_IDLE`, en secondes) ; une vidéo en lecture l'empêche.
