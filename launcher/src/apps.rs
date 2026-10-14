@@ -8,6 +8,8 @@ pub struct App {
     pub comment: String,
     pub exec: String,
     pub terminal: bool,
+    /// Nom d'icône (Icon=) ou chemin
+    pub icon: String,
 }
 
 /// Dossiers « applications » selon la spécification XDG, du plus prioritaire au moins.
@@ -49,6 +51,7 @@ fn parse(content: &str) -> Option<App> {
     let short = lang.split(['_', '.']).next().unwrap_or("").to_string();
     let (mut name, mut name_loc, mut comment, mut comment_loc) = (None, None, None, None);
     let (mut exec, mut terminal, mut hidden, mut kind) = (None, false, false, None);
+    let mut icon = String::new();
     let mut in_entry = false;
     for line in content.lines() {
         let line = line.trim();
@@ -67,6 +70,7 @@ fn parse(content: &str) -> Option<App> {
             "Name" => name = Some(value),
             "Comment" => comment = Some(value),
             "Exec" => exec = Some(value),
+            "Icon" => icon = value,
             "Type" => kind = Some(value),
             "Terminal" => terminal = value == "true",
             "NoDisplay" | "Hidden" => hidden |= value == "true",
@@ -83,6 +87,7 @@ fn parse(content: &str) -> Option<App> {
         comment: comment_loc.or(comment).unwrap_or_default(),
         exec: clean_exec(&exec?),
         terminal,
+        icon,
     })
 }
 

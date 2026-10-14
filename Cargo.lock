@@ -275,6 +275,7 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "fontdue",
+ "image",
 ]
 
 [[package]]
@@ -282,6 +283,7 @@ name = "compositor"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "chrono",
  "common",
  "image",
  "smithay",

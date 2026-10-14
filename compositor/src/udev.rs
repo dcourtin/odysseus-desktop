@@ -1,7 +1,10 @@
 //! Backend DRM/KMS : le compositeur pilote directement l'écran depuis un tty.
-//! Session logind via libseat, entrées via libinput, un seul GPU.
-//! Variables : ODYSSEUS_OUTPUT (connecteur à utiliser, ex. HDMI-A-1),
-//! ODYSSEUS_SCALE (échelle, 1.5 par défaut).
+//! Session logind via libseat, entrées via libinput, un seul GPU, un écran.
+//! Variables : ODYSSEUS_OUTPUT (connecteur préféré, ex. HDMI-A-1 ; sinon le
+//! premier connecté), ODYSSEUS_SCALE (échelle, 1.5 par défaut).
+//! Écrans branchés à chaud : udev signale le changement, on réexamine les
+//! connecteurs (l'écran préféré revient dès qu'il est rebranché).
+//! Par IPC : `output scale 1.25`, `output mode 2560x1440@60`.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -22,7 +25,7 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{ImportDma, gles::GlesRenderer},
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
-        udev::primary_gpu,
+        udev::{UdevBackend, UdevEvent, primary_gpu},
     },
     desktop::layer_map_for_output,
     output::{Mode as WlMode, Output, PhysicalProperties, Scale, Subpixel},
@@ -34,6 +37,7 @@ use smithay::{
         drm::control::{Device as ControlDevice, ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
+        wayland_server::backend::GlobalId,
     },
     utils::{DeviceFd, Transform},
     wayland::dmabuf::DmabufFeedbackBuilder,
@@ -62,6 +66,10 @@ const COLOR_FORMATS: &[Fourcc] = &[Fourcc::Abgr8888, Fourcc::Argb8888];
 struct OutputSurface {
     output: Output,
     drm_output: Surface,
+    connector: connector::Handle,
+    global: GlobalId,
+    /// Taille de la table gamma du CRTC (lumière de nuit)
+    gamma_size: usize,
     /// Une image est en attente d'affichage : ne pas en rendre une autre avant le vblank
     pending: bool,
     /// Écran éteint (veille)
@@ -75,9 +83,13 @@ pub struct UdevData {
     shaders: Shaders,
     wallpaper: Option<Wallpaper>,
     cursor: Option<Cursor>,
+    cursor_size: u32,
     surfaces: HashMap<crtc::Handle, OutputSurface>,
     /// Session inactive (autre tty au premier plan) : pas de rendu
     paused: bool,
+    /// Écran préféré (ODYSSEUS_OUTPUT) et échelle courante
+    wanted: Option<String>,
+    scale: f64,
 }
 
 pub fn init_udev(
@@ -135,7 +147,7 @@ pub fn init_udev(
         }
         Err(e) => tracing::warn!("linux-dmabuf indisponible : {e}"),
     }
-    let mut manager = OutputManager::new(
+    let manager = OutputManager::new(
         drm,
         allocator,
         exporter,
@@ -155,94 +167,33 @@ pub fn init_udev(
         .unwrap_or(24u32);
     let cursor = Cursor::load((cursor_size as f64 * scale).round() as u32);
 
-    // Écrans : ODYSSEUS_OUTPUT s'il est défini, sinon le premier connecté
-    let wanted = std::env::var("ODYSSEUS_OUTPUT").ok();
-    let mut surfaces = HashMap::new();
-    let res = manager.device().resource_handles()?;
-    let mut used_crtcs = Vec::new();
-    for handle in res.connectors() {
-        let info = manager.device().get_connector(*handle, true)?;
-        if info.state() != connector::State::Connected || info.modes().is_empty() {
-            continue;
-        }
-        let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
-        if wanted.as_deref().is_some_and(|w| w != name)
-            || (wanted.is_none() && !surfaces.is_empty())
-        {
-            tracing::info!("écran {name} ignoré");
-            continue;
-        }
-        // Premier CRTC compatible avec un encodeur du connecteur
-        let crtc = info
-            .encoders()
-            .iter()
-            .filter_map(|e| manager.device().get_encoder(*e).ok())
-            .flat_map(|enc| res.filter_crtcs(enc.possible_crtcs()))
-            .find(|c| !used_crtcs.contains(c));
-        let Some(crtc) = crtc else {
-            tracing::warn!("pas de CRTC libre pour {name}");
-            continue;
-        };
-        used_crtcs.push(crtc);
-
-        let drm_mode = info
-            .modes()
-            .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .copied()
-            .unwrap_or(info.modes()[0]);
-        let wl_mode = WlMode::from(drm_mode);
-        let (w_mm, h_mm) = info.size().unwrap_or((0, 0));
-        let output = Output::new(
-            name.clone(),
-            PhysicalProperties {
-                size: (w_mm as i32, h_mm as i32).into(),
-                subpixel: Subpixel::Unknown,
-                make: "odysseus".into(),
-                model: name.clone(),
-            },
-        );
-        let _global = output.create_global::<crate::Odysseus>(&data.display_handle);
-        output.change_current_state(
-            Some(wl_mode),
-            Some(Transform::Normal),
-            Some(Scale::Fractional(scale)),
-            Some((0, 0).into()),
-        );
-        output.set_preferred(wl_mode);
-        data.state.space.map_output(&output, (0, 0));
-
-        let planes = manager.device().planes(&crtc).ok();
-        let drm_output = manager
-            .initialize_output::<_, OdysseusElement>(
-                crtc,
-                drm_mode,
-                &[*handle],
-                &output,
-                planes,
-                &mut renderer,
-                &DrmOutputRenderElements::default(),
-            )
-            .map_err(|e| format!("initialisation de {name} : {e:?}"))?;
-        tracing::info!(
-            "écran {name} : {}x{} @ {} mHz, échelle {scale}",
-            wl_mode.size.w,
-            wl_mode.size.h,
-            wl_mode.refresh
-        );
-        surfaces.insert(
-            crtc,
-            OutputSurface {
-                output,
-                drm_output,
-                pending: false,
-                blanked: false,
-            },
-        );
-    }
-    if surfaces.is_empty() {
+    data.udev = Some(UdevData {
+        handle: event_loop.handle(),
+        manager,
+        renderer,
+        shaders,
+        wallpaper,
+        cursor,
+        cursor_size,
+        surfaces: HashMap::new(),
+        paused: false,
+        wanted: std::env::var("ODYSSEUS_OUTPUT").ok(),
+        scale,
+    });
+    scan_outputs(data);
+    if data.udev.as_ref().is_some_and(|u| u.surfaces.is_empty()) {
         return Err("aucun écran utilisable".into());
     }
+
+    // Écran branché ou débranché
+    let udev_backend = UdevBackend::new(&seat)?;
+    event_loop
+        .handle()
+        .insert_source(udev_backend, |event, _, data| {
+            if let UdevEvent::Changed { .. } | UdevEvent::Added { .. } = event {
+                scan_outputs(data);
+            }
+        })?;
 
     // Entrées
     let mut libinput =
@@ -302,7 +253,15 @@ pub fn init_udev(
                     for surface in udev.surfaces.values_mut() {
                         surface.pending = false;
                     }
-                    let crtcs: Vec<_> = udev.surfaces.keys().copied().collect();
+                    // La table gamma a pu être réinitialisée par un autre programme
+                    data.state.night.applied = None;
+                    // Un écran a pu être branché ou débranché pendant ce temps
+                    scan_outputs(data);
+                    let crtcs: Vec<_> = data
+                        .udev
+                        .as_ref()
+                        .map(|u| u.surfaces.keys().copied().collect())
+                        .unwrap_or_default();
                     for crtc in crtcs {
                         render(data, crtc);
                     }
@@ -310,22 +269,230 @@ pub fn init_udev(
             }
         })?;
 
-    let crtcs: Vec<_> = surfaces.keys().copied().collect();
     data.state.session = Some(session.clone());
-    data.udev = Some(UdevData {
-        handle: event_loop.handle(),
-        manager,
-        renderer,
-        shaders,
-        wallpaper,
-        cursor,
-        surfaces,
-        paused: false,
-    });
+    let crtcs: Vec<_> = data
+        .udev
+        .as_ref()
+        .map(|u| u.surfaces.keys().copied().collect())
+        .unwrap_or_default();
     for crtc in crtcs {
         render(data, crtc);
     }
     Ok(())
+}
+
+fn connector_name(info: &connector::Info) -> String {
+    format!("{}-{}", info.interface().as_str(), info.interface_id())
+}
+
+/// Réexamine les connecteurs : garde l'écran actuel s'il est toujours là,
+/// sinon passe à l'écran préféré (ou au premier connecté).
+fn scan_outputs(data: &mut CalloopData) {
+    let CalloopData {
+        state,
+        display_handle,
+        udev,
+    } = data;
+    let Some(udev) = udev.as_mut() else {
+        return;
+    };
+    if udev.paused {
+        return;
+    }
+    let Ok(res) = udev.manager.device().resource_handles() else {
+        return;
+    };
+    let connected: Vec<connector::Info> = res
+        .connectors()
+        .iter()
+        .filter_map(|h| udev.manager.device().get_connector(*h, true).ok())
+        .filter(|i| i.state() == connector::State::Connected && !i.modes().is_empty())
+        .collect();
+    let chosen = connected
+        .iter()
+        .find(|i| udev.wanted.as_deref() == Some(connector_name(i).as_str()))
+        .or_else(|| connected.first());
+    let current = udev.surfaces.values().map(|s| s.connector).next();
+    if chosen.map(|i| i.handle()) == current && current.is_some() {
+        return;
+    }
+
+    // Écran précédent débranché (ou remplacé par l'écran préféré)
+    let old: Vec<crtc::Handle> = udev.surfaces.keys().copied().collect();
+    for crtc in old {
+        if let Some(surface) = udev.surfaces.remove(&crtc) {
+            tracing::info!("écran {} retiré", surface.output.name());
+            state.space.unmap_output(&surface.output);
+            display_handle.remove_global::<crate::Odysseus>(surface.global);
+        }
+    }
+    let Some(info) = chosen else {
+        tracing::warn!("aucun écran connecté");
+        return;
+    };
+    let name = connector_name(info);
+
+    // Premier CRTC compatible avec un encodeur du connecteur
+    let crtc = info
+        .encoders()
+        .iter()
+        .filter_map(|e| udev.manager.device().get_encoder(*e).ok())
+        .flat_map(|enc| res.filter_crtcs(enc.possible_crtcs()))
+        .next();
+    let Some(crtc) = crtc else {
+        tracing::warn!("pas de CRTC libre pour {name}");
+        return;
+    };
+    let drm_mode = info
+        .modes()
+        .iter()
+        .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .copied()
+        .unwrap_or(info.modes()[0]);
+    let wl_mode = WlMode::from(drm_mode);
+    let (w_mm, h_mm) = info.size().unwrap_or((0, 0));
+    let output = Output::new(
+        name.clone(),
+        PhysicalProperties {
+            size: (w_mm as i32, h_mm as i32).into(),
+            subpixel: Subpixel::Unknown,
+            make: "odysseus".into(),
+            model: name.clone(),
+        },
+    );
+    let global = output.create_global::<crate::Odysseus>(display_handle);
+    output.change_current_state(
+        Some(wl_mode),
+        Some(Transform::Normal),
+        Some(Scale::Fractional(udev.scale)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(wl_mode);
+    state.space.map_output(&output, (0, 0));
+
+    let planes = udev.manager.device().planes(&crtc).ok();
+    let drm_output = match udev.manager.initialize_output::<_, OdysseusElement>(
+        crtc,
+        drm_mode,
+        &[info.handle()],
+        &output,
+        planes,
+        &mut udev.renderer,
+        &DrmOutputRenderElements::default(),
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("initialisation de {name} : {e:?}");
+            state.space.unmap_output(&output);
+            display_handle.remove_global::<crate::Odysseus>(global);
+            return;
+        }
+    };
+    let gamma_size = udev
+        .manager
+        .device()
+        .get_crtc(crtc)
+        .map(|c| c.gamma_length() as usize)
+        .unwrap_or(0);
+    tracing::info!(
+        "écran {name} : {}x{} @ {} mHz, échelle {}",
+        wl_mode.size.w,
+        wl_mode.size.h,
+        wl_mode.refresh,
+        udev.scale
+    );
+    udev.surfaces.insert(
+        crtc,
+        OutputSurface {
+            output: output.clone(),
+            drm_output,
+            connector: info.handle(),
+            global,
+            gamma_size,
+            pending: false,
+            blanked: false,
+        },
+    );
+    layer_map_for_output(&output).arrange();
+    state.night.applied = None;
+    // Fenêtres ramenées dans le nouvel écran si elles en dépassent
+    state.fit_windows_to_output();
+    let handle = udev.handle.clone();
+    let _ = handle.insert_source(Timer::immediate(), move |_, _, data| {
+        render(data, crtc);
+        TimeoutAction::Drop
+    });
+}
+
+/// Réglages demandés par IPC (échelle, mode) et lumière de nuit, appliqués
+/// avant le rendu d'une image.
+fn apply_output_settings(udev: &mut UdevData, state: &mut crate::Odysseus, crtc: crtc::Handle) {
+    let Some(surface) = udev.surfaces.get_mut(&crtc) else {
+        return;
+    };
+    if let Some(scale) = state.pending_scale.take() {
+        udev.scale = scale;
+        surface
+            .output
+            .change_current_state(None, None, Some(Scale::Fractional(scale)), None);
+        layer_map_for_output(&surface.output).arrange();
+        udev.cursor = Cursor::load((udev.cursor_size as f64 * scale).round() as u32);
+        state.fit_windows_to_output();
+        tracing::info!("échelle {scale}");
+    }
+    if let Some((w, h, refresh)) = state.pending_mode.take() {
+        let mode = udev
+            .manager
+            .device()
+            .get_connector(surface.connector, false)
+            .ok()
+            .and_then(|info| {
+                info.modes()
+                    .iter()
+                    .filter(|m| {
+                        let (mw, mh) = m.size();
+                        mw as i32 == w
+                            && mh as i32 == h
+                            && refresh.is_none_or(|r| (m.vrefresh() as i32 - r).abs() <= 1)
+                    })
+                    .max_by_key(|m| m.vrefresh())
+                    .copied()
+            });
+        match mode {
+            Some(mode) => match surface.drm_output.use_mode::<_, OdysseusElement>(
+                mode,
+                &mut udev.renderer,
+                &DrmOutputRenderElements::default(),
+            ) {
+                Ok(()) => {
+                    let wl_mode = WlMode::from(mode);
+                    surface
+                        .output
+                        .change_current_state(Some(wl_mode), None, None, None);
+                    surface.output.set_preferred(wl_mode);
+                    layer_map_for_output(&surface.output).arrange();
+                    state.fit_windows_to_output();
+                    surface.pending = false;
+                    tracing::info!("mode {w}x{h} @ {} Hz", mode.vrefresh());
+                }
+                Err(e) => tracing::warn!("mode {w}x{h} refusé : {e:?}"),
+            },
+            None => tracing::warn!("mode {w}x{h} inconnu pour cet écran"),
+        }
+    }
+    if surface.gamma_size > 1
+        && let Some(kelvin) = state.night.step()
+    {
+        let (r, g, b) = crate::night::ramps(kelvin, surface.gamma_size);
+        match udev.manager.device().set_gamma(crtc, &r, &g, &b) {
+            Ok(()) => state.night.applied = Some(kelvin),
+            Err(e) => {
+                tracing::warn!("table gamma : {e}");
+                // Pas de nouvel essai à chaque image
+                state.night.applied = Some(kelvin);
+            }
+        }
+    }
 }
 
 /// Rend une image pour un écran ; sans changement à l'écran, réessaie après ~1 image.
@@ -361,6 +528,7 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         return;
     }
     if surface.blanked {
+        state.night.applied = None;
         // Réveil : état DRM remis à zéro, la prochaine image rallume l'écran
         if let Err(e) = surface.drm_output.with_compositor(|c| c.reset_state()) {
             tracing::warn!("rallumage de l'écran : {e}");
@@ -371,6 +539,10 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     if surface.pending {
         return;
     }
+    apply_output_settings(udev, state, crtc);
+    let Some(surface) = udev.surfaces.get_mut(&crtc) else {
+        return;
+    };
     let output = surface.output.clone();
     let Some(mode) = output.current_mode() else {
         return;

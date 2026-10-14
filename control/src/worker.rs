@@ -18,6 +18,8 @@ pub struct Snapshot {
     pub wired: sys::Wired,
     pub sound: sys::Sound,
     pub dnd: bool,
+    /// Lumière de nuit : off, on ou auto
+    pub night: String,
 }
 
 pub enum Act {
@@ -34,7 +36,9 @@ pub enum Act {
     Mute,
     Sink(u32),
     Dnd(bool),
-    Power { reboot: bool },
+    Night(&'static str),
+    /// Méthode de logind : PowerOff, Reboot ou Suspend
+    Power(&'static str),
 }
 
 pub enum Event {
@@ -109,15 +113,20 @@ pub fn run(rx: Receiver<Act>, tx: channel::Sender<Event>) {
                 continue;
             }
             Act::Mute => sys::toggle_mute(),
+            Act::Night(mode) => {
+                if let Err(e) = sys::compositor_command(&format!("nightlight {mode}")) {
+                    let _ = tx.send(Event::Done(Some(format!("Lumière de nuit : {e}"))));
+                }
+            }
             Act::Sink(id) => sys::set_default_sink(id),
             Act::Dnd(on) => {
                 if let Some(c) = session.as_ref() {
                     sys::set_dnd(c, on);
                 }
             }
-            Act::Power { reboot } => {
+            Act::Power(method) => {
                 if let Some(c) = system.as_ref()
-                    && let Err(e) = sys::power(c, reboot)
+                    && let Err(e) = sys::power(c, method)
                 {
                     let _ = tx.send(Event::Done(Some(format!("Refusé par le système : {e}"))));
                 }
@@ -129,6 +138,7 @@ pub fn run(rx: Receiver<Act>, tx: channel::Sender<Event>) {
             wired: sys::wired(),
             sound: sys::sound(),
             dnd: session.as_ref().is_some_and(sys::dnd),
+            night: sys::night_mode(),
         };
         if tx.send(Event::State(Box::new(last.clone()))).is_err() {
             return;

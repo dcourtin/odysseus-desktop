@@ -182,10 +182,10 @@ pub fn wifi_connect(network: &str, passphrase: Option<String>) -> Result<(), Str
             "/net/connman/iwd",
             "net.connman.iwd.AgentManager",
             "UnregisterAgent",
-        ) {
-            let _ =
-                ch.send_with_reply_and_block(unregister.append1(Path::from(AGENT_PATH)), TIMEOUT);
-        }
+        )
+    {
+        let _ = ch.send_with_reply_and_block(unregister.append1(Path::from(AGENT_PATH)), TIMEOUT);
+    }
     result.map_err(|e| match e.as_str() {
         s if s.contains("InvalidFormat") || s.contains("Failed") => {
             "Connexion impossible (mot de passe ?)".into()
@@ -463,8 +463,7 @@ fn sinks() -> Vec<Sink> {
     let mut in_sinks = false;
     let mut list = Vec::new();
     for line in text.lines() {
-        let trimmed = line
-            .trim_start_matches([' ', '│', '├', '└', '─']);
+        let trimmed = line.trim_start_matches([' ', '│', '├', '└', '─']);
         if !line.starts_with([' ', '│', '├', '└']) {
             in_audio = line.starts_with("Audio");
             in_sinks = false;
@@ -549,14 +548,51 @@ pub fn set_dnd(session: &Connection, on: bool) {
 
 // --- Alimentation (logind) ---------------------------------------------------
 
-pub fn power(conn: &Connection, reboot: bool) -> Result<(), String> {
+pub fn power(conn: &Connection, method: &str) -> Result<(), String> {
     let proxy = conn.with_proxy(
         "org.freedesktop.login1",
         "/org/freedesktop/login1",
         Duration::from_secs(10),
     );
-    let method = if reboot { "Reboot" } else { "PowerOff" };
     proxy
         .method_call("org.freedesktop.login1.Manager", method, (false,))
         .map_err(|e: dbus::Error| e.message().unwrap_or("refusé").to_string())
+}
+
+// --- Compositeur (IPC compatible sway) -------------------------------------------
+
+/// Envoie une commande au compositeur (socket SWAYSOCK, message RUN_COMMAND).
+pub fn compositor_command(command: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let path = std::env::var("SWAYSOCK").map_err(|_| "compositeur injoignable".to_string())?;
+    let mut stream = std::os::unix::net::UnixStream::connect(path).map_err(|e| e.to_string())?;
+    let mut msg = b"i3-ipc".to_vec();
+    msg.extend_from_slice(&(command.len() as u32).to_ne_bytes());
+    msg.extend_from_slice(&0u32.to_ne_bytes());
+    msg.extend_from_slice(command.as_bytes());
+    stream.write_all(&msg).map_err(|e| e.to_string())?;
+    let mut header = [0u8; 14];
+    stream.read_exact(&mut header).map_err(|e| e.to_string())?;
+    let len = u32::from_ne_bytes([header[6], header[7], header[8], header[9]]) as usize;
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&body).contains("\"success\":true") {
+        Ok(())
+    } else {
+        Err("commande refusée".into())
+    }
+}
+
+/// Mode de la lumière de nuit, tel que le compositeur l'a enregistré.
+pub fn night_mode() -> String {
+    std::env::var_os("HOME")
+        .and_then(|h| {
+            std::fs::read_to_string(
+                std::path::Path::new(&h).join(".local/state/odysseus/nightlight"),
+            )
+            .ok()
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| s == "on" || s == "auto")
+        .unwrap_or_else(|| "off".into())
 }

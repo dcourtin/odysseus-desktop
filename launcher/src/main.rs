@@ -90,6 +90,8 @@ struct Launcher {
     scale: i32,
     configured: bool,
     exit: bool,
+    /// Icônes chargées, par indice d'application (None : pas d'icône)
+    icon_cache: std::collections::HashMap<usize, Option<common::draw::Image>>,
 }
 
 fn pid_file() -> Option<PathBuf> {
@@ -111,7 +113,11 @@ fn toggle_existing() -> bool {
     // Un processus zombie (terminé, pas encore récupéré) ne compte pas
     let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
-        .and_then(|st| st.rsplit(')').next().map(|r| r.trim_start().starts_with('Z')))
+        .and_then(|st| {
+            st.rsplit(')')
+                .next()
+                .map(|r| r.trim_start().starts_with('Z'))
+        })
         .unwrap_or(true);
     if zombie || comm.trim() != "launcher" {
         return false;
@@ -186,6 +192,7 @@ fn main() {
         scale: 1,
         configured: false,
         exit: false,
+        icon_cache: std::collections::HashMap::new(),
     };
     launcher.update_entries();
     let (w, h) = launcher.surface_size();
@@ -432,6 +439,18 @@ impl Launcher {
             );
         }
 
+        // Icônes des applications affichées (chargées une fois, gardées en cache)
+        let icon_px = (30.0 * s) as u32;
+        for entry in &self.entries {
+            if let Entry::App(idx) = entry {
+                let idx = *idx;
+                if let std::collections::hash_map::Entry::Vacant(slot) = self.icon_cache.entry(idx)
+                {
+                    slot.insert(common::icons::load(&self.apps[idx].icon, icon_px));
+                }
+            }
+        }
+
         // Résultats
         for (i, entry) in self.entries.iter().enumerate() {
             let y = y0 + (SEARCH_H + 1.0 + PAD) * s + i as f32 * ROW_H * s;
@@ -469,22 +488,30 @@ impl Launcher {
                     0x9a9ab0,
                 ),
             };
-            // Icône : carré arrondi coloré avec l'initiale
+            // Icône : celle de l'application, sinon carré arrondi coloré avec l'initiale
             let icon = 30.0 * s;
             let ix = x0 + 20.0 * s;
             let iy = y + (row_h - icon) / 2.0;
-            c.fill_rounded(ix, iy, icon, icon, 9.0 * s, Rgba::hex(color, 0.9));
-            let isz = 15.0 * s;
-            let iw = self.bold.measure(&initial, isz);
-            self.bold.draw_in(
-                &mut c,
-                &initial,
-                ix + (icon - iw) / 2.0,
-                iy,
-                icon,
-                isz,
-                theme::BACKGROUND,
-            );
+            let image = match entry {
+                Entry::App(idx) => self.icon_cache.get(idx).and_then(Option::as_ref),
+                Entry::Run(_) => None,
+            };
+            if let Some(image) = image {
+                c.image(image, ix, iy, icon, icon, 0.0);
+            } else {
+                c.fill_rounded(ix, iy, icon, icon, 9.0 * s, Rgba::hex(color, 0.9));
+                let isz = 15.0 * s;
+                let iw = self.bold.measure(&initial, isz);
+                self.bold.draw_in(
+                    &mut c,
+                    &initial,
+                    ix + (icon - iw) / 2.0,
+                    iy,
+                    icon,
+                    isz,
+                    theme::BACKGROUND,
+                );
+            }
 
             // Nom puis description, raccourcis à la largeur disponible
             let nx = ix + icon + 14.0 * s;

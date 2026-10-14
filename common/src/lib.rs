@@ -2,4 +2,5 @@
 //! le protocole entre le compositeur et le shell.
 
 pub mod draw;
+pub mod icons;
 pub mod theme;

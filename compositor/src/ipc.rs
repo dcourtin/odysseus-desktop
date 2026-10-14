@@ -4,8 +4,9 @@
 //! clients dans SWAYSOCK.
 //!
 //! Messages pris en charge : RUN_COMMAND (« workspace N », « workspace number N »,
-//! « workspace next_on_output|prev_on_output »), GET_WORKSPACES, SUBSCRIBE
-//! (événements « workspace »).
+//! « workspace next_on_output|prev_on_output », et propres à odysseus :
+//! « nightlight on|off|auto|toggle », « output scale X », « output mode WxH[@Hz] »),
+//! GET_WORKSPACES, SUBSCRIBE (événements « workspace »).
 
 use std::{
     ffi::OsStr,
@@ -136,6 +137,51 @@ fn handle_message(state: &mut Odysseus, kind: u32, payload: &str, stream: &UnixS
 }
 
 fn run_command(state: &mut Odysseus, command: &str) -> bool {
+    let command = command.trim();
+    if let Some(arg) = command.strip_prefix("nightlight") {
+        use crate::night::Mode;
+        let mode = match arg.trim() {
+            "on" => Mode::On,
+            "off" => Mode::Off,
+            "auto" => Mode::Auto,
+            "toggle" if state.night.mode == Mode::Off => Mode::On,
+            "toggle" => Mode::Off,
+            _ => return false,
+        };
+        state.night.set_mode(mode);
+        return true;
+    }
+    if let Some(arg) = command.strip_prefix("output") {
+        let words: Vec<&str> = arg.split_whitespace().collect();
+        // « output [NOM] scale 1.5 » ou « output [NOM] mode 2560x1440@60 » : un seul écran
+        let pos = words.iter().position(|w| *w == "scale" || *w == "mode");
+        return match pos.map(|i| (words[i], words.get(i + 1))) {
+            Some(("scale", Some(v))) => match v.parse::<f64>() {
+                Ok(scale) if (0.5..=4.0).contains(&scale) => {
+                    state.pending_scale = Some(scale);
+                    true
+                }
+                _ => false,
+            },
+            Some(("mode", Some(v))) => {
+                let (size, refresh) = match v.split_once('@') {
+                    Some((size, r)) => (size, r.trim_end_matches("Hz").parse::<f32>().ok()),
+                    None => (*v, None),
+                };
+                let parsed = size
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse::<i32>().ok()?, h.parse::<i32>().ok()?)));
+                match parsed {
+                    Some((w, h)) => {
+                        state.pending_mode = Some((w, h, refresh.map(|r| r.round() as i32)));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+    }
     let Some(arg) = command.strip_prefix("workspace") else {
         return false;
     };

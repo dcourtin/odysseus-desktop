@@ -17,7 +17,7 @@ use std::{
 
 use common::{
     draw::{Canvas, Text},
-    theme::{self, Rgba},
+    theme::{self, Rgba, icon},
 };
 use model::{Browser, format_date, format_size, is_text};
 use smithay_client_toolkit::{
@@ -26,7 +26,10 @@ use smithay_client_toolkit::{
     delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::{EventLoop, LoopHandle},
+        calloop::{
+            EventLoop, LoopHandle,
+            timer::{TimeoutAction, Timer},
+        },
         calloop_wayland_source::WaylandSource,
         client::{
             Connection, QueueHandle,
@@ -72,6 +75,8 @@ const FILE: Rgba = Rgba::hex(0x9a9ab0, 1.0);
 enum Hit {
     Row(usize),
     Place(PathBuf),
+    /// Démonter un disque externe (point de montage)
+    Eject(PathBuf),
     Crumb(PathBuf),
     Back,
     Forward,
@@ -91,6 +96,7 @@ struct Files {
     modifiers: Modifiers,
     regular: Text,
     bold: Text,
+    icons: Text,
     browser: Browser,
     places: Vec<(String, PathBuf)>,
     hits: Vec<((f64, f64, f64, f64), Hit)>,
@@ -127,6 +133,24 @@ fn places(home: &Path) -> Vec<(String, PathBuf)> {
     list
 }
 
+/// Disques externes montés pour l'utilisateur (/run/media/<utilisateur>/…).
+fn devices() -> Vec<(String, PathBuf)> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let prefix = format!("/run/media/{user}/");
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let mut list: Vec<(String, PathBuf)> = mounts
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(1))
+        // /proc/mounts code les espaces en \040
+        .map(|m| m.replace("\\040", " "))
+        .filter(|m| m.starts_with(&prefix))
+        .map(|m| (m[prefix.len()..].to_string(), PathBuf::from(m)))
+        .collect();
+    list.sort();
+    list.dedup();
+    list
+}
+
 fn main() {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
     let start = std::env::args()
@@ -154,6 +178,23 @@ fn main() {
         .insert(event_loop.handle())
         .expect("source Wayland");
 
+    // Clé USB branchée ou retirée : la barre latérale suit (toutes les 2 s)
+    let mut known = devices();
+    event_loop
+        .handle()
+        .insert_source(
+            Timer::from_duration(Duration::from_secs(2)),
+            move |_, _, files| {
+                let now = devices();
+                if now != known {
+                    known = now;
+                    files.draw();
+                }
+                TimeoutAction::ToDuration(Duration::from_secs(2))
+            },
+        )
+        .expect("minuterie");
+
     let mut files = Files {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -168,6 +209,7 @@ fn main() {
         modifiers: Modifiers::default(),
         regular: Text::load(theme::FONT_REGULAR).expect("police"),
         bold: Text::load(theme::FONT_BOLD).expect("police"),
+        icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         browser: Browser::new(start),
         places: places(&home),
         hits: Vec::new(),
@@ -332,6 +374,7 @@ impl Files {
                 self.browser.open_dir(&path);
                 self.navigated();
             }
+            Some(Hit::Eject(path)) => self.eject(&path),
             Some(Hit::Back) => {
                 self.browser.back();
                 self.navigated();
@@ -350,6 +393,33 @@ impl Files {
                 }
             }
         }
+    }
+
+    /// Démonte un disque externe (systemd, autorisé par polkit) ; on quitte
+    /// d'abord le dossier s'il est affiché.
+    fn eject(&mut self, path: &Path) {
+        if self.browser.cwd.starts_with(path) {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+            self.browser.open_dir(&home);
+        }
+        let result = std::process::Command::new("systemd-mount")
+            .arg("--umount")
+            .arg(path)
+            .output();
+        self.browser.message = match result {
+            Ok(out) if out.status.success() => Some(format!(
+                "« {} » peut être retiré",
+                path.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            )),
+            Ok(out) => Some(format!(
+                "Éjection impossible : {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(e) => Some(format!("Éjection impossible : {e}")),
+        };
+        self.navigated();
     }
 
     fn draw(&mut self) {
@@ -435,6 +505,61 @@ impl Files {
             self.regular
                 .draw_in(&mut c, label, 48.0 * s, y, row_h, 14.0 * s, color);
             hit(10.0 * s, y, sw - 20.0 * s, row_h, Hit::Place(path.clone()));
+            y += row_h + 2.0 * s;
+        }
+
+        // Appareils : clés USB et disques externes, avec bouton d'éjection
+        let devices = devices();
+        if !devices.is_empty() {
+            y += 12.0 * s;
+            self.regular.draw_in(
+                &mut c,
+                "APPAREILS",
+                20.0 * s,
+                y,
+                24.0 * s,
+                11.0 * s,
+                theme::TEXT_DIM,
+            );
+            y += 28.0 * s;
+        }
+        for (label, path) in &devices {
+            let row_h = 32.0 * s;
+            let active = self.browser.cwd.starts_with(path);
+            if active {
+                let mut sel = theme::ACCENT;
+                sel.a = 0.18;
+                c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
+            }
+            let color = if active { theme::ACCENT } else { FOLDER };
+            self.icons.icon(
+                &mut c,
+                icon::HARD_DRIVE,
+                30.0 * s,
+                y + row_h / 2.0,
+                16.0 * s,
+                color,
+            );
+            let text = self.regular.truncate(label, 14.0 * s, sw - 92.0 * s);
+            self.regular.draw_in(
+                &mut c,
+                &text,
+                48.0 * s,
+                y,
+                row_h,
+                14.0 * s,
+                Rgba::hex(0xc8cbe0, 1.0),
+            );
+            hit(10.0 * s, y, sw - 50.0 * s, row_h, Hit::Place(path.clone()));
+            self.icons.icon(
+                &mut c,
+                icon::EJECT,
+                sw - 26.0 * s,
+                y + row_h / 2.0,
+                14.0 * s,
+                theme::TEXT_DIM,
+            );
+            hit(sw - 40.0 * s, y, 30.0 * s, row_h, Hit::Eject(path.clone()));
             y += row_h + 2.0 * s;
         }
 

@@ -40,6 +40,8 @@ use smithay::{
     },
 };
 
+use smithay::reexports::wayland_server::Resource;
+
 use crate::CalloopData;
 
 pub struct Odysseus {
@@ -113,6 +115,10 @@ pub struct Odysseus {
     pub screen_power_changed: bool,
     /// Couches « à la demande » qui ont déjà reçu le clavier à leur apparition
     pub layers_focused_once: HashSet<ObjectId>,
+    /// Réglages d'écran demandés par IPC, appliqués par le backend à l'image suivante
+    pub pending_scale: Option<f64>,
+    pub pending_mode: Option<(i32, i32, Option<i32>)>,
+    pub night: crate::night::NightLight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,6 +230,9 @@ impl Odysseus {
             screen_off: false,
             screen_power_changed: false,
             layers_focused_once: HashSet::new(),
+            pending_scale: None,
+            pending_mode: None,
+            night: crate::night::NightLight::load(),
         }
     }
 
@@ -390,6 +399,53 @@ impl Odysseus {
             })
             .or_else(|| in_layer(WlrLayer::Bottom))
             .or_else(|| in_layer(WlrLayer::Background))
+    }
+
+    /// Après un changement d'écran (taille, échelle) : fenêtres agrandies
+    /// recalées, les autres ramenées dans la zone visible.
+    pub fn fit_windows_to_output(&mut self) {
+        let Some(area) = self.usable_area() else {
+            return;
+        };
+        let windows: Vec<Window> = self.space.elements().cloned().collect();
+        for window in windows {
+            let Some(toplevel) = window.toplevel() else {
+                continue;
+            };
+            let id = toplevel.wl_surface().id();
+            if self.restore.contains_key(&id) {
+                // Agrandie ou plein écran : nouvelle taille
+                let full = self.fullscreen.contains(&id);
+                let target = if full {
+                    self.space
+                        .outputs()
+                        .next()
+                        .and_then(|o| self.space.output_geometry(o))
+                        .unwrap_or(area)
+                } else {
+                    area
+                };
+                toplevel.with_pending_state(|s| s.size = Some(target.size));
+                toplevel.send_pending_configure();
+                self.space.map_element(window, target.loc, false);
+                continue;
+            }
+            let Some(loc) = self.space.element_location(&window) else {
+                continue;
+            };
+            let size = window.geometry().size;
+            let x = loc.x.clamp(
+                area.loc.x,
+                (area.loc.x + area.size.w - size.w.min(area.size.w)).max(area.loc.x),
+            );
+            let y = loc.y.clamp(
+                area.loc.y,
+                (area.loc.y + area.size.h - size.h.min(area.size.h)).max(area.loc.y),
+            );
+            if (x, y) != (loc.x, loc.y) {
+                self.space.map_element(window, (x, y), false);
+            }
+        }
     }
 
     /// Zone utilisable par les fenêtres sur la première sortie (hors zones exclusives des couches).

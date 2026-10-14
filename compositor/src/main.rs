@@ -9,6 +9,7 @@ mod grabs;
 mod input;
 mod ipc;
 mod lock;
+mod night;
 mod render;
 mod state;
 mod udev;

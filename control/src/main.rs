@@ -83,9 +83,11 @@ enum Target {
     BtToggle,
     BtOpen,
     Dnd,
+    Night,
     Slider,
     Mute,
     SoundOpen,
+    Sleep,
     Lock,
     Reboot,
     PowerOff,
@@ -141,6 +143,8 @@ struct Control {
     scale: i32,
     configured: bool,
     exit: bool,
+    /// Mise en veille demandée : faite après la fermeture du panneau
+    suspend: bool,
 }
 
 fn pid_file() -> Option<PathBuf> {
@@ -159,7 +163,11 @@ fn toggle_existing() -> bool {
     // Un processus zombie (terminé, pas encore récupéré) ne compte pas
     let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
-        .and_then(|st| st.rsplit(')').next().map(|r| r.trim_start().starts_with('Z')))
+        .and_then(|st| {
+            st.rsplit(')')
+                .next()
+                .map(|r| r.trim_start().starts_with('Z'))
+        })
         .unwrap_or(true);
     if zombie || !comm.trim().starts_with("odysseus-contro") || pid == std::process::id() {
         return false;
@@ -246,6 +254,7 @@ fn main() {
         scale: 1,
         configured: false,
         exit: false,
+        suspend: false,
     };
 
     // `odysseus-control --vue wifi|bluetooth|son` : ouvre directement une vue de détail
@@ -276,11 +285,27 @@ fn main() {
     if let Some(path) = pid_file() {
         let _ = std::fs::remove_file(path);
     }
+    // Veille : le temps que le verrou s'affiche, puis logind
+    if control.suspend {
+        drop(control);
+        std::thread::sleep(Duration::from_millis(1200));
+        match dbus::blocking::Connection::new_system() {
+            Ok(conn) => {
+                if let Err(e) = sys::power(&conn, "Suspend") {
+                    eprintln!("odysseus-control : veille refusée ({e})");
+                }
+            }
+            Err(e) => eprintln!("odysseus-control : D-Bus système ({e})"),
+        }
+    }
 }
 
 fn main_height() -> f32 {
-    2.0 * MARGIN + PAD + 3.0 * ROW + GAP + 76.0 + GAP + 80.0 + PAD
+    2.0 * MARGIN + PAD + 3.0 * ROW + GAP + NIGHT_H + GAP + 76.0 + GAP + 80.0 + PAD
 }
+
+/// Hauteur de la tuile « Lumière de nuit »
+const NIGHT_H: f32 = 56.0;
 
 /// Icône Wi-Fi selon la qualité du signal
 fn wifi_glyph(quality: u8) -> char {
@@ -436,6 +461,16 @@ impl Control {
             Target::WifiOpen => self.open_view(View::Wifi),
             Target::BtToggle => self.send(Act::BtPower(!self.state.bt.powered)),
             Target::BtOpen => self.open_view(View::Bluetooth),
+            Target::Night => {
+                // Désactivée → automatique → activée → désactivée
+                let next = match self.state.night.as_str() {
+                    "off" => "auto",
+                    "auto" => "on",
+                    _ => "off",
+                };
+                self.state.night = next.to_string();
+                self.send(Act::Night(next));
+            }
             Target::Dnd => {
                 self.state.dnd = !self.state.dnd;
                 self.send(Act::Dnd(self.state.dnd));
@@ -450,15 +485,23 @@ impl Control {
             Target::Mute => self.send(Act::Mute),
             Target::SoundOpen => self.open_view(View::Sound),
             Target::Back => self.back(),
+            // Veille : comme sur macOS, la session est verrouillée avant
+            Target::Sleep => {
+                spawn_sibling("odysseus-lock");
+                self.suspend = true;
+                self.exit = true;
+            }
             Target::Lock => {
                 spawn_sibling("odysseus-lock");
                 self.exit = true;
             }
             Target::Reboot | Target::PowerOff => {
                 if armed {
-                    self.send(Act::Power {
-                        reboot: target == Target::Reboot,
-                    });
+                    self.send(Act::Power(if target == Target::Reboot {
+                        "Reboot"
+                    } else {
+                        "PowerOff"
+                    }));
                     self.message = Some(if target == Target::Reboot {
                         "Redémarrage…".into()
                     } else {
@@ -991,8 +1034,50 @@ fn draw_main(
     );
     d.zone(rx, y, right_w, tile_h, Target::Dnd);
 
+    // Lumière de nuit
+    let ny = y + tile_h + GAP;
+    let night_on = st.night != "off";
+    let target = Target::Night;
+    let hovered = d.hovered(&target);
+    d.tile(x, ny, w, NIGHT_H);
+    d.hover_bg(x + 4.0, ny + 4.0, w - 8.0, NIGHT_H - 8.0, &target);
+    d.circle(
+        x + 26.0,
+        ny + NIGHT_H / 2.0,
+        16.0,
+        icon::SUN_MOON,
+        night_on,
+        hovered,
+    );
+    d.text(
+        "Lumière de nuit",
+        x + 50.0,
+        ny + 9.0,
+        20.0,
+        13.0,
+        true,
+        theme::TEXT,
+        w - 76.0,
+    );
+    let sub = match st.night.as_str() {
+        "on" => "Activée",
+        "auto" => "Automatique, de 21 h à 7 h",
+        _ => "Désactivée",
+    };
+    d.text(
+        sub,
+        x + 50.0,
+        ny + 27.0,
+        18.0,
+        theme::FONT_SMALL,
+        false,
+        theme::TEXT_DIM,
+        w - 76.0,
+    );
+    d.zone(x, ny, w, NIGHT_H, target);
+
     // Son
-    let sy = y + tile_h + GAP;
+    let sy = ny + NIGHT_H + GAP;
     let sound_h = 76.0;
     d.tile(x, sy, w, sound_h);
     d.text(
@@ -1056,11 +1141,12 @@ fn draw_main(
         );
     }
 
-    // Verrouiller, Redémarrer, Éteindre
+    // Veille, Verrouiller, Redémarrer, Éteindre
     let by = sy + sound_h + GAP;
-    let bw = (w - 2.0 * GAP) / 3.0;
+    let bw = (w - 3.0 * GAP) / 4.0;
     let bh = 80.0;
     let buttons = [
+        (Target::Sleep, icon::SLEEP, "Veille"),
         (Target::Lock, icon::LOCK, "Verrouiller"),
         (Target::Reboot, icon::RESTART, "Redémarrer"),
         (Target::PowerOff, icon::POWER, "Éteindre"),
@@ -1571,11 +1657,10 @@ impl PointerHandler for Control {
                 } => self.click(x, y),
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
+                } if self.dragging => {
+                    self.dragging = false;
+                    self.send(Act::Refresh);
                 }
-                    if self.dragging => {
-                        self.dragging = false;
-                        self.send(Act::Refresh);
-                    }
                 _ => {}
             }
         }

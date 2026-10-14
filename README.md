@@ -8,10 +8,10 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite icônes d'état, centre de contrôle, date et heure | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier, « Ne pas déranger », indicateur de volume | fonctionne |
-| `control/` | `odysseus-control` : centre de contrôle (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, son via PipeWire, verrouiller, redémarrer, éteindre) | fonctionne |
+| `control/` | `odysseus-control` : centre de contrôle (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
-| `files/` | Fichiers : explorateur (favoris, chemin cliquable, nom · taille · date) | fonctionne |
+| `files/` | Fichiers : explorateur (favoris, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |
 
 ## Raccourcis (Mod = Super sur tty, Alt dans une fenêtre sway)
 
@@ -32,6 +32,10 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 | clic sur l'heure | centre de notifications |
 | Ctrl+Alt+F1…F12 | changer de tty |
 | Mod+Maj+e | quitter |
+
+Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
+connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
+`nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
 
 Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
 (`ODYSSEUS_IDLE`, en secondes) ; une vidéo en lecture l'empêche.

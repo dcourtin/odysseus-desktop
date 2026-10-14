@@ -112,4 +112,11 @@ pub mod icon {
     pub const ARROW_RIGHT: char = '\u{e07a}';
     pub const LOADER: char = '\u{e109}';
     pub const BLUETOOTH_SEARCH: char = '\u{e1ba}';
+    pub const HARD_DRIVE: char = '\u{e0ed}';
+    pub const USB: char = '\u{e356}';
+    pub const EJECT: char = '\u{e733}';
+    pub const SUN: char = '\u{e178}';
+    pub const SUN_MOON: char = '\u{e2b2}';
+    pub const SLEEP: char = '\u{e410}';
+    pub const APP: char = '\u{e426}';
 }
