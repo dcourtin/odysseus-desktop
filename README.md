@@ -16,15 +16,27 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 
 ## Aperçu
 
-![Bureau : Fichiers, barre et notifications](docs/captures/bureau.png)
+![Bureau : Fichiers avec son panneau d'informations, notifications](docs/captures/bureau.png)
 
 | Centre de contrôle | Centre de notifications |
 |---|---|
 | ![Centre de contrôle](docs/captures/centre-controle.png) | ![Centre de notifications](docs/captures/centre-notifications.png) |
 
-| Lanceur (Super+Espace) | Fichiers |
+| Moniteur système |
+|---|
+| ![Moniteur système](docs/captures/moniteur.png) |
+
+| Fichiers (tri, panneau d'informations) | Lanceur (Super+Espace) |
 |---|---|
-| ![Lanceur](docs/captures/lanceur.png) | ![Fichiers](docs/captures/fichiers.png) |
+| ![Fichiers](docs/captures/fichiers.png) | ![Lanceur](docs/captures/lanceur.png) |
+
+| Aide-mémoire des raccourcis (Super+K) |
+|---|
+| ![Raccourcis](docs/captures/raccourcis.png) |
+
+| Thèmes : Odyssée bleue, sombre et claire |
+|---|
+| ![Thèmes](docs/captures/themes.png) |
 
 | Aperçu (visionneuse d'images) |
 |---|
@@ -32,16 +44,17 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 
 ![Écran de verrouillage](docs/captures/verrou.png)
 
-*Captures faites par le compositeur lui-même (Impr. écran), en 4K à l'échelle 1,5,
-avec le fond d'écran dégradé par défaut. Notifications et disque « Archives » de démonstration ;
-l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpeg.*
+*Captures faites par le compositeur lui-même, en 4K à l'échelle 1,5, avec un fond
+dégradé de démonstration. Notifications, dossier « Démo » et disque « Archives » de
+démonstration ; les images sont des fractales de Mandelbrot générées par FFmpeg. Dans
+la barre, l'icône du panneau ouvert est en surbrillance.*
 
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
-| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
-| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite le centre de contrôle, la date et l'heure | fonctionne sous sway et odysseus |
-| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier, « Ne pas déranger », indicateur de volume | fonctionne |
+| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
+| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), aide-mémoire, centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
+| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, apparence (thèmes Odyssée bleue, sombre et claire, appliqués à chaud à tout le bureau), son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
@@ -68,10 +81,14 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | Mod+l | verrouiller |
 | Mod+k (ou l'icône clavier de la barre) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
-| clic sur les icônes de la barre | centre de contrôle |
+| icônes de la barre (de gauche à droite) | moniteur système, aide-mémoire, centre de contrôle |
 | cloche de la barre, clic sur l'heure, ou souris dans le coin en haut à droite | centre de notifications (point sur la cloche : notifications non vues) |
 | Ctrl+Alt+F1…F12 | changer de tty |
 | Mod+Maj+e | quitter |
+
+Thèmes : Odyssée bleue (par défaut), sombre et claire, choisis dans le centre de
+contrôle (Apparence) et appliqués à chaud à tout le bureau ; le choix est gardé dans
+`~/.config/odysseus/theme`.
 
 Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
 connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
@@ -107,6 +124,8 @@ Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
     odysseus-notify --send "Titre" "Texte"   # notification d'essai
     odysseus-notify --dnd toggle             # « Ne pas déranger »
     odysseus-control --vue wifi              # centre de contrôle, vue Wi-Fi
+    odysseus-notify --center [show]          # centre de notifications (bascule, ou ouvre)
+    odysseus-moniteur                        # moniteur système (bascule)
 
     cargo build --release          # tout compiler
     cargo run -p shell-bar         # lancer la barre (depuis un terminal dans sway)
@@ -115,6 +134,13 @@ Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
 Pour lancer la barre au démarrage de sway, ajouter dans `~/.config/sway/config` :
 
     exec ~/odysseus-desktop/target/release/shell-bar
+
+## Dépendances système
+
+Au-delà de Smithay et des bibliothèques Wayland : PipeWire et WirePlumber (son),
+iwd (Wi-Fi), BlueZ (Bluetooth), logind et polkit (veille, arrêt), PAM (verrou),
+wl-clipboard (`wl-copy` / `wl-paste`), librsvg (icônes SVG), hwdata (nom de la carte
+graphique). Températures : `k10temp` (processeur AMD) et `amdgpu`.
 
 ## Licence
 
