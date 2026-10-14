@@ -233,11 +233,11 @@ pub fn draw(
     }
 
     // Jauge (volume…)
-    if let Some(v) = n.value {
+    if let Some(v) = n.shown_value() {
         let bar_y = ty + 6.0 * s;
         let bar_h = 6.0 * s;
         canvas.fill_rounded(tx, bar_y, tw, bar_h, bar_h / 2.0, theme::TILE_HOVER);
-        let filled = tw * v as f32 / 100.0;
+        let filled = tw * v / 100.0;
         if filled > 0.0 {
             canvas.fill_rounded(
                 tx,

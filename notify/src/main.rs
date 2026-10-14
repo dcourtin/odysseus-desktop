@@ -419,7 +419,7 @@ impl App {
             // Entrée depuis la droite, sortie vers la droite
             let t_in = n.appear.elapsed().as_secs_f32() / SLIDE.as_secs_f32();
             let mut dx = (1.0 - ease_out(t_in)) * (CARD_W + MARGIN);
-            if t_in < 1.0 {
+            if t_in < 1.0 || n.value_animating() {
                 animating = true;
             }
             if let Some(leaving) = n.leaving {

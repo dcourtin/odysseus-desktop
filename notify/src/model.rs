@@ -68,6 +68,26 @@ pub struct Notification {
     pub leaving: Option<Instant>,
     /// Position verticale affichée (animée vers sa place dans la pile)
     pub y: f32,
+    /// Jauge animée : valeur de départ et début du glissement vers `value`
+    pub value_from: f32,
+    pub value_since: Instant,
+}
+
+/// Durée du glissement de la jauge (volume) vers sa nouvelle valeur
+pub const VALUE_GLIDE: Duration = Duration::from_millis(160);
+
+impl Notification {
+    /// Valeur affichée de la jauge, qui glisse vers la valeur réelle
+    pub fn shown_value(&self) -> Option<f32> {
+        let target = self.value? as f32;
+        let t = (self.value_since.elapsed().as_secs_f32() / VALUE_GLIDE.as_secs_f32()).min(1.0);
+        let e = 1.0 - (1.0 - t).powi(3);
+        Some(self.value_from + (target - self.value_from) * e)
+    }
+
+    pub fn value_animating(&self) -> bool {
+        self.value.is_some() && self.value_since.elapsed() < VALUE_GLIDE
+    }
 }
 
 /// Raison de fermeture, au sens de la spécification
@@ -163,11 +183,19 @@ impl Store {
             deadline: lifetime.map(|d| now + d),
             leaving: None,
             y: 0.0,
+            value_from: hints.value.unwrap_or(0) as f32,
+            value_since: now,
         };
         // Remplacement sur place : pas de nouvelle animation d'apparition
         if let Some(old) = self.banners.iter_mut().find(|n| n.id == id) {
             notification.appear = old.appear;
             notification.y = old.y;
+            // La jauge part de ce qu'elle affiche (pas de saut)
+            if let Some(shown) = old.shown_value() {
+                notification.value_from = shown;
+            }
+            // Indicateur remplacé : il ne repart pas (ni ne s'éteint) en cours de route
+            notification.leaving = None;
             *old = notification;
             return id;
         }
