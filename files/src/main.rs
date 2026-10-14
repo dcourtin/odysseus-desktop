@@ -1,0 +1,928 @@
+//! Fichiers : explorateur d'odysseus-desktop. Barre latérale de favoris, barre
+//! d'outils (précédent / suivant, chemin cliquable), liste nom · taille · date.
+//!
+//! Clavier : flèches, Pg.préc/Pg.suiv, Début/Fin, Entrée (ouvrir),
+//! Retour arrière ou Alt+← (précédent), Alt+→ (suivant), Alt+↑ (dossier parent),
+//! Ctrl+H (fichiers cachés), F5 (relire), Ctrl+Q (quitter), lettres (aller à).
+//! Souris : clic, double-clic pour ouvrir, molette, glisser la barre d'outils
+//! pour déplacer la fenêtre.
+
+mod model;
+
+use std::{
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+use common::{
+    draw::{Canvas, Text},
+    theme::{self, Rgba},
+};
+use model::{Browser, format_date, format_size, is_text};
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
+    output::{OutputHandler, OutputState},
+    reexports::{
+        calloop::{EventLoop, LoopHandle},
+        calloop_wayland_source::WaylandSource,
+        client::{
+            Connection, QueueHandle,
+            globals::registry_queue_init,
+            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+        },
+    },
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
+    shell::{
+        WaylandSurface,
+        xdg::{
+            XdgShell,
+            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
+        },
+    },
+    shm::{Shm, ShmHandler, slot::SlotPool},
+};
+
+// Mise en page, en pixels logiques (grille de 4)
+const SIDEBAR_W: f32 = 208.0;
+const TOOLBAR_H: f32 = 52.0;
+const HEADER_H: f32 = 28.0;
+const ROW_H: f32 = 30.0;
+const STATUS_H: f32 = 28.0;
+const SIZE_COL_W: f32 = 96.0;
+const DATE_COL_W: f32 = 168.0;
+const BTN_LEFT: u32 = 0x110;
+
+const SIDEBAR_BG: Rgba = Rgba::hex(0x181825, 1.0);
+const CONTENT_BG: Rgba = Rgba::hex(0x1e1e2e, 1.0);
+const LINE: Rgba = Rgba::hex(0xffffff, 0.06);
+const FOLDER: Rgba = Rgba::hex(0x8aadf4, 1.0);
+const FILE: Rgba = Rgba::hex(0x9a9ab0, 1.0);
+
+/// Zones cliquables, en coordonnées logiques de la fenêtre
+#[derive(Clone)]
+enum Hit {
+    Row(usize),
+    Place(PathBuf),
+    Crumb(PathBuf),
+    Back,
+    Forward,
+}
+
+struct Files {
+    registry_state: RegistryState,
+    output_state: OutputState,
+    seat_state: SeatState,
+    shm: Shm,
+    pool: SlotPool,
+    window: Window,
+    loop_handle: LoopHandle<'static, Files>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    seat: Option<wl_seat::WlSeat>,
+    modifiers: Modifiers,
+    regular: Text,
+    bold: Text,
+    browser: Browser,
+    places: Vec<(String, PathBuf)>,
+    hits: Vec<((f64, f64, f64, f64), Hit)>,
+    last_click: Option<(Instant, usize)>,
+    typed: (String, Instant),
+    width: u32,
+    height: u32,
+    scale: i32,
+    configured: bool,
+    exit: bool,
+}
+
+/// Favoris : dossiers usuels qui existent, puis le système.
+fn places(home: &Path) -> Vec<(String, PathBuf)> {
+    let mut list = vec![("Accueil".to_string(), home.to_path_buf())];
+    for (label, dir) in [
+        ("Bureau", "Bureau"),
+        ("Documents", "Documents"),
+        ("Images", "Images"),
+        ("Téléchargements", "Téléchargements"),
+        ("Musique", "Musique"),
+        ("Vidéos", "Vidéos"),
+        ("Projet odysseus", "odysseus-desktop"),
+    ] {
+        let p = home.join(dir);
+        if p.is_dir() {
+            list.push((label.to_string(), p));
+        }
+    }
+    list.push(("Racine".to_string(), PathBuf::from("/")));
+    if Path::new("/sources").is_dir() {
+        list.push(("Sources".to_string(), PathBuf::from("/sources")));
+    }
+    list
+}
+
+fn main() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+    let start = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| home.clone());
+
+    let conn = Connection::connect_to_env().expect("pas de compositeur Wayland (WAYLAND_DISPLAY)");
+    let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
+    let qh = event_queue.handle();
+    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor indisponible");
+    let xdg_shell = XdgShell::bind(&globals, &qh).expect("xdg-shell indisponible");
+    let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponible");
+
+    let surface = compositor.create_surface(&qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    window.set_app_id("odysseus-files");
+    window.set_min_size(Some((640, 420)));
+    window.commit();
+
+    let mut event_loop: EventLoop<'static, Files> =
+        EventLoop::try_new().expect("boucle d'événements");
+    WaylandSource::new(conn, event_queue)
+        .insert(event_loop.handle())
+        .expect("source Wayland");
+
+    let mut files = Files {
+        registry_state: RegistryState::new(&globals),
+        output_state: OutputState::new(&globals, &qh),
+        seat_state: SeatState::new(&globals, &qh),
+        pool: SlotPool::new(2048 * 1024 * 4, &shm).expect("pool shm"),
+        shm,
+        window,
+        loop_handle: event_loop.handle(),
+        keyboard: None,
+        pointer: None,
+        seat: None,
+        modifiers: Modifiers::default(),
+        regular: Text::load(theme::FONT_REGULAR).expect("police"),
+        bold: Text::load(theme::FONT_BOLD).expect("police"),
+        browser: Browser::new(start),
+        places: places(&home),
+        hits: Vec::new(),
+        last_click: None,
+        typed: (String::new(), Instant::now()),
+        width: 960,
+        height: 620,
+        scale: 1,
+        configured: false,
+        exit: false,
+    };
+    files.update_title();
+
+    while !files.exit {
+        // Compositeur arrêté ou connexion perdue : on s'arrête proprement
+        if let Err(e) = event_loop.dispatch(None, &mut files) {
+            eprintln!("files : connexion au compositeur perdue ({e})");
+            break;
+        }
+    }
+}
+
+impl Files {
+    fn update_title(&self) {
+        let name = self
+            .browser
+            .cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/".into());
+        self.window.set_title(format!("{name} — Fichiers"));
+    }
+
+    fn visible_rows(&self) -> usize {
+        let list_h = self.height as f32 - TOOLBAR_H - HEADER_H - STATUS_H;
+        (list_h / ROW_H).floor().max(1.0) as usize
+    }
+
+    /// Faire défiler pour que la sélection reste visible.
+    fn follow_selection(&mut self) {
+        let rows = self.visible_rows();
+        let b = &mut self.browser;
+        if b.selected < b.scroll {
+            b.scroll = b.selected;
+        } else if b.selected >= b.scroll + rows {
+            b.scroll = b.selected + 1 - rows;
+        }
+    }
+
+    fn navigated(&mut self) {
+        self.update_title();
+        self.follow_selection();
+        self.draw();
+    }
+
+    fn open_selected(&mut self) {
+        let Some(entry) = self.browser.entries.get(self.browser.selected) else {
+            return;
+        };
+        let path = entry.path.clone();
+        if entry.is_dir {
+            self.browser.open_dir(&path);
+            self.navigated();
+            return;
+        }
+        if is_text(&path, entry.size) {
+            let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+            let result = std::process::Command::new(term)
+                .arg("-e")
+                .arg(editor)
+                .arg(&path)
+                .process_group(0)
+                .spawn();
+            if let Err(e) = result {
+                self.browser.message = Some(format!("Impossible d'ouvrir l'éditeur : {e}"));
+            }
+        } else {
+            self.browser.message =
+                Some(format!("Aucune application pour ouvrir « {} »", entry.name));
+        }
+        self.draw();
+    }
+
+    fn key(&mut self, event: KeyEvent) {
+        let n = self.browser.entries.len();
+        let page = self.visible_rows().saturating_sub(1).max(1);
+        let alt = self.modifiers.alt;
+        let ctrl = self.modifiers.ctrl;
+        match event.keysym {
+            Keysym::Up if alt => self.browser.parent(),
+            Keysym::Down if n > 0 => self.browser.selected = (self.browser.selected + 1).min(n - 1),
+            Keysym::Up => self.browser.selected = self.browser.selected.saturating_sub(1),
+            Keysym::Next if n > 0 => {
+                self.browser.selected = (self.browser.selected + page).min(n - 1)
+            }
+            Keysym::Prior => self.browser.selected = self.browser.selected.saturating_sub(page),
+            Keysym::Home => self.browser.selected = 0,
+            Keysym::End => self.browser.selected = n.saturating_sub(1),
+            Keysym::Return | Keysym::KP_Enter => return self.open_selected(),
+            Keysym::Left if alt => self.browser.back(),
+            Keysym::Right if alt => self.browser.forward(),
+            Keysym::BackSpace => self.browser.back(),
+            Keysym::F5 => self.browser.reload(),
+            Keysym::h if ctrl => self.browser.toggle_hidden(),
+            Keysym::q if ctrl => {
+                self.exit = true;
+                return;
+            }
+            _ => {
+                // Recherche à la frappe : lettres tapées en moins d'une seconde
+                if ctrl || alt || self.modifiers.logo {
+                    return;
+                }
+                let Some(text) = event
+                    .utf8
+                    .filter(|t| t.chars().all(|c| !c.is_control()) && !t.is_empty())
+                else {
+                    return;
+                };
+                if self.typed.1.elapsed() > Duration::from_secs(1) {
+                    self.typed.0.clear();
+                }
+                self.typed.0.push_str(&text);
+                self.typed.1 = Instant::now();
+                let prefix = self.typed.0.clone();
+                self.browser.jump_to(&prefix);
+            }
+        }
+        self.navigated();
+    }
+
+    fn hit_at(&self, x: f64, y: f64) -> Option<Hit> {
+        self.hits
+            .iter()
+            .find(|((hx, hy, hw, hh), _)| x >= *hx && x < hx + hw && y >= *hy && y < hy + hh)
+            .map(|(_, hit)| hit.clone())
+    }
+
+    fn click(&mut self, x: f64, y: f64, serial: u32) {
+        match self.hit_at(x, y) {
+            Some(Hit::Row(i)) => {
+                let double = self
+                    .last_click
+                    .is_some_and(|(t, row)| row == i && t.elapsed() < Duration::from_millis(400));
+                self.browser.selected = i;
+                self.last_click = Some((Instant::now(), i));
+                if double {
+                    self.last_click = None;
+                    self.open_selected();
+                } else {
+                    self.draw();
+                }
+            }
+            Some(Hit::Place(path) | Hit::Crumb(path)) => {
+                self.browser.open_dir(&path);
+                self.navigated();
+            }
+            Some(Hit::Back) => {
+                self.browser.back();
+                self.navigated();
+            }
+            Some(Hit::Forward) => {
+                self.browser.forward();
+                self.navigated();
+            }
+            None => {
+                // Barre d'outils vide : déplacer la fenêtre (pas de barre de titre)
+                if y < TOOLBAR_H as f64
+                    && x > SIDEBAR_W as f64
+                    && let Some(seat) = self.seat.as_ref()
+                {
+                    self.window.move_(seat, serial);
+                }
+            }
+        }
+    }
+
+    fn draw(&mut self) {
+        if !self.configured {
+            return;
+        }
+        let s = self.scale.max(1) as f32;
+        let (w, h) = (self.width * s as u32, self.height * s as u32);
+        let rows = self.visible_rows();
+        let Ok((buffer, data)) =
+            self.pool
+                .create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
+        else {
+            return;
+        };
+        let mut c = Canvas {
+            buf: data,
+            width: w,
+            height: h,
+        };
+        c.fill(CONTENT_BG);
+        let mut hits = Vec::new();
+        // Zone cliquable en pixels du tampon → coordonnées logiques
+        let mut hit = |x: f32, y: f32, w: f32, h: f32, what: Hit| {
+            hits.push((
+                (
+                    x as f64 / s as f64,
+                    y as f64 / s as f64,
+                    w as f64 / s as f64,
+                    h as f64 / s as f64,
+                ),
+                what,
+            ));
+        };
+
+        // Barre latérale
+        let sw = SIDEBAR_W * s;
+        c.fill_rounded(0.0, 0.0, sw, h as f32, 0.0, SIDEBAR_BG);
+        c.fill_rounded(sw - s, 0.0, s, h as f32, 0.0, LINE);
+        self.regular.draw_in(
+            &mut c,
+            "FAVORIS",
+            20.0 * s,
+            16.0 * s,
+            24.0 * s,
+            11.0 * s,
+            theme::TEXT_DIM,
+        );
+        let mut y = 44.0 * s;
+        for (label, path) in &self.places {
+            if label == "Racine" {
+                y += 12.0 * s;
+                self.regular.draw_in(
+                    &mut c,
+                    "SYSTÈME",
+                    20.0 * s,
+                    y,
+                    24.0 * s,
+                    11.0 * s,
+                    theme::TEXT_DIM,
+                );
+                y += 28.0 * s;
+            }
+            let row_h = 32.0 * s;
+            let active = *path == self.browser.cwd;
+            if active {
+                let mut sel = theme::ACCENT;
+                sel.a = 0.18;
+                c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
+            }
+            draw_folder_icon(
+                &mut c,
+                22.0 * s,
+                y + 8.0 * s,
+                16.0 * s,
+                if active { theme::ACCENT } else { FOLDER },
+            );
+            let color = if active {
+                theme::TEXT
+            } else {
+                Rgba::hex(0xc8cbe0, 1.0)
+            };
+            self.regular
+                .draw_in(&mut c, label, 48.0 * s, y, row_h, 14.0 * s, color);
+            hit(10.0 * s, y, sw - 20.0 * s, row_h, Hit::Place(path.clone()));
+            y += row_h + 2.0 * s;
+        }
+
+        // Barre d'outils : précédent / suivant, chemin
+        let x0 = sw;
+        let mid = TOOLBAR_H * s / 2.0;
+        for (i, (glyph, enabled, what)) in [
+            ("‹", self.browser.can_back(), Hit::Back),
+            ("›", self.browser.can_forward(), Hit::Forward),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bx = x0 + 16.0 * s + i as f32 * 34.0 * s;
+            let size = 28.0 * s;
+            c.fill_rounded(bx, mid - size / 2.0, size, size, 8.0 * s, theme::SUBTLE);
+            let color = if enabled {
+                theme::TEXT
+            } else {
+                Rgba::hex(0x585b70, 1.0)
+            };
+            let gw = self.bold.measure(glyph, 20.0 * s);
+            self.bold.draw_in(
+                &mut c,
+                glyph,
+                bx + (size - gw) / 2.0,
+                mid - size / 2.0 - 2.0 * s,
+                size,
+                20.0 * s,
+                color,
+            );
+            if enabled {
+                hit(bx, mid - size / 2.0, size, size, what);
+            }
+        }
+        // Chemin : chaque segment est cliquable ; on garde la fin si c'est trop long
+        let mut crumbs: Vec<(String, PathBuf)> = Vec::new();
+        let mut acc = PathBuf::new();
+        for comp in self.browser.cwd.components() {
+            acc.push(comp);
+            let label = match comp {
+                std::path::Component::RootDir => "/".to_string(),
+                other => other.as_os_str().to_string_lossy().into_owned(),
+            };
+            crumbs.push((label, acc.clone()));
+        }
+        let crumb_x0 = x0 + 100.0 * s;
+        let avail = w as f32 - crumb_x0 - 120.0 * s;
+        let sep_w = self.regular.measure("  ›  ", 14.0 * s);
+        let widths: Vec<f32> = crumbs
+            .iter()
+            .map(|(l, _)| self.bold.measure(l, 14.0 * s))
+            .collect();
+        let mut first = 0;
+        while first + 1 < crumbs.len()
+            && widths[first..].iter().sum::<f32>() + sep_w * (crumbs.len() - first) as f32 > avail
+        {
+            first += 1;
+        }
+        let mut cx = crumb_x0;
+        if first > 0 {
+            self.regular.draw_in(
+                &mut c,
+                "…  ›  ",
+                cx,
+                0.0,
+                TOOLBAR_H * s,
+                14.0 * s,
+                theme::TEXT_DIM,
+            );
+            cx += self.regular.measure("…  ›  ", 14.0 * s);
+        }
+        let last = crumbs.len().saturating_sub(1);
+        for (i, (label, path)) in crumbs.iter().enumerate().skip(first) {
+            let color = if i == last {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            let font = if i == last { &self.bold } else { &self.regular };
+            font.draw_in(&mut c, label, cx, 0.0, TOOLBAR_H * s, 14.0 * s, color);
+            let lw = font.measure(label, 14.0 * s);
+            hit(
+                cx - 4.0 * s,
+                mid - 14.0 * s,
+                lw + 8.0 * s,
+                28.0 * s,
+                Hit::Crumb(path.clone()),
+            );
+            cx += lw;
+            if i != last && label != "/" {
+                self.regular.draw_in(
+                    &mut c,
+                    "  ›  ",
+                    cx,
+                    0.0,
+                    TOOLBAR_H * s,
+                    14.0 * s,
+                    theme::TEXT_DIM,
+                );
+                cx += sep_w;
+            }
+        }
+        c.fill_rounded(x0, TOOLBAR_H * s - s, w as f32 - x0, s, 0.0, LINE);
+
+        // En-têtes de colonnes
+        let list_x = x0 + 16.0 * s;
+        let list_w = w as f32 - list_x - 16.0 * s;
+        let date_x = list_x + list_w - DATE_COL_W * s;
+        let size_x = date_x - SIZE_COL_W * s - 16.0 * s;
+        let header_y = TOOLBAR_H * s;
+        for (label, x) in [
+            ("Nom", list_x + 36.0 * s),
+            ("Taille", size_x),
+            ("Modifié", date_x),
+        ] {
+            self.regular.draw_in(
+                &mut c,
+                label,
+                x,
+                header_y,
+                HEADER_H * s,
+                12.0 * s,
+                theme::TEXT_DIM,
+            );
+        }
+
+        // Liste
+        let top = header_y + HEADER_H * s;
+        let b = &self.browser;
+        if b.entries.is_empty() && b.message.is_none() {
+            let msg = "Dossier vide";
+            let mw = self.regular.measure(msg, 15.0 * s);
+            let list_h = h as f32 - top - STATUS_H * s;
+            self.regular.draw_in(
+                &mut c,
+                msg,
+                x0 + (w as f32 - x0 - mw) / 2.0,
+                top,
+                list_h,
+                15.0 * s,
+                theme::TEXT_DIM,
+            );
+        }
+        for (row, idx) in (b.scroll..b.entries.len().min(b.scroll + rows)).enumerate() {
+            let e = &b.entries[idx];
+            let ry = top + row as f32 * ROW_H * s;
+            let rh = ROW_H * s;
+            if idx == b.selected {
+                let mut sel = theme::ACCENT;
+                sel.a = 0.25;
+                c.fill_rounded(x0 + 8.0 * s, ry, w as f32 - x0 - 16.0 * s, rh, 8.0 * s, sel);
+            }
+            if e.is_dir {
+                draw_folder_icon(&mut c, list_x + 6.0 * s, ry + 7.0 * s, 16.0 * s, FOLDER);
+            } else {
+                draw_file_icon(&mut c, list_x + 8.0 * s, ry + 6.0 * s, 13.0 * s, FILE);
+            }
+            let name_max = size_x - (list_x + 36.0 * s) - 16.0 * s;
+            let name = self.regular.truncate(&e.name, 14.0 * s, name_max);
+            self.regular.draw_in(
+                &mut c,
+                &name,
+                list_x + 36.0 * s,
+                ry,
+                rh,
+                14.0 * s,
+                theme::TEXT,
+            );
+            let size = if e.is_dir {
+                "—".to_string()
+            } else {
+                format_size(e.size)
+            };
+            self.regular
+                .draw_in(&mut c, &size, size_x, ry, rh, 13.0 * s, theme::TEXT_DIM);
+            self.regular.draw_in(
+                &mut c,
+                &format_date(e.modified),
+                date_x,
+                ry,
+                rh,
+                13.0 * s,
+                theme::TEXT_DIM,
+            );
+            hit(
+                x0 + 8.0 * s,
+                ry,
+                w as f32 - x0 - 16.0 * s,
+                rh,
+                Hit::Row(idx),
+            );
+        }
+
+        // Barre d'état
+        let sy = h as f32 - STATUS_H * s;
+        c.fill_rounded(x0, sy, w as f32 - x0, s, 0.0, LINE);
+        let status = match &b.message {
+            Some(m) => m.clone(),
+            None => {
+                let dirs = b.entries.iter().filter(|e| e.is_dir).count();
+                let files = b.entries.len() - dirs;
+                let hidden = if b.show_hidden {
+                    " · cachés visibles"
+                } else {
+                    ""
+                };
+                format!(
+                    "{dirs} dossier{} · {files} fichier{}{hidden}",
+                    plural(dirs),
+                    plural(files)
+                )
+            }
+        };
+        let color = if b.message.is_some() {
+            theme::URGENT
+        } else {
+            theme::TEXT_DIM
+        };
+        self.regular
+            .draw_in(&mut c, &status, list_x, sy, STATUS_H * s, 12.0 * s, color);
+
+        self.hits = hits;
+        let surface = self.window.wl_surface();
+        surface.set_buffer_scale(self.scale);
+        surface.damage_buffer(0, 0, w as i32, h as i32);
+        if buffer.attach_to(surface).is_ok() {
+            self.window.commit();
+        }
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n > 1 { "s" } else { "" }
+}
+
+/// Dossier : onglet + corps arrondis.
+fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
+    let mut tab = color;
+    tab.a *= 0.75;
+    c.fill_rounded(x, y, size * 0.5, size * 0.3, size * 0.1, tab);
+    c.fill_rounded(x, y + size * 0.15, size, size * 0.7, size * 0.14, color);
+}
+
+/// Fichier : feuille arrondie avec deux lignes de « texte ».
+fn draw_file_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
+    let h = size * 1.3;
+    c.fill_rounded(x, y, size, h, size * 0.18, color);
+    let line = Rgba::hex(0x1e1e2e, 0.6);
+    for k in 0..2 {
+        c.fill_rounded(
+            x + size * 0.22,
+            y + h * (0.4 + 0.2 * k as f32),
+            size * 0.56,
+            size * 0.08,
+            size * 0.04,
+            line,
+        );
+    }
+}
+
+impl CompositorHandler for Files {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        factor: i32,
+    ) {
+        if factor != self.scale {
+            self.scale = factor;
+            self.draw();
+        }
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl WindowHandler for Files {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
+        self.exit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &Window,
+        configure: WindowConfigure,
+        _: u32,
+    ) {
+        if let (Some(w), Some(h)) = configure.new_size {
+            self.width = w.get();
+            self.height = h.get();
+        }
+        self.configured = true;
+        self.follow_selection();
+        self.draw();
+    }
+}
+
+impl SeatHandler for Files {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        self.seat = Some(seat.clone());
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            let keyboard = self.seat_state.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.loop_handle.clone(),
+                Box::new(|files, _, event| files.key(event)),
+            );
+            if let Ok(k) = keyboard {
+                self.keyboard = Some(k);
+            }
+        }
+        if capability == Capability::Pointer
+            && self.pointer.is_none()
+            && let Ok(p) = self.seat_state.get_pointer(qh, &seat)
+        {
+            self.pointer = Some(p);
+        }
+    }
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard
+            && let Some(k) = self.keyboard.take()
+        {
+            k.release();
+        }
+        if capability == Capability::Pointer
+            && let Some(p) = self.pointer.take()
+        {
+            p.release();
+        }
+    }
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for Files {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.key(event);
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: u32,
+    ) {
+        self.modifiers = modifiers;
+    }
+}
+
+impl PointerHandler for Files {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            if &event.surface != self.window.wl_surface() {
+                continue;
+            }
+            let (x, y) = event.position;
+            match event.kind {
+                PointerEventKind::Press {
+                    button: BTN_LEFT,
+                    serial,
+                    ..
+                } => self.click(x, y, serial),
+                PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
+                    let max = self
+                        .browser
+                        .entries
+                        .len()
+                        .saturating_sub(self.visible_rows());
+                    let step = if vertical.absolute > 0.0 { 3isize } else { -3 };
+                    self.browser.scroll =
+                        (self.browser.scroll as isize + step).clamp(0, max as isize) as usize;
+                    self.draw();
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl OutputHandler for Files {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl ShmHandler for Files {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl ProvidesRegistryState for Files {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+delegate_compositor!(Files);
+delegate_output!(Files);
+delegate_seat!(Files);
+delegate_keyboard!(Files);
+delegate_pointer!(Files);
+delegate_shm!(Files);
+delegate_xdg_shell!(Files);
+delegate_xdg_window!(Files);
+delegate_registry!(Files);

@@ -1,0 +1,29 @@
+[package]
+name = "compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Compositeur Wayland d'odysseus-desktop, parti de smallvil (Smithay 0.7.0, MIT)"
+
+[dependencies]
+common.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bitflags = "2"
+xcursor = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = [
+    "backend_winit",
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_udev",
+    "backend_session_libseat",
+    "renderer_gl",
+    "wayland_frontend",
+    "desktop",
+]

@@ -1,0 +1,11 @@
+[package]
+name = "files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Fichiers : explorateur d'odysseus-desktop"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+chrono.workspace = true
