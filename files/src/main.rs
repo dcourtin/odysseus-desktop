@@ -12,6 +12,7 @@
 
 mod model;
 
+use std::os::fd::AsFd;
 use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
@@ -30,7 +31,8 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            EventLoop, LoopHandle,
+            EventLoop, Interest, LoopHandle, Mode, PostAction,
+            generic::Generic,
             timer::{TimeoutAction, Timer},
         },
         calloop_wayland_source::WaylandSource,
@@ -66,12 +68,6 @@ const STATUS_H: f32 = 28.0;
 const SIZE_COL_W: f32 = 96.0;
 const DATE_COL_W: f32 = 168.0;
 const BTN_LEFT: u32 = 0x110;
-
-const SIDEBAR_BG: Rgba = Rgba::hex(0x181825, 1.0);
-const CONTENT_BG: Rgba = Rgba::hex(0x1e1e2e, 1.0);
-const LINE: Rgba = Rgba::hex(0xffffff, 0.06);
-const FOLDER: Rgba = Rgba::hex(0x8aadf4, 1.0);
-const FILE: Rgba = Rgba::hex(0x9a9ab0, 1.0);
 
 /// Zones cliquables, en coordonnées logiques de la fenêtre
 #[derive(Clone)]
@@ -219,6 +215,20 @@ fn main() {
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
         .expect("source Wayland");
+
+    // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
+    if let Some(fd) = theme::watch() {
+        let _ = event_loop.handle().insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, files| {
+                theme::drain(fd.as_fd());
+                if theme::reload() {
+                    files.draw();
+                }
+                Ok(PostAction::Continue)
+            },
+        );
+    }
 
     // Clé USB branchée ou retirée : la barre latérale suit (toutes les 2 s)
     let mut known = devices();
@@ -591,7 +601,7 @@ impl Files {
             width: w,
             height: h,
         };
-        c.fill(CONTENT_BG);
+        c.fill(theme::palette().content);
         let mut hits = Vec::new();
         // Zone cliquable en pixels du tampon → coordonnées logiques
         let mut hit = |x: f32, y: f32, w: f32, h: f32, what: Hit| {
@@ -608,8 +618,8 @@ impl Files {
 
         // Barre latérale
         let sw = SIDEBAR_W * s;
-        c.fill_rounded(0.0, 0.0, sw, h as f32, 0.0, SIDEBAR_BG);
-        c.fill_rounded(sw - s, 0.0, s, h as f32, 0.0, LINE);
+        c.fill_rounded(0.0, 0.0, sw, h as f32, 0.0, theme::palette().sidebar);
+        c.fill_rounded(sw - s, 0.0, s, h as f32, 0.0, theme::palette().ink(0.06));
         self.regular.draw_in(
             &mut c,
             "FAVORIS",
@@ -617,7 +627,7 @@ impl Files {
             16.0 * s,
             24.0 * s,
             11.0 * s,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         let mut y = 44.0 * s;
         for (label, path) in &self.places {
@@ -630,14 +640,14 @@ impl Files {
                     y,
                     24.0 * s,
                     11.0 * s,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
                 y += 28.0 * s;
             }
             let row_h = 32.0 * s;
             let active = *path == self.browser.cwd;
             if active {
-                let mut sel = theme::ACCENT;
+                let mut sel = theme::palette().accent;
                 sel.a = 0.18;
                 c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
             }
@@ -646,12 +656,16 @@ impl Files {
                 22.0 * s,
                 y + 8.0 * s,
                 16.0 * s,
-                if active { theme::ACCENT } else { FOLDER },
+                if active {
+                    theme::palette().accent
+                } else {
+                    theme::palette().accent
+                },
             );
             let color = if active {
-                theme::TEXT
+                theme::palette().text
             } else {
-                Rgba::hex(0xc8cbe0, 1.0)
+                theme::palette().text_soft()
             };
             self.regular
                 .draw_in(&mut c, label, 48.0 * s, y, row_h, 14.0 * s, color);
@@ -670,7 +684,7 @@ impl Files {
                 y,
                 24.0 * s,
                 11.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             y += 28.0 * s;
         }
@@ -678,11 +692,15 @@ impl Files {
             let row_h = 32.0 * s;
             let active = self.browser.cwd.starts_with(path);
             if active {
-                let mut sel = theme::ACCENT;
+                let mut sel = theme::palette().accent;
                 sel.a = 0.18;
                 c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
             }
-            let color = if active { theme::ACCENT } else { FOLDER };
+            let color = if active {
+                theme::palette().accent
+            } else {
+                theme::palette().accent
+            };
             self.icons.icon(
                 &mut c,
                 icon::HARD_DRIVE,
@@ -699,7 +717,7 @@ impl Files {
                 y,
                 row_h,
                 14.0 * s,
-                Rgba::hex(0xc8cbe0, 1.0),
+                theme::palette().text_soft(),
             );
             hit(10.0 * s, y, sw - 50.0 * s, row_h, Hit::Place(path.clone()));
             self.icons.icon(
@@ -708,7 +726,7 @@ impl Files {
                 sw - 26.0 * s,
                 y + row_h / 2.0,
                 14.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             hit(sw - 40.0 * s, y, 30.0 * s, row_h, Hit::Eject(path.clone()));
             y += row_h + 2.0 * s;
@@ -726,11 +744,18 @@ impl Files {
         {
             let bx = x0 + 16.0 * s + i as f32 * 34.0 * s;
             let size = 28.0 * s;
-            c.fill_rounded(bx, mid - size / 2.0, size, size, 8.0 * s, theme::SUBTLE);
+            c.fill_rounded(
+                bx,
+                mid - size / 2.0,
+                size,
+                size,
+                8.0 * s,
+                theme::palette().subtle,
+            );
             let color = if enabled {
-                theme::TEXT
+                theme::palette().text
             } else {
-                Rgba::hex(0x585b70, 1.0)
+                theme::palette().text_dim.with_alpha(0.5)
             };
             let gw = self.bold.measure(glyph, 20.0 * s);
             self.bold.draw_in(
@@ -779,16 +804,16 @@ impl Files {
                 0.0,
                 TOOLBAR_H * s,
                 14.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             cx += self.regular.measure("…  ›  ", 14.0 * s);
         }
         let last = crumbs.len().saturating_sub(1);
         for (i, (label, path)) in crumbs.iter().enumerate().skip(first) {
             let color = if i == last {
-                theme::TEXT
+                theme::palette().text
             } else {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             };
             let font = if i == last { &self.bold } else { &self.regular };
             font.draw_in(&mut c, label, cx, 0.0, TOOLBAR_H * s, 14.0 * s, color);
@@ -809,7 +834,7 @@ impl Files {
                     0.0,
                     TOOLBAR_H * s,
                     14.0 * s,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
                 cx += sep_w;
             }
@@ -829,11 +854,15 @@ impl Files {
             let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
             let bx = w as f32 - lw - 16.0 * s;
             let bh = 28.0 * s;
-            let bg = if armed { theme::DANGER } else { theme::SUBTLE };
-            let fg = if armed {
-                theme::BACKGROUND
+            let bg = if armed {
+                theme::palette().danger
             } else {
-                theme::TEXT
+                theme::palette().subtle
+            };
+            let fg = if armed {
+                theme::palette().on_accent
+            } else {
+                theme::palette().text
             };
             c.fill_rounded(bx, mid - bh / 2.0, lw, bh, 8.0 * s, bg);
             self.regular.draw_in(
@@ -850,7 +879,7 @@ impl Files {
             let rl = "Remettre";
             let rw = self.regular.measure(rl, 13.0 * s) + 24.0 * s;
             let rx = bx - rw - 8.0 * s;
-            c.fill_rounded(rx, mid - bh / 2.0, rw, bh, 8.0 * s, theme::SUBTLE);
+            c.fill_rounded(rx, mid - bh / 2.0, rw, bh, 8.0 * s, theme::palette().subtle);
             self.regular.draw_in(
                 &mut c,
                 rl,
@@ -858,11 +887,18 @@ impl Files {
                 mid - bh / 2.0,
                 bh,
                 13.0 * s,
-                theme::TEXT,
+                theme::palette().text,
             );
             hit(rx, mid - bh / 2.0, rw, bh, Hit::Restore);
         }
-        c.fill_rounded(x0, TOOLBAR_H * s - s, w as f32 - x0, s, 0.0, LINE);
+        c.fill_rounded(
+            x0,
+            TOOLBAR_H * s - s,
+            w as f32 - x0,
+            s,
+            0.0,
+            theme::palette().ink(0.06),
+        );
 
         // En-têtes de colonnes
         let list_x = x0 + 16.0 * s;
@@ -882,7 +918,7 @@ impl Files {
                 header_y,
                 HEADER_H * s,
                 12.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
 
@@ -900,7 +936,7 @@ impl Files {
                 top,
                 list_h,
                 15.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
         for (row, idx) in (b.scroll..b.entries.len().min(b.scroll + rows)).enumerate() {
@@ -908,14 +944,26 @@ impl Files {
             let ry = top + row as f32 * ROW_H * s;
             let rh = ROW_H * s;
             if idx == b.selected {
-                let mut sel = theme::ACCENT;
+                let mut sel = theme::palette().accent;
                 sel.a = 0.25;
                 c.fill_rounded(x0 + 8.0 * s, ry, w as f32 - x0 - 16.0 * s, rh, 8.0 * s, sel);
             }
             if e.is_dir {
-                draw_folder_icon(&mut c, list_x + 6.0 * s, ry + 7.0 * s, 16.0 * s, FOLDER);
+                draw_folder_icon(
+                    &mut c,
+                    list_x + 6.0 * s,
+                    ry + 7.0 * s,
+                    16.0 * s,
+                    theme::palette().accent,
+                );
             } else {
-                draw_file_icon(&mut c, list_x + 8.0 * s, ry + 6.0 * s, 13.0 * s, FILE);
+                draw_file_icon(
+                    &mut c,
+                    list_x + 8.0 * s,
+                    ry + 6.0 * s,
+                    13.0 * s,
+                    theme::palette().text_dim,
+                );
             }
             let name_max = size_x - (list_x + 36.0 * s) - 16.0 * s;
             let name = self.regular.truncate(&e.name, 14.0 * s, name_max);
@@ -926,15 +974,22 @@ impl Files {
                 ry,
                 rh,
                 14.0 * s,
-                theme::TEXT,
+                theme::palette().text,
             );
             let size = if e.is_dir {
                 "—".to_string()
             } else {
                 format_size(e.size)
             };
-            self.regular
-                .draw_in(&mut c, &size, size_x, ry, rh, 13.0 * s, theme::TEXT_DIM);
+            self.regular.draw_in(
+                &mut c,
+                &size,
+                size_x,
+                ry,
+                rh,
+                13.0 * s,
+                theme::palette().text_dim,
+            );
             self.regular.draw_in(
                 &mut c,
                 &format_date(e.modified),
@@ -942,7 +997,7 @@ impl Files {
                 ry,
                 rh,
                 13.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             hit(
                 x0 + 8.0 * s,
@@ -955,7 +1010,7 @@ impl Files {
 
         // Barre d'état
         let sy = h as f32 - STATUS_H * s;
-        c.fill_rounded(x0, sy, w as f32 - x0, s, 0.0, LINE);
+        c.fill_rounded(x0, sy, w as f32 - x0, s, 0.0, theme::palette().ink(0.06));
         let status = match &b.message {
             Some(m) => m.clone(),
             None => {
@@ -974,9 +1029,9 @@ impl Files {
             }
         };
         let color = if b.message.is_some() {
-            theme::URGENT
+            theme::palette().urgent
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         };
         self.regular
             .draw_in(&mut c, &status, list_x, sy, STATUS_H * s, 12.0 * s, color);
@@ -1007,7 +1062,7 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
 fn draw_file_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
     let h = size * 1.3;
     c.fill_rounded(x, y, size, h, size * 0.18, color);
-    let line = Rgba::hex(0x1e1e2e, 0.6);
+    let line = theme::palette().content.with_alpha(0.6);
     for k in 0..2 {
         c.fill_rounded(
             x + size * 0.22,

@@ -58,8 +58,6 @@ const MAX_ROWS: usize = 7;
 const TOP_OFFSET: i32 = 180;
 const BTN_LEFT: u32 = 0x110;
 
-const PANEL_BG: Rgba = Rgba::hex(0x1b1b29, 0.97);
-const PANEL_BORDER: Rgba = Rgba::hex(0xffffff, 0.10);
 const ICON_COLORS: [u32; 6] = [0x8aadf4, 0xc6a0f6, 0xa6e3a1, 0xf9e2af, 0xf5a3b8, 0x8bd5ca];
 
 enum Entry {
@@ -359,14 +357,14 @@ impl Launcher {
         let (x0, y0) = (MARGIN * s, MARGIN * s);
         let (pw, ph) = (PANEL_W * s, panel_height(self.entries.len()) * s);
         c.shadow(x0, y0 + 12.0 * s, pw, ph, RADIUS * s, 32.0 * s, 0.5);
-        c.fill_rounded(x0, y0, pw, ph, RADIUS * s, PANEL_BORDER);
+        c.fill_rounded(x0, y0, pw, ph, RADIUS * s, theme::palette().panel_border());
         c.fill_rounded(
             x0 + s,
             y0 + s,
             pw - 2.0 * s,
             ph - 2.0 * s,
             (RADIUS - 1.0) * s,
-            PANEL_BG,
+            theme::palette().panel.with_alpha(0.97),
         );
 
         // Champ de recherche : loupe, texte (ou indication), curseur
@@ -378,7 +376,7 @@ impl Launcher {
             15.0 * s,
             15.0 * s,
             7.5 * s,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         c.fill_rounded(
             ix + 2.0 * s,
@@ -386,7 +384,7 @@ impl Launcher {
             11.0 * s,
             11.0 * s,
             5.5 * s,
-            PANEL_BG,
+            theme::palette().panel.with_alpha(0.97),
         );
         for k in 0..4 {
             let d = k as f32 * 1.5 * s;
@@ -396,7 +394,7 @@ impl Launcher {
                 3.0 * s,
                 3.0 * s,
                 1.5 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
         let tx = x0 + 56.0 * s;
@@ -409,14 +407,21 @@ impl Launcher {
                 y0,
                 SEARCH_H * s,
                 size,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             tx
         } else {
             let max_w = pw - (tx - x0) - 24.0 * s;
             let shown = self.regular.truncate(&self.query, size, max_w);
-            self.regular
-                .draw_in(&mut c, &shown, tx, y0, SEARCH_H * s, size, theme::TEXT);
+            self.regular.draw_in(
+                &mut c,
+                &shown,
+                tx,
+                y0,
+                SEARCH_H * s,
+                size,
+                theme::palette().text,
+            );
             tx + self.regular.measure(&shown, size)
         };
         c.fill_rounded(
@@ -425,7 +430,7 @@ impl Launcher {
             2.0 * s,
             24.0 * s,
             s,
-            theme::ACCENT,
+            theme::palette().accent,
         );
 
         if !self.entries.is_empty() {
@@ -435,7 +440,7 @@ impl Launcher {
                 pw - 32.0 * s,
                 s,
                 0.0,
-                theme::SUBTLE,
+                theme::palette().subtle,
             );
         }
 
@@ -456,7 +461,7 @@ impl Launcher {
             let y = y0 + (SEARCH_H + 1.0 + PAD) * s + i as f32 * ROW_H * s;
             let row_h = ROW_H * s;
             if i == self.selected {
-                let mut sel = theme::ACCENT;
+                let mut sel = theme::palette().accent;
                 sel.a = 0.22;
                 c.fill_rounded(x0 + PAD * s, y, pw - 2.0 * PAD * s, row_h, 12.0 * s, sel);
             }
@@ -509,7 +514,7 @@ impl Launcher {
                     iy,
                     icon,
                     isz,
-                    theme::BACKGROUND,
+                    Rgba::hex(0x1e1e2e, 1.0),
                 );
             }
 
@@ -519,13 +524,20 @@ impl Launcher {
             let tsz = 16.0 * s;
             let title = self.bold.truncate(&title, tsz, right_limit - nx);
             self.bold
-                .draw_in(&mut c, &title, nx, y, row_h, tsz, theme::TEXT);
+                .draw_in(&mut c, &title, nx, y, row_h, tsz, theme::palette().text);
             let dx = nx + self.bold.measure(&title, tsz) + 12.0 * s;
             let dsz = 13.0 * s;
             if right_limit - dx > 40.0 * s && !detail.is_empty() {
                 let detail = self.regular.truncate(&detail, dsz, right_limit - dx);
-                self.regular
-                    .draw_in(&mut c, &detail, dx, y, row_h, dsz, theme::TEXT_DIM);
+                self.regular.draw_in(
+                    &mut c,
+                    &detail,
+                    dx,
+                    y,
+                    row_h,
+                    dsz,
+                    theme::palette().text_dim,
+                );
             }
             if i == self.selected {
                 self.regular.draw_in(
@@ -535,7 +547,7 @@ impl Launcher {
                     y,
                     row_h,
                     16.0 * s,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
             }
         }

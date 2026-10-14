@@ -45,7 +45,7 @@ pub fn save(
     let mapping = {
         let mut framebuffer = renderer.bind(&mut texture)?;
         let mut tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
-        let bg = theme::BACKGROUND;
+        let bg = theme::palette().background;
         let clear = if transparent {
             [0.0, 0.0, 0.0, 0.0]
         } else {

@@ -16,6 +16,7 @@ mod client;
 mod icons;
 mod model;
 
+use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 use common::{
@@ -160,6 +161,23 @@ fn main() {
             },
         )
         .expect("source D-Bus");
+
+    // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
+    if let Some(fd) = theme::watch() {
+        let _ = handle.insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, app| {
+                theme::drain(fd.as_fd());
+                if theme::reload() {
+                    {
+                        app.draw_banners();
+                        app.redraw_center();
+                    };
+                }
+                Ok(PostAction::Continue)
+            },
+        );
+    }
 
     // Échéances des bannières et heures relatives (« il y a 2 min »)
     handle
@@ -576,14 +594,21 @@ impl App {
         // « Ne pas déranger » actif : rappel discret
         if self.store.dnd {
             let ph = 32.0;
-            canvas.fill_rounded(x * s, y * s, CARD_W * s, ph * s, ph / 2.0 * s, theme::PANEL);
+            canvas.fill_rounded(
+                x * s,
+                y * s,
+                CARD_W * s,
+                ph * s,
+                ph / 2.0 * s,
+                theme::palette().panel,
+            );
             fonts.icons.icon(
                 &mut canvas,
                 icon::MOON,
                 (x + 20.0) * s,
                 (y + ph / 2.0) * s,
                 15.0 * s,
-                theme::ACCENT,
+                theme::palette().accent,
             );
             fonts.bold.draw_in(
                 &mut canvas,
@@ -592,7 +617,7 @@ impl App {
                 y * s,
                 ph * s,
                 13.0 * s,
-                theme::TEXT,
+                theme::palette().text,
             );
             y += ph + STACK_GAP;
         }
@@ -606,7 +631,7 @@ impl App {
             y * s,
             header_h * s,
             theme::FONT_TITLE * s,
-            theme::TEXT,
+            theme::palette().text,
         );
         center.clear_all = None;
         center.clear_groups.clear();
@@ -624,7 +649,11 @@ impl App {
                 lw * s,
                 bh * s,
                 bh / 2.0 * s,
-                if on { theme::TILE_HOVER } else { theme::TILE },
+                if on {
+                    theme::palette().tile_hover()
+                } else {
+                    theme::palette().tile()
+                },
             );
             fonts.regular.draw_centered(
                 &mut canvas,
@@ -633,7 +662,7 @@ impl App {
                 by * s,
                 bh * s,
                 13.0 * s,
-                theme::TEXT,
+                theme::palette().text,
             );
             center.clear_all = Some((bx, by, lw, bh));
         }
@@ -647,7 +676,7 @@ impl App {
                 (x + CARD_W / 2.0) * s,
                 (y + 40.0) * s,
                 28.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             fonts.regular.draw_centered(
                 &mut canvas,
@@ -656,7 +685,7 @@ impl App {
                 (y + 64.0) * s,
                 24.0 * s,
                 theme::FONT_SIZE * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             y += eh;
         }
@@ -675,7 +704,7 @@ impl App {
                 y * s,
                 gh * s,
                 13.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             let (cx, cy) = (x + CARD_W - 12.0, y + gh / 2.0);
             let on = hover.is_some_and(|(px, py)| (px - cx).powi(2) + (py - cy).powi(2) < 144.0);
@@ -683,7 +712,11 @@ impl App {
                 cx * s,
                 cy * s,
                 10.0 * s,
-                if on { theme::TILE_HOVER } else { theme::TILE },
+                if on {
+                    theme::palette().tile_hover()
+                } else {
+                    theme::palette().tile()
+                },
             );
             fonts.icons.icon(
                 &mut canvas,
@@ -691,7 +724,7 @@ impl App {
                 cx * s,
                 cy * s,
                 11.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             center
                 .clear_groups

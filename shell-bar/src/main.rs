@@ -6,6 +6,7 @@
 
 mod sway;
 
+use std::os::fd::AsFd;
 use std::time::Duration;
 
 use chrono::{Datelike, Local, Timelike};
@@ -23,8 +24,9 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            EventLoop,
+            EventLoop, Interest, Mode, PostAction,
             channel::{self, Event},
+            generic::Generic,
             timer::{TimeoutAction, Timer},
         },
         calloop_wayland_source::WaylandSource,
@@ -152,6 +154,20 @@ fn main() {
         })
         .expect("minuterie");
 
+    // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
+    if let Some(fd) = theme::watch() {
+        let _ = handle.insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, bar| {
+                theme::drain(fd.as_fd());
+                if theme::reload() {
+                    bar.draw();
+                }
+                Ok(PostAction::Continue)
+            },
+        );
+    }
+
     // Événements « workspace » de sway, lus dans un fil séparé (lecture bloquante)
     if watch_sway {
         let (tx, rx) = channel::channel::<()>();
@@ -273,7 +289,7 @@ impl Bar {
             width: w,
             height: h,
         };
-        canvas.fill(theme::SURFACE);
+        canvas.fill(theme::palette().surface);
 
         let px = theme::FONT_SIZE * sf;
         let pad = theme::BAR_PADDING_X as f32 * sf;
@@ -281,7 +297,7 @@ impl Bar {
 
         // Gauche : nom de la machine, puis les bureaux
         self.bold
-            .draw(&mut canvas, "odysseus", pad, px, theme::ACCENT);
+            .draw(&mut canvas, "odysseus", pad, px, theme::palette().accent);
         let mut x = pad + self.bold.measure("odysseus", px) + (4 * theme::SPACE) as f32 * sf;
 
         let pill_h = theme::PILL_HEIGHT as f32 * sf;
@@ -291,11 +307,11 @@ impl Bar {
             let text_w = self.bold.measure(&ws.name, px);
             let pill_w = (text_w + 2.0 * theme::PILL_PADDING_X as f32 * sf).max(pill_h);
             let (bg, fg) = if ws.urgent {
-                (theme::URGENT, theme::BACKGROUND)
+                (theme::palette().urgent, theme::palette().on_accent)
             } else if ws.focused {
-                (theme::ACCENT, theme::BACKGROUND)
+                (theme::palette().accent, theme::palette().on_accent)
             } else {
-                (theme::SUBTLE, theme::TEXT_DIM)
+                (theme::palette().subtle, theme::palette().text_dim)
             };
             canvas.fill_rounded(x, pill_y, pill_w, pill_h, theme::PILL_RADIUS * sf, bg);
             self.bold
@@ -317,7 +333,7 @@ impl Bar {
         let clock_w = self.bold.measure(&clock, px);
         let clock_x = w as f32 - pad - clock_w;
         self.bold
-            .draw(&mut canvas, &clock, clock_x, px, theme::TEXT);
+            .draw(&mut canvas, &clock, clock_x, px, theme::palette().text);
         self.clock_zone = (((clock_x - 6.0 * sf) / sf) as f64, self.width as f64);
 
         // Centre de contrôle, puis aide-mémoire des raccourcis à sa gauche
@@ -326,8 +342,14 @@ impl Bar {
         let cy = h as f32 / 2.0;
         let ix = clock_x - 18.0 * sf - step / 2.0;
         let right = ix + step / 2.0;
-        self.icons
-            .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, theme::TEXT);
+        self.icons.icon(
+            &mut canvas,
+            icon::CONTROLS,
+            ix,
+            cy,
+            icon_px,
+            theme::palette().text,
+        );
         let kx = ix - step;
         self.icons.icon(
             &mut canvas,
@@ -335,7 +357,7 @@ impl Bar {
             kx,
             cy,
             icon_px + sf,
-            theme::TEXT,
+            theme::palette().text,
         );
         self.keys_zone = (
             ((kx - step / 2.0) / sf) as f64,

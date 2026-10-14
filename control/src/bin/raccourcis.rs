@@ -270,7 +270,14 @@ impl App {
             22.0 * s,
             0.45,
         );
-        c.fill_rounded(MARGIN * s, MARGIN * s, pw * s, ph * s, r, theme::PANEL);
+        c.fill_rounded(
+            MARGIN * s,
+            MARGIN * s,
+            pw * s,
+            ph * s,
+            r,
+            theme::palette().panel,
+        );
         c.stroke_rounded(
             MARGIN * s,
             MARGIN * s,
@@ -278,7 +285,7 @@ impl App {
             ph * s,
             r,
             s.max(1.0),
-            theme::PANEL_BORDER,
+            theme::palette().panel_border(),
         );
 
         let x0 = MARGIN + PAD;
@@ -290,7 +297,7 @@ impl App {
             y0 * s,
             28.0 * s,
             17.0 * s,
-            theme::TEXT,
+            theme::palette().text,
         );
         for (col, sections) in [LEFT, RIGHT].into_iter().enumerate() {
             let cx = x0 + col as f32 * (COL_W + COL_GAP);
@@ -303,7 +310,7 @@ impl App {
                     (y + 8.0) * s,
                     24.0 * s,
                     11.0 * s,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
                 y += SECTION;
                 for (keys, label) in rows.iter() {
@@ -352,7 +359,7 @@ fn row(
             y * s,
             ROW * s,
             13.0 * s,
-            Rgba::hex(0xc8c8d8, 1.0),
+            theme::palette().text_soft(),
         );
         let mut kx = x + COL_W - total;
         let ky = y + (ROW - cap_h) / 2.0;
@@ -363,7 +370,7 @@ fn row(
                 cw * s,
                 cap_h * s,
                 6.0 * s,
-                theme::TILE_HOVER,
+                theme::palette().tile_hover(),
             );
             c.fill_rounded(
                 kx * s,
@@ -380,7 +387,7 @@ fn row(
                 ky * s,
                 cap_h * s,
                 key_px,
-                theme::TEXT,
+                theme::palette().text,
             );
             kx += cw + 6.0;
         }

@@ -1,5 +1,18 @@
-//! Thème visuel unique du bureau. Toutes les tailles sont en pixels logiques
+//! Thème visuel du bureau : palettes au choix, tailles et polices communes. Toutes les tailles sont en pixels logiques
 //! (avant mise à l'échelle de l'écran).
+
+use std::{
+    ffi::CString,
+    os::{
+        fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
+        unix::ffi::OsStrExt,
+    },
+    path::PathBuf,
+    sync::{
+        Once,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 /// Couleur RGBA, composantes 0.0–1.0 (alpha non prémultiplié).
 #[derive(Clone, Copy, Debug)]
@@ -19,17 +32,203 @@ impl Rgba {
             a,
         }
     }
+
+    pub const fn with_alpha(self, a: f32) -> Self {
+        Self { a, ..self }
+    }
+
+    /// Mélange vers `other` : 0 donne `self`, 1 donne `other`
+    pub fn mix(self, other: Rgba, t: f32) -> Self {
+        let m = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            r: m(self.r, other.r),
+            g: m(self.g, other.g),
+            b: m(self.b, other.b),
+            a: m(self.a, other.a),
+        }
+    }
 }
 
-/// Palette
-pub const BACKGROUND: Rgba = Rgba::hex(0x1e1e2e, 1.0);
-pub const SURFACE: Rgba = Rgba::hex(0x181825, 0.88);
-pub const TEXT: Rgba = Rgba::hex(0xe6e6ef, 1.0);
-pub const TEXT_DIM: Rgba = Rgba::hex(0x9a9ab0, 1.0);
-pub const ACCENT: Rgba = Rgba::hex(0x8aadf4, 1.0);
-pub const URGENT: Rgba = Rgba::hex(0xf38ba8, 1.0);
-/// Fond des éléments discrets (bureaux inactifs…)
-pub const SUBTLE: Rgba = Rgba::hex(0x313244, 0.9);
+/// Palette d'un thème. Les applications la lisent par [`palette()`] à chaque
+/// dessin : un changement de thème s'applique au dessin suivant.
+pub struct Palette {
+    /// Nom dans le fichier de réglage, et nom affiché
+    pub id: &'static str,
+    pub name: &'static str,
+    pub background: Rgba,
+    /// Fond de la barre du haut
+    pub surface: Rgba,
+    pub text: Rgba,
+    pub text_dim: Rgba,
+    pub accent: Rgba,
+    /// Texte posé sur l'accent
+    pub on_accent: Rgba,
+    pub urgent: Rgba,
+    pub danger: Rgba,
+    pub success: Rgba,
+    /// Fond des éléments discrets (bureaux inactifs…)
+    pub subtle: Rgba,
+    /// Panneaux flottants (centre de contrôle, notifications, verrou)
+    pub panel: Rgba,
+    /// Fenêtres : barre latérale et contenu (Fichiers)
+    pub sidebar: Rgba,
+    pub content: Rgba,
+    /// Encre des voiles et liserés : blanc sur un thème sombre, noir sur un clair
+    pub ink: u32,
+}
+
+impl Palette {
+    /// Voile ou liseré de l'encre du thème, à l'opacité `a`
+    pub const fn ink(&self, a: f32) -> Rgba {
+        Rgba::hex(self.ink, a)
+    }
+    pub const fn panel_border(&self) -> Rgba {
+        self.ink(0.10)
+    }
+    /// Tuile dans un panneau, et tuile survolée
+    pub const fn tile(&self) -> Rgba {
+        self.ink(0.07)
+    }
+    pub const fn tile_hover(&self) -> Rgba {
+        self.ink(0.12)
+    }
+    /// Texte secondaire, entre le texte et le texte atténué
+    pub fn text_soft(&self) -> Rgba {
+        self.text.mix(self.text_dim, 0.35)
+    }
+    /// Accent survolé : un peu plus vers l'encre (plus clair sur un thème sombre)
+    pub fn accent_hover(&self) -> Rgba {
+        self.accent.mix(self.ink(1.0), 0.18)
+    }
+    /// Liseré intérieur, très discret, qui détache la fenêtre du fond
+    pub const fn window_border(&self) -> Rgba {
+        self.ink(0.09)
+    }
+}
+
+pub const THEMES: [Palette; 3] = [
+    Palette {
+        id: "odyssee",
+        name: "Odyssée",
+        background: Rgba::hex(0x1e1e2e, 1.0),
+        surface: Rgba::hex(0x181825, 0.88),
+        text: Rgba::hex(0xe6e6ef, 1.0),
+        text_dim: Rgba::hex(0x9a9ab0, 1.0),
+        accent: Rgba::hex(0x8aadf4, 1.0),
+        on_accent: Rgba::hex(0x1e1e2e, 1.0),
+        urgent: Rgba::hex(0xf38ba8, 1.0),
+        danger: Rgba::hex(0xf38ba8, 1.0),
+        success: Rgba::hex(0xa6e3a1, 1.0),
+        subtle: Rgba::hex(0x313244, 0.9),
+        panel: Rgba::hex(0x1e1e2e, 0.94),
+        sidebar: Rgba::hex(0x181825, 1.0),
+        content: Rgba::hex(0x1e1e2e, 1.0),
+        ink: 0xffffff,
+    },
+    // Les tons de Claude : orange argile, gris chauds, ivoire
+    Palette {
+        id: "claude-sombre",
+        name: "Claude sombre",
+        background: Rgba::hex(0x262624, 1.0),
+        surface: Rgba::hex(0x1f1e1d, 0.90),
+        text: Rgba::hex(0xf5f4ef, 1.0),
+        text_dim: Rgba::hex(0xa6a39a, 1.0),
+        accent: Rgba::hex(0xd97757, 1.0),
+        on_accent: Rgba::hex(0xffffff, 1.0),
+        urgent: Rgba::hex(0xd97757, 1.0),
+        danger: Rgba::hex(0xff6b80, 1.0),
+        success: Rgba::hex(0x4eba65, 1.0),
+        subtle: Rgba::hex(0x3a3936, 0.9),
+        panel: Rgba::hex(0x262624, 0.95),
+        sidebar: Rgba::hex(0x1f1e1d, 1.0),
+        content: Rgba::hex(0x262624, 1.0),
+        ink: 0xffffff,
+    },
+    Palette {
+        id: "claude-clair",
+        name: "Claude clair",
+        background: Rgba::hex(0xfaf9f5, 1.0),
+        surface: Rgba::hex(0xf0eee6, 0.92),
+        text: Rgba::hex(0x141413, 1.0),
+        text_dim: Rgba::hex(0x6b6a64, 1.0),
+        accent: Rgba::hex(0xc96442, 1.0),
+        on_accent: Rgba::hex(0xffffff, 1.0),
+        urgent: Rgba::hex(0xc96442, 1.0),
+        danger: Rgba::hex(0xab2b3f, 1.0),
+        success: Rgba::hex(0x2c7a39, 1.0),
+        subtle: Rgba::hex(0xe3e0d5, 0.95),
+        panel: Rgba::hex(0xfaf9f5, 0.96),
+        sidebar: Rgba::hex(0xf0eee6, 1.0),
+        content: Rgba::hex(0xfaf9f5, 1.0),
+        ink: 0x141413,
+    },
+];
+
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
+static LOADED: Once = Once::new();
+
+/// Palette du thème choisi (lu dans `~/.config/odysseus/theme` au premier appel,
+/// relu par [`reload()`])
+pub fn palette() -> &'static Palette {
+    LOADED.call_once(|| {
+        reload();
+    });
+    &THEMES[CURRENT.load(Ordering::Relaxed)]
+}
+
+/// Fichier qui contient le nom du thème choisi
+pub fn config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("odysseus/theme"))
+}
+
+/// Relit le thème choisi ; vrai s'il a changé.
+pub fn reload() -> bool {
+    let id = config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let index = THEMES.iter().position(|t| t.id == id.trim()).unwrap_or(0);
+    CURRENT.swap(index, Ordering::Relaxed) != index
+}
+
+/// Choisit un thème pour toute la session (les applications ouvertes le suivent).
+pub fn set(id: &str) -> std::io::Result<()> {
+    let path = config_path().ok_or_else(|| std::io::Error::other("HOME inconnu"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Écrit à côté puis renomme : un lecteur ne voit jamais un fichier à moitié écrit
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, id)?;
+    std::fs::rename(&tmp, &path)?;
+    reload();
+    Ok(())
+}
+
+/// Surveillance du réglage (inotify) : le descripteur devient lisible quand le
+/// thème change ; appeler alors [`drain()`] puis [`reload()`].
+pub fn watch() -> Option<OwnedFd> {
+    let dir = config_path()?.parent()?.to_path_buf();
+    std::fs::create_dir_all(&dir).ok()?;
+    let c_dir = CString::new(dir.as_os_str().as_bytes()).ok()?;
+    unsafe {
+        let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
+        if fd < 0 {
+            return None;
+        }
+        let fd = OwnedFd::from_raw_fd(fd);
+        let mask = libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_DELETE;
+        (libc::inotify_add_watch(fd.as_raw_fd(), c_dir.as_ptr(), mask) >= 0).then_some(fd)
+    }
+}
+
+/// Vide les événements en attente du descripteur de [`watch()`]
+pub fn drain(fd: BorrowedFd) {
+    let mut buf = [0u8; 1024];
+    while unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+}
 
 /// Grille d'espacement : tout est multiple de 4.
 pub const SPACE: u32 = 4;
@@ -46,8 +245,6 @@ pub const PILL_RADIUS: f32 = 3.0 * SPACE as f32;
 
 /// Fenêtres (compositeur)
 pub const WINDOW_RADIUS: f32 = 3.0 * SPACE as f32;
-/// Liseré intérieur, très discret, qui détache la fenêtre du fond
-pub const WINDOW_BORDER: Rgba = Rgba::hex(0xffffff, 0.09);
 pub const SHADOW_BLUR: i32 = 9 * SPACE as i32;
 pub const SHADOW_OFFSET_Y: i32 = 3 * SPACE as i32;
 pub const SHADOW_ALPHA_FOCUSED: f32 = 0.55;
@@ -61,18 +258,11 @@ pub const FONT_SIZE: f32 = 14.0;
 /// Icônes : police Lucide (ISC), un glyphe par icône
 pub const FONT_ICONS: &str = "/usr/share/fonts/lucide/lucide.ttf";
 
-/// Panneaux flottants (centre de contrôle, notifications, verrou)
-pub const PANEL: Rgba = Rgba::hex(0x1e1e2e, 0.94);
-pub const PANEL_BORDER: Rgba = Rgba::hex(0xffffff, 0.10);
+/// Panneaux flottants : coins des panneaux et des tuiles qu'ils contiennent
 pub const PANEL_RADIUS: f32 = 4.0 * SPACE as f32;
-/// Tuile dans un panneau, et tuile survolée
-pub const TILE: Rgba = Rgba::hex(0xffffff, 0.07);
-pub const TILE_HOVER: Rgba = Rgba::hex(0xffffff, 0.12);
 pub const TILE_RADIUS: f32 = 3.0 * SPACE as f32;
 /// Écart entre un panneau et le bord de l'écran / la barre
 pub const PANEL_MARGIN: u32 = 2 * SPACE;
-pub const DANGER: Rgba = Rgba::hex(0xf38ba8, 1.0);
-pub const SUCCESS: Rgba = Rgba::hex(0xa6e3a1, 1.0);
 pub const FONT_SMALL: f32 = 12.0;
 pub const FONT_TITLE: f32 = 15.0;
 
@@ -117,6 +307,7 @@ pub mod icon {
     pub const EJECT: char = '\u{e733}';
     pub const SUN: char = '\u{e178}';
     pub const SUN_MOON: char = '\u{e2b2}';
+    pub const PALETTE: char = '\u{e1dd}';
     pub const SLEEP: char = '\u{e410}';
     pub const APP: char = '\u{e426}';
     pub const ROTATE_CW: char = '\u{e149}';

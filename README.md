@@ -42,7 +42,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite le centre de contrôle, la date et l'heure | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier, « Ne pas déranger », indicateur de volume | fonctionne |
-| `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
+| `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, apparence (thèmes Odyssée, Claude sombre, Claude clair, appliqués à chaud à tout le bureau), son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
 | `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |

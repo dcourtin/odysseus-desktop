@@ -2,10 +2,7 @@
 //! jour en titre, grille lundi → dimanche, aujourd'hui en pastille.
 
 use chrono::{Datelike, Local, NaiveDate};
-use common::{
-    draw::Canvas,
-    theme::{self, Rgba},
-};
+use common::{draw::Canvas, theme};
 
 use crate::card::Fonts;
 
@@ -54,7 +51,7 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
         w * s,
         h * s,
         theme::PANEL_RADIUS * s,
-        theme::PANEL,
+        theme::palette().panel,
     );
     canvas.stroke_rounded(
         x * s,
@@ -63,7 +60,7 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
         h * s,
         theme::PANEL_RADIUS * s,
         s.max(1.0),
-        theme::PANEL_BORDER,
+        theme::palette().panel_border(),
     );
 
     // Titre : « mercredi 14 octobre », puis le mois et l'année
@@ -81,7 +78,7 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
         cy * s,
         22.0 * s,
         theme::FONT_TITLE * s,
-        theme::TEXT,
+        theme::palette().text,
     );
     cy += 22.0;
     let month = format!(
@@ -96,7 +93,7 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
         cy * s,
         18.0 * s,
         theme::FONT_SMALL * s,
-        theme::ACCENT,
+        theme::palette().accent,
     );
     cy += 18.0;
 
@@ -110,7 +107,7 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
             cy * s,
             20.0 * s,
             11.0 * s,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
     }
     cy += 20.0;
@@ -121,12 +118,17 @@ pub fn draw(canvas: &mut Canvas, fonts: &Fonts, x: f32, y: f32, w: f32, s: f32) 
         let top = cy + row as f32 * CELL_H;
         let label = day.to_string();
         let color = if day == today.day() {
-            canvas.fill_circle(cx * s, (top + CELL_H / 2.0) * s, 11.0 * s, theme::ACCENT);
-            theme::BACKGROUND
+            canvas.fill_circle(
+                cx * s,
+                (top + CELL_H / 2.0) * s,
+                11.0 * s,
+                theme::palette().accent,
+            );
+            theme::palette().on_accent
         } else if col >= 5 {
-            Rgba::hex(0x9a9ab0, 1.0)
+            theme::palette().text_dim
         } else {
-            theme::TEXT
+            theme::palette().text
         };
         fonts
             .regular

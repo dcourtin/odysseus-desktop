@@ -283,6 +283,7 @@ dependencies = [
  "chrono",
  "fontdue",
  "image",
+ "libc",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@
 mod picture;
 mod render;
 
+use std::os::fd::AsFd;
 use std::{
     path::{Path, PathBuf},
     sync::mpsc,
@@ -31,8 +32,9 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            EventLoop, LoopHandle,
+            EventLoop, Interest, LoopHandle, Mode, PostAction,
             channel::{self, Event as ChannelEvent},
+            generic::Generic,
             timer::{TimeoutAction, Timer},
         },
         calloop_wayland_source::WaylandSource,
@@ -61,7 +63,6 @@ use smithay_client_toolkit::{
 
 const TOOLBAR_H: f32 = 52.0;
 const INFO_W: f32 = 300.0;
-const BG: Rgba = Rgba::hex(0x121218, 1.0);
 const BTN_LEFT: u32 = 0x110;
 /// Barre d'outils visible ce temps après le dernier mouvement
 const TOOLBAR_IDLE: Duration = Duration::from_millis(2500);
@@ -227,6 +228,20 @@ fn main() {
             }
         })
         .expect("canal de décodage");
+
+    // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
+    if let Some(fd) = theme::watch() {
+        let _ = event_loop.handle().insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, app| {
+                theme::drain(fd.as_fd());
+                if theme::reload() {
+                    app.draw();
+                }
+                Ok(PostAction::Continue)
+            },
+        );
+    }
 
     // Masquage de la barre d'outils et des messages
     event_loop
@@ -760,7 +775,7 @@ impl Apercu {
             width: w,
             height: h,
         };
-        c.fill(BG);
+        c.fill(theme::palette().background);
         let (vw, vh) = self.view();
 
         // Image
@@ -820,7 +835,7 @@ impl Apercu {
                     rb - 26.0 * s,
                     20.0 * s,
                     theme::FONT_SMALL * s,
-                    theme::TEXT,
+                    theme::palette().text,
                 );
             }
         } else {
@@ -836,7 +851,7 @@ impl Apercu {
                 self.view_top() as f32 * s,
                 vh as f32 * s,
                 theme::FONT_SIZE * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
 
@@ -853,7 +868,7 @@ impl Apercu {
         if let Some((text, _)) = self.message.as_ref() {
             let tw = self.regular.measure(text, 13.0 * s) + 32.0 * s;
             let (mx, my) = ((vw as f32 * s - tw) / 2.0, h as f32 - 64.0 * s);
-            c.fill_rounded(mx, my, tw, 36.0 * s, 18.0 * s, Rgba::hex(0x1e1e2e, 0.92));
+            c.fill_rounded(mx, my, tw, 36.0 * s, 18.0 * s, theme::palette().panel);
             self.regular.draw_in(
                 &mut c,
                 text,
@@ -861,7 +876,7 @@ impl Apercu {
                 my,
                 36.0 * s,
                 13.0 * s,
-                theme::TEXT,
+                theme::palette().text,
             );
         }
 
@@ -877,9 +892,16 @@ impl Apercu {
     }
 
     fn draw_toolbar(&mut self, c: &mut Canvas, s: f32, vw: f32) {
-        let bar = Rgba::hex(0x1e1e2e, 0.88);
+        let bar = theme::palette().surface;
         c.fill_rounded(0.0, 0.0, vw * s, TOOLBAR_H * s, 0.0, bar);
-        c.fill_rounded(0.0, TOOLBAR_H * s - s, vw * s, s, 0.0, theme::PANEL_BORDER);
+        c.fill_rounded(
+            0.0,
+            TOOLBAR_H * s - s,
+            vw * s,
+            s,
+            0.0,
+            theme::palette().panel_border(),
+        );
         let cy = TOOLBAR_H / 2.0;
 
         // Gauche : précédente / suivante, nom, position
@@ -890,9 +912,9 @@ impl Apercu {
         ] {
             let enabled = self.list.len() > 1;
             let color = if enabled {
-                theme::TEXT
+                theme::palette().text
             } else {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             };
             self.icons
                 .icon(c, glyph, (x + 14.0) * s, cy * s, 17.0 * s, color);
@@ -908,8 +930,15 @@ impl Apercu {
             let name = self
                 .bold
                 .truncate(&name, 14.0 * s, (vw - 420.0).max(80.0) * s);
-            self.bold
-                .draw_in(c, &name, x * s, 0.0, TOOLBAR_H * s, 14.0 * s, theme::TEXT);
+            self.bold.draw_in(
+                c,
+                &name,
+                x * s,
+                0.0,
+                TOOLBAR_H * s,
+                14.0 * s,
+                theme::palette().text,
+            );
             x += self.bold.measure(&name, 14.0 * s) / s + 12.0;
             if self.list.len() > 1 {
                 let pos = format!("{} / {}", self.index + 1, self.list.len());
@@ -920,7 +949,7 @@ impl Apercu {
                     0.0,
                     TOOLBAR_H * s,
                     theme::FONT_SMALL * s,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
             }
         }
@@ -946,10 +975,14 @@ impl Apercu {
                     30.0 * s,
                     30.0 * s,
                     8.0 * s,
-                    theme::TILE_HOVER,
+                    theme::palette().tile_hover(),
                 );
             }
-            let color = if active { theme::ACCENT } else { theme::TEXT };
+            let color = if active {
+                theme::palette().accent
+            } else {
+                theme::palette().text
+            };
             self.icons
                 .icon(c, glyph, (rx + 15.0) * s, cy * s, 17.0 * s, color);
             self.buttons.push((rx, cy - 16.0, 30.0, 32.0, button));
@@ -965,7 +998,7 @@ impl Apercu {
                 0.0,
                 TOOLBAR_H * s,
                 theme::FONT_SMALL * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
         if self.cropping {
@@ -983,7 +1016,7 @@ impl Apercu {
                 TOOLBAR_H * s,
                 28.0 * s,
                 theme::FONT_SMALL * s,
-                theme::TEXT,
+                theme::palette().text,
             );
         }
     }
@@ -996,7 +1029,7 @@ impl Apercu {
             INFO_W * s,
             self.height as f32 * s,
             0.0,
-            theme::PANEL,
+            theme::palette().panel,
         );
         c.fill_rounded(
             x0 * s,
@@ -1004,7 +1037,7 @@ impl Apercu {
             s,
             self.height as f32 * s,
             0.0,
-            theme::PANEL_BORDER,
+            theme::palette().panel_border(),
         );
         let Some(pic) = self.current.as_ref() else {
             return;
@@ -1018,7 +1051,7 @@ impl Apercu {
             y * s,
             24.0 * s,
             theme::FONT_TITLE * s,
-            theme::TEXT,
+            theme::palette().text,
         );
         y += 36.0;
         let mut rows = vec![
@@ -1057,12 +1090,19 @@ impl Apercu {
                 y * s,
                 18.0 * s,
                 theme::FONT_SMALL * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
             y += 18.0;
             for line in self.regular.wrap(&value, 13.0, INFO_W - 40.0, 3) {
-                self.regular
-                    .draw_in(c, &line, x * s, y * s, 20.0 * s, 13.0 * s, theme::TEXT);
+                self.regular.draw_in(
+                    c,
+                    &line,
+                    x * s,
+                    y * s,
+                    20.0 * s,
+                    13.0 * s,
+                    theme::palette().text,
+                );
                 y += 20.0;
             }
             y += 10.0;

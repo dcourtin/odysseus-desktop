@@ -135,9 +135,9 @@ pub fn init_winit(
                                 0,
                                 &elements,
                                 [
-                                    theme::BACKGROUND.r,
-                                    theme::BACKGROUND.g,
-                                    theme::BACKGROUND.b,
+                                    theme::palette().background.r,
+                                    theme::palette().background.g,
+                                    theme::palette().background.b,
                                     1.0,
                                 ],
                             )

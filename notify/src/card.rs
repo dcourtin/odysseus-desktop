@@ -139,11 +139,11 @@ pub fn draw(
     let (px, py, pw, ph) = (x * s, y * s, CARD_W * s, h * s);
     let radius = theme::PANEL_RADIUS * s;
     canvas.shadow(px, py + 4.0 * s, pw, ph, radius, 18.0 * s, 0.35);
-    canvas.fill_rounded(px, py, pw, ph, radius, theme::PANEL);
+    canvas.fill_rounded(px, py, pw, ph, radius, theme::palette().panel);
     let border = if n.critical {
-        Rgba::hex(0xf38ba8, 0.7)
+        theme::palette().danger.with_alpha(0.7)
     } else {
-        theme::PANEL_BORDER
+        theme::palette().panel_border()
     };
     canvas.stroke_rounded(px, py, pw, ph, radius, s.max(1.0), border);
 
@@ -154,7 +154,7 @@ pub fn draw(
     if let Some(img) = n.icon.as_ref() {
         canvas.image(img, ix, iy, iw * s, ih * s, 6.0 * s);
     } else if n.synchronous.as_deref() == Some("volume") {
-        canvas.fill_rounded(ix, iy, isz, isz, 8.0 * s, theme::TILE_HOVER);
+        canvas.fill_rounded(ix, iy, isz, isz, 8.0 * s, theme::palette().tile_hover());
         let glyph = match n.value {
             Some(0) => icon::VOLUME_MUTE,
             Some(v) if v < 34 => icon::VOLUME_0,
@@ -167,7 +167,7 @@ pub fn draw(
             ix + isz / 2.0,
             iy + isz / 2.0,
             20.0 * s,
-            theme::TEXT,
+            theme::palette().text,
         );
     } else {
         let color = app_color(&n.app_name);
@@ -185,7 +185,7 @@ pub fn draw(
             iy,
             isz,
             17.0 * s,
-            theme::BACKGROUND,
+            Rgba::hex(0x1e1e2e, 1.0),
         );
     }
 
@@ -202,7 +202,7 @@ pub fn draw(
         ty,
         LINE * s,
         theme::FONT_SMALL * s,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
     );
     let t = fonts
         .bold
@@ -214,7 +214,7 @@ pub fn draw(
         ty,
         LINE * s,
         theme::FONT_SIZE * s,
-        theme::TEXT,
+        theme::palette().text,
     );
     ty += LINE * s;
 
@@ -227,7 +227,7 @@ pub fn draw(
             ty,
             LINE * s,
             13.0 * s,
-            Rgba::hex(0xc8c8d8, 1.0),
+            theme::palette().text_soft(),
         );
         ty += LINE * s;
     }
@@ -236,7 +236,14 @@ pub fn draw(
     if let Some(v) = n.shown_value() {
         let bar_y = ty + 6.0 * s;
         let bar_h = 6.0 * s;
-        canvas.fill_rounded(tx, bar_y, tw, bar_h, bar_h / 2.0, theme::TILE_HOVER);
+        canvas.fill_rounded(
+            tx,
+            bar_y,
+            tw,
+            bar_h,
+            bar_h / 2.0,
+            theme::palette().tile_hover(),
+        );
         let filled = tw * v / 100.0;
         if filled > 0.0 {
             canvas.fill_rounded(
@@ -245,7 +252,7 @@ pub fn draw(
                 filled.max(bar_h),
                 bar_h,
                 bar_h / 2.0,
-                theme::TEXT,
+                theme::palette().text,
             );
         }
     }
@@ -261,7 +268,7 @@ pub fn draw(
             pw - 2.0 * PAD * s,
             s.max(1.0),
             0.0,
-            theme::PANEL_BORDER,
+            theme::palette().panel_border(),
         );
         let bw = CARD_W / n.buttons.len() as f32;
         for (i, (key, label)) in n.buttons.iter().enumerate() {
@@ -273,7 +280,7 @@ pub fn draw(
                     s.max(1.0),
                     (BUTTONS_H - 12.0) * s,
                     0.0,
-                    theme::PANEL_BORDER,
+                    theme::palette().panel_border(),
                 );
             }
             let label = fonts.bold.truncate(label, 13.0 * s, (bw - 16.0) * s);
@@ -284,7 +291,7 @@ pub fn draw(
                 by,
                 BUTTONS_H * s,
                 13.0 * s,
-                theme::ACCENT,
+                theme::palette().accent,
             );
             buttons.push((key.clone(), bx, bx + bw));
         }
@@ -294,7 +301,7 @@ pub fn draw(
     let close = (x + 2.0, y + 2.0);
     if hovered {
         let (cx, cy) = (close.0 * s, close.1 * s);
-        canvas.fill_circle(cx, cy, CLOSE_R * s, Rgba::hex(0x45475a, 1.0));
+        canvas.fill_circle(cx, cy, CLOSE_R * s, theme::palette().subtle);
         canvas.stroke_rounded(
             cx - CLOSE_R * s,
             cy - CLOSE_R * s,
@@ -302,11 +309,11 @@ pub fn draw(
             2.0 * CLOSE_R * s,
             CLOSE_R * s,
             s.max(1.0),
-            theme::PANEL_BORDER,
+            theme::palette().panel_border(),
         );
         fonts
             .icons
-            .icon(canvas, icon::CLOSE, cx, cy, 12.0 * s, theme::TEXT);
+            .icon(canvas, icon::CLOSE, cx, cy, 12.0 * s, theme::palette().text);
     }
 
     Hit {

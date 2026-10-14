@@ -8,3 +8,4 @@ license.workspace = true
 fontdue.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 chrono.workspace = true
+libc = "0.2"

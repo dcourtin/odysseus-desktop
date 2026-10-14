@@ -345,7 +345,15 @@ fn label_element(
         h as f32 / 2.0,
         common::theme::Rgba::hex(0x000000, 0.72),
     );
-    font.draw_centered(&mut c, text, w as f32 / 2.0, 0.0, h as f32, px, theme::TEXT);
+    font.draw_centered(
+        &mut c,
+        text,
+        w as f32 / 2.0,
+        0.0,
+        h as f32,
+        px,
+        theme::palette().text,
+    );
     let buffer = MemoryRenderBuffer::from_slice(
         &data,
         Fourcc::Argb8888,
@@ -452,7 +460,7 @@ pub fn overlay_elements(
             }
             (crate::screenshot::Mode::Window, _) => {
                 if let Some(w) = state.selection_window_rect() {
-                    let a = theme::ACCENT;
+                    let a = theme::palette().accent;
                     out.push(fill_element(
                         shaders,
                         &frame,
@@ -501,7 +509,7 @@ pub fn single_window_elements(
     fb_size: Size<i32, Physical>,
 ) -> Vec<OdysseusElement> {
     let scale = output.current_scale().fractional_scale();
-    let b = theme::WINDOW_BORDER;
+    let b = theme::palette().window_border();
     let frame = Frame {
         scale,
         transform: output.current_transform(),
@@ -766,7 +774,7 @@ pub fn output_elements(
     scene: &Scene,
 ) -> Vec<OdysseusElement> {
     let scale = output.current_scale().fractional_scale();
-    let b = theme::WINDOW_BORDER;
+    let b = theme::palette().window_border();
     let frame = Frame {
         scale,
         transform: output.current_transform(),
@@ -835,7 +843,7 @@ pub fn output_elements(
             && let Some(preview) = scene.snap_preview
         {
             let (rect, t) = preview.current();
-            let accent = theme::ACCENT;
+            let accent = theme::palette().accent;
             elements.push(OdysseusElement::Shadow(PixelShaderElement::new(
                 shaders.preview.clone(),
                 rect.to_i32_round(),

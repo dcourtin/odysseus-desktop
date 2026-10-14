@@ -73,6 +73,7 @@ enum View {
     Wifi,
     Bluetooth,
     Sound,
+    Theme,
 }
 
 /// Élément cliquable
@@ -96,6 +97,8 @@ enum Target {
     Device(usize),
     Sink(usize),
     Password,
+    ThemeOpen,
+    Theme(usize),
 }
 
 struct Zone {
@@ -312,10 +315,10 @@ fn main() {
 }
 
 fn main_height() -> f32 {
-    2.0 * MARGIN + PAD + 3.0 * ROW + GAP + NIGHT_H + GAP + 76.0 + GAP + 80.0 + PAD
+    2.0 * MARGIN + PAD + 3.0 * ROW + 2.0 * (GAP + NIGHT_H) + GAP + 76.0 + GAP + 80.0 + PAD
 }
 
-/// Hauteur de la tuile « Lumière de nuit »
+/// Hauteur des tuiles « Lumière de nuit » et « Apparence »
 const NIGHT_H: f32 = 56.0;
 
 /// Icône Wi-Fi selon la qualité du signal
@@ -400,6 +403,7 @@ impl Control {
             }
             View::Bluetooth => rows(self.state.bt.devices.len()),
             View::Sound => 56.0 + rows(self.state.sound.sinks.len()),
+            View::Theme => rows(theme::THEMES.len()),
         };
         2.0 * MARGIN + PAD + header + body + message + PAD
     }
@@ -495,6 +499,15 @@ impl Control {
             }
             Target::Mute => self.send(Act::Mute),
             Target::SoundOpen => self.open_view(View::Sound),
+            Target::ThemeOpen => self.open_view(View::Theme),
+            Target::Theme(i) => {
+                if let Err(e) = theme::set(theme::THEMES[i].id) {
+                    self.message = Some(format!("Thème : {e}"));
+                }
+                // Le fond du panneau change de couleur : à redessiner
+                self.background = None;
+                self.resize_or_draw();
+            }
             Target::Back => self.back(),
             // Veille : comme sur macOS, la session est verrouillée avant
             Target::Sleep => {
@@ -661,7 +674,7 @@ impl Control {
                 let (px, py, pw, ph) = (MARGIN, MARGIN, W, self.height as f32 - 2.0 * MARGIN);
                 let r = theme::PANEL_RADIUS * s;
                 canvas.shadow(px * s, (py + 4.0) * s, pw * s, ph * s, r, 22.0 * s, 0.45);
-                canvas.fill_rounded(px * s, py * s, pw * s, ph * s, r, theme::PANEL);
+                canvas.fill_rounded(px * s, py * s, pw * s, ph * s, r, theme::palette().panel);
                 canvas.stroke_rounded(
                     px * s,
                     py * s,
@@ -669,7 +682,7 @@ impl Control {
                     ph * s,
                     r,
                     s.max(1.0),
-                    theme::PANEL_BORDER,
+                    theme::palette().panel_border(),
                 );
                 self.background = Some((w, h, canvas.buf.to_vec()));
             }
@@ -708,15 +721,16 @@ impl Control {
             ),
             View::Bluetooth => draw_bt(&mut d, &self.state, x, y, inner),
             View::Sound => draw_sound(&mut d, &self.state, self.volume, x, y, inner),
+            View::Theme => draw_theme(&mut d, x, y, inner),
         }
         // Ligne d'état en bas : opération en cours ou erreur
         let status = self.busy.clone().or_else(|| self.message.clone());
         if let Some(text) = status {
             let sy = self.height as f32 - MARGIN - PAD - 24.0;
             let color = if self.busy.is_some() {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             } else {
-                Rgba::hex(0xffb4c4, 1.0)
+                theme::palette().danger
             };
             let t = d.regular.truncate(&text, theme::FONT_SMALL * s, inner * s);
             d.regular.draw_in(
@@ -737,7 +751,7 @@ impl Control {
                 (self.height as f32 - MARGIN - 20.0) * s,
                 16.0 * s,
                 theme::FONT_SMALL * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
 
@@ -780,7 +794,7 @@ impl Drawer<'_, '_> {
             w * s,
             h * s,
             theme::TILE_RADIUS * s,
-            theme::TILE,
+            theme::palette().tile(),
         );
     }
 
@@ -788,13 +802,17 @@ impl Drawer<'_, '_> {
     fn circle(&mut self, cx: f32, cy: f32, r: f32, glyph: char, on: bool, hovered: bool) {
         let s = self.s;
         let bg = match (on, hovered) {
-            (true, false) => theme::ACCENT,
-            (true, true) => Rgba::hex(0xa3bff7, 1.0),
-            (false, false) => Rgba::hex(0xffffff, 0.12),
-            (false, true) => Rgba::hex(0xffffff, 0.2),
+            (true, false) => theme::palette().accent,
+            (true, true) => theme::palette().accent_hover(),
+            (false, false) => theme::palette().ink(0.12),
+            (false, true) => theme::palette().ink(0.2),
         };
         self.canvas.fill_circle(cx * s, cy * s, r * s, bg);
-        let fg = if on { theme::BACKGROUND } else { theme::TEXT };
+        let fg = if on {
+            theme::palette().on_accent
+        } else {
+            theme::palette().text
+        };
         self.icons
             .icon(self.canvas, glyph, cx * s, cy * s, r * 1.05 * s, fg);
     }
@@ -826,7 +844,7 @@ impl Drawer<'_, '_> {
                 w * s,
                 h * s,
                 8.0 * s,
-                Rgba::hex(0xffffff, 0.06),
+                theme::palette().ink(0.06),
             );
         }
     }
@@ -836,9 +854,9 @@ impl Drawer<'_, '_> {
         let s = self.s;
         let (w, h) = (38.0, 22.0);
         let bg = if on {
-            theme::ACCENT
+            theme::palette().accent
         } else {
-            Rgba::hex(0xffffff, 0.2)
+            theme::palette().ink(0.2)
         };
         self.canvas
             .fill_rounded(x * s, y * s, w * s, h * s, h / 2.0 * s, bg);
@@ -861,13 +879,13 @@ impl Drawer<'_, '_> {
             w * s,
             h * s,
             h / 2.0 * s,
-            Rgba::hex(0xffffff, 0.14),
+            theme::palette().ink(0.14),
         );
         let filled = (w * value).max(h);
         let fill = if muted {
-            Rgba::hex(0xffffff, 0.35)
+            theme::palette().ink(0.35)
         } else {
-            Rgba::hex(0xffffff, 0.92)
+            theme::palette().ink(0.92)
         };
         self.canvas
             .fill_rounded(x * s, y * s, filled * s, h * s, h / 2.0 * s, fill);
@@ -877,7 +895,7 @@ impl Drawer<'_, '_> {
             (x + h / 2.0 + 1.0) * s,
             (y + h / 2.0) * s,
             14.0 * s,
-            theme::BACKGROUND,
+            theme::palette().content,
         );
         // Tout le curseur répond (le remplissage part du bord gauche) ;
         // l'icône du haut-parleur, ajoutée après, l'emporte : sourdine
@@ -898,7 +916,7 @@ impl Drawer<'_, '_> {
             36.0,
             theme::FONT_TITLE,
             true,
-            theme::TEXT,
+            theme::palette().text,
             w - 100.0,
         );
         if let Some((on, target)) = toggle {
@@ -1042,7 +1060,7 @@ fn draw_main(
         (y + 70.0) * s,
         18.0 * s,
         13.0 * s,
-        theme::TEXT,
+        theme::palette().text,
     );
     d.bold.draw_centered(
         d.canvas,
@@ -1051,7 +1069,7 @@ fn draw_main(
         (y + 86.0) * s,
         18.0 * s,
         13.0 * s,
-        theme::TEXT,
+        theme::palette().text,
     );
     let state = if st.dnd { "Activé" } else { "Désactivé" };
     d.regular.draw_centered(
@@ -1061,7 +1079,7 @@ fn draw_main(
         (y + 106.0) * s,
         18.0 * s,
         theme::FONT_SMALL * s,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
     );
     d.zone(rx, y, right_w, tile_h, Target::Dnd);
 
@@ -1087,7 +1105,7 @@ fn draw_main(
         20.0,
         13.0,
         true,
-        theme::TEXT,
+        theme::palette().text,
         w - 76.0,
     );
     let sub = match st.night.as_str() {
@@ -1102,13 +1120,58 @@ fn draw_main(
         18.0,
         theme::FONT_SMALL,
         false,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
         w - 76.0,
     );
     d.zone(x, ny, w, NIGHT_H, target);
 
+    // Apparence
+    let ay = ny + NIGHT_H + GAP;
+    let target = Target::ThemeOpen;
+    let hovered = d.hovered(&target);
+    d.tile(x, ay, w, NIGHT_H);
+    d.hover_bg(x + 4.0, ay + 4.0, w - 8.0, NIGHT_H - 8.0, &target);
+    d.circle(
+        x + 26.0,
+        ay + NIGHT_H / 2.0,
+        16.0,
+        icon::PALETTE,
+        false,
+        hovered,
+    );
+    d.text(
+        "Apparence",
+        x + 50.0,
+        ay + 9.0,
+        20.0,
+        13.0,
+        true,
+        theme::palette().text,
+        w - 76.0,
+    );
+    d.text(
+        theme::palette().name,
+        x + 50.0,
+        ay + 27.0,
+        18.0,
+        theme::FONT_SMALL,
+        false,
+        theme::palette().text_dim,
+        w - 76.0,
+    );
+    let s = d.s;
+    d.icons.icon(
+        d.canvas,
+        icon::CHEVRON_RIGHT,
+        (x + w - 18.0) * s,
+        (ay + NIGHT_H / 2.0) * s,
+        14.0 * s,
+        theme::palette().text_dim,
+    );
+    d.zone(x, ay, w, NIGHT_H, target);
+
     // Son
-    let sy = ny + NIGHT_H + GAP;
+    let sy = ay + NIGHT_H + GAP;
     let sound_h = 76.0;
     d.tile(x, sy, w, sound_h);
     d.text(
@@ -1118,7 +1181,7 @@ fn draw_main(
         24.0,
         13.0,
         true,
-        theme::TEXT,
+        theme::palette().text,
         120.0,
     );
     let sink = st
@@ -1137,7 +1200,7 @@ fn draw_main(
             24.0,
             theme::FONT_SMALL,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             118.0,
         );
     }
@@ -1147,7 +1210,7 @@ fn draw_main(
         (x + w - 18.0) * s,
         (sy + 20.0) * s,
         14.0 * s,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
     );
     d.zone(x + w - 150.0, sy + 6.0, 144.0, 28.0, open);
     if st.sound.available {
@@ -1167,7 +1230,7 @@ fn draw_main(
             26.0,
             theme::FONT_SMALL,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
     }
@@ -1195,21 +1258,21 @@ fn draw_main(
                 bw * s,
                 bh * s,
                 theme::TILE_RADIUS * s,
-                Rgba::hex(0xf38ba8, 0.25),
+                theme::palette().danger.with_alpha(0.25),
             );
         }
         let cx = bx + bw / 2.0;
         if armed {
             let s = d.s;
             d.canvas
-                .fill_circle(cx * s, (by + 30.0) * s, 18.0 * s, theme::DANGER);
+                .fill_circle(cx * s, (by + 30.0) * s, 18.0 * s, theme::palette().danger);
             d.icons.icon(
                 d.canvas,
                 glyph,
                 cx * s,
                 (by + 30.0) * s,
                 18.0 * s,
-                theme::BACKGROUND,
+                theme::palette().on_accent,
             );
         } else {
             d.circle(cx, by + 30.0, 18.0, glyph, false, hovered);
@@ -1223,7 +1286,7 @@ fn draw_main(
             (by + 54.0) * s,
             20.0 * s,
             theme::FONT_SMALL * s,
-            theme::TEXT,
+            theme::palette().text,
         );
         d.zone(bx, by, bw, bh, target);
     }
@@ -1253,7 +1316,7 @@ fn connectivity_row(
         20.0,
         13.0,
         true,
-        theme::TEXT,
+        theme::palette().text,
         w - 76.0,
     );
     d.text(
@@ -1263,7 +1326,7 @@ fn connectivity_row(
         18.0,
         theme::FONT_SMALL,
         false,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
         w - 76.0,
     );
     if let Some((toggle, open)) = targets {
@@ -1274,7 +1337,7 @@ fn connectivity_row(
             (x + w - 16.0) * s,
             (y + ROW / 2.0) * s,
             14.0 * s,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         d.zone(x, y, w, ROW, open);
         d.zone(x + 8.0, y + 6.0, 36.0, 36.0, toggle);
@@ -1301,7 +1364,7 @@ fn draw_wifi(
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
         return;
@@ -1319,7 +1382,7 @@ fn draw_wifi(
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
         return;
@@ -1329,9 +1392,9 @@ fn draw_wifi(
         let target = Target::Network(i);
         d.hover_bg(x, ry, w, LIST_ROW, &target);
         let fg = if n.connected {
-            theme::ACCENT
+            theme::palette().accent
         } else {
-            theme::TEXT
+            theme::palette().text
         };
         d.icons.icon(
             d.canvas,
@@ -1348,7 +1411,7 @@ fn draw_wifi(
             LIST_ROW,
             13.0,
             n.connected,
-            theme::TEXT,
+            theme::palette().text,
             w - 90.0,
         );
         let mut ix = x + w - 16.0;
@@ -1359,7 +1422,7 @@ fn draw_wifi(
                 ix * s,
                 (ry + LIST_ROW / 2.0) * s,
                 15.0 * s,
-                theme::ACCENT,
+                theme::palette().accent,
             );
             ix -= 22.0;
         }
@@ -1370,7 +1433,7 @@ fn draw_wifi(
                 ix * s,
                 (ry + LIST_ROW / 2.0) * s,
                 12.0 * s,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         }
         d.zone(x, ry, w, LIST_ROW, target);
@@ -1384,7 +1447,7 @@ fn draw_wifi(
                 (w - 16.0) * s,
                 fh * s,
                 8.0 * s,
-                Rgba::hex(0xffffff, 0.1),
+                theme::palette().ink(0.1),
             );
             d.canvas.stroke_rounded(
                 (x + 8.0) * s,
@@ -1393,7 +1456,7 @@ fn draw_wifi(
                 fh * s,
                 8.0 * s,
                 s.max(1.0),
-                theme::ACCENT,
+                theme::palette().accent,
             );
             if password.is_empty() {
                 d.text(
@@ -1403,7 +1466,7 @@ fn draw_wifi(
                     fh,
                     13.0,
                     false,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                     w - 40.0,
                 );
             } else {
@@ -1415,7 +1478,7 @@ fn draw_wifi(
                     fh,
                     13.0,
                     false,
-                    theme::TEXT,
+                    theme::palette().text,
                     w - 40.0,
                 );
             }
@@ -1437,7 +1500,7 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
         return;
@@ -1450,7 +1513,7 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
         return;
@@ -1463,7 +1526,7 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
         return;
@@ -1487,7 +1550,7 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             LIST_ROW,
             13.0,
             dev.connected,
-            theme::TEXT,
+            theme::palette().text,
             w - 130.0,
         );
         let state = if dev.connected {
@@ -1505,10 +1568,68 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             LIST_ROW,
             theme::FONT_SMALL,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             sw + 4.0,
         );
         let _ = s;
+        d.zone(x, ry, w, LIST_ROW, target);
+        ry += LIST_ROW;
+    }
+}
+
+/// Choix du thème : un aperçu de chaque palette (fond, texte, accent)
+fn draw_theme(d: &mut Drawer, x: f32, y: f32, w: f32) {
+    d.header(x, y, w, "Apparence", None);
+    let s = d.s;
+    let current = theme::palette().id;
+    let mut ry = y + 52.0;
+    for (i, t) in theme::THEMES.iter().enumerate() {
+        let target = Target::Theme(i);
+        d.hover_bg(x, ry, w, LIST_ROW, &target);
+        // Vignette : fond du thème, une ligne de texte et une pastille d'accent
+        let (vx, vy, vw, vh) = (x + 6.0, ry + 7.0, 44.0, LIST_ROW - 14.0);
+        d.canvas
+            .fill_rounded(vx * s, vy * s, vw * s, vh * s, 6.0 * s, t.background);
+        d.canvas.stroke_rounded(
+            vx * s,
+            vy * s,
+            vw * s,
+            vh * s,
+            6.0 * s,
+            s.max(1.0),
+            theme::palette().panel_border(),
+        );
+        d.canvas.fill_rounded(
+            (vx + 7.0) * s,
+            (vy + vh / 2.0 - 2.0) * s,
+            16.0 * s,
+            4.0 * s,
+            2.0 * s,
+            t.text,
+        );
+        d.canvas
+            .fill_circle((vx + vw - 11.0) * s, (vy + vh / 2.0) * s, 5.0 * s, t.accent);
+        let chosen = t.id == current;
+        d.text(
+            t.name,
+            x + 62.0,
+            ry,
+            LIST_ROW,
+            13.0,
+            chosen,
+            theme::palette().text,
+            w - 92.0,
+        );
+        if chosen {
+            d.icons.icon(
+                d.canvas,
+                icon::CHECK,
+                (x + w - 16.0) * s,
+                (ry + LIST_ROW / 2.0) * s,
+                15.0 * s,
+                theme::palette().accent,
+            );
+        }
         d.zone(x, ry, w, LIST_ROW, target);
         ry += LIST_ROW;
     }
@@ -1535,7 +1656,7 @@ fn draw_sound(d: &mut Drawer, st: &Snapshot, volume: Option<f32>, x: f32, y: f32
             LIST_ROW,
             13.0,
             false,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             w,
         );
     }
@@ -1557,7 +1678,7 @@ fn draw_sound(d: &mut Drawer, st: &Snapshot, volume: Option<f32>, x: f32, y: f32
             LIST_ROW,
             13.0,
             sink.default,
-            theme::TEXT,
+            theme::palette().text,
             w - 70.0,
         );
         if sink.default {
@@ -1567,7 +1688,7 @@ fn draw_sound(d: &mut Drawer, st: &Snapshot, volume: Option<f32>, x: f32, y: f32
                 (x + w - 16.0) * s,
                 (ry + LIST_ROW / 2.0) * s,
                 15.0 * s,
-                theme::ACCENT,
+                theme::palette().accent,
             );
         }
         d.zone(x, ry, w, LIST_ROW, target);

@@ -6,6 +6,7 @@
 //! connecteurs (l'écran préféré revient dès qu'il est rebranché).
 //! Par IPC : `output scale 1.25`, `output mode 2560x1440@60`.
 
+use std::os::fd::AsFd;
 use std::{collections::HashMap, time::Duration};
 
 use smithay::{
@@ -31,7 +32,8 @@ use smithay::{
     output::{Mode as WlMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{
-            EventLoop, LoopHandle,
+            EventLoop, Interest, LoopHandle, Mode, PostAction,
+            generic::Generic,
             timer::{TimeoutAction, Timer},
         },
         drm::control::{Device as ControlDevice, ModeTypeFlags, connector, crtc},
@@ -243,6 +245,25 @@ pub fn init_udev(
             }
             DrmEvent::Error(e) => tracing::error!("DRM : {e}"),
         })?;
+
+    // Thème changé (centre de contrôle) : bordures et accents suivent
+    if let Some(fd) = theme::watch() {
+        event_loop.handle().insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, data| {
+                theme::drain(fd.as_fd());
+                if theme::reload()
+                    && let Some(udev) = data.udev.as_ref()
+                {
+                    let crtcs: Vec<_> = udev.surfaces.keys().copied().collect();
+                    for crtc in crtcs {
+                        render(data, crtc);
+                    }
+                }
+                Ok(PostAction::Continue)
+            },
+        )?;
+    }
 
     // Changement de tty : suspendre puis reprendre l'affichage et les entrées
     event_loop
@@ -690,7 +711,7 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     let bg = if state.is_locked() {
         theme::Rgba::hex(0x000000, 1.0)
     } else {
-        theme::BACKGROUND
+        theme::palette().background
     };
     let rendered = match surface.drm_output.render_frame(
         &mut udev.renderer,
