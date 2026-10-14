@@ -656,11 +656,7 @@ impl Files {
                 22.0 * s,
                 y + 8.0 * s,
                 16.0 * s,
-                if active {
-                    theme::palette().accent
-                } else {
-                    theme::palette().accent
-                },
+                theme::palette().accent,
             );
             let color = if active {
                 theme::palette().text
@@ -696,11 +692,7 @@ impl Files {
                 sel.a = 0.18;
                 c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
             }
-            let color = if active {
-                theme::palette().accent
-            } else {
-                theme::palette().accent
-            };
+            let color = theme::palette().accent;
             self.icons.icon(
                 &mut c,
                 icon::HARD_DRIVE,
