@@ -108,8 +108,8 @@ impl Palette {
 
 pub const THEMES: [Palette; 3] = [
     Palette {
-        id: "odyssee",
-        name: "Odyssée",
+        id: "bleue",
+        name: "Odyssée bleue",
         background: Rgba::hex(0x1e1e2e, 1.0),
         surface: Rgba::hex(0x181825, 0.88),
         text: Rgba::hex(0xe6e6ef, 1.0),
@@ -125,10 +125,10 @@ pub const THEMES: [Palette; 3] = [
         content: Rgba::hex(0x1e1e2e, 1.0),
         ink: 0xffffff,
     },
-    // Les tons de Claude : orange argile, gris chauds, ivoire
+    // Orange argile, gris chauds, ivoire
     Palette {
-        id: "claude-sombre",
-        name: "Claude sombre",
+        id: "sombre",
+        name: "Odyssée sombre",
         background: Rgba::hex(0x262624, 1.0),
         surface: Rgba::hex(0x1f1e1d, 0.90),
         text: Rgba::hex(0xf5f4ef, 1.0),
@@ -145,8 +145,8 @@ pub const THEMES: [Palette; 3] = [
         ink: 0xffffff,
     },
     Palette {
-        id: "claude-clair",
-        name: "Claude clair",
+        id: "claire",
+        name: "Odyssée claire",
         background: Rgba::hex(0xfaf9f5, 1.0),
         surface: Rgba::hex(0xf0eee6, 0.92),
         text: Rgba::hex(0x141413, 1.0),
