@@ -18,6 +18,9 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 | Mod+Espace | lanceur |
 | Mod+q | fermer la fenêtre |
 | Mod+glisser | déplacer la fenêtre |
+| Mod+clic droit glissé | redimensionner |
+| Mod+f | agrandir / restaurer |
+| Mod+Tab | fenêtre suivante |
 | Mod+1…9 / Mod+Maj+1…9 | aller au bureau / y envoyer la fenêtre |
 | Impr. écran ou Mod+Maj+s | capture dans ~/Images |
 | Ctrl+Alt+F1…F12 | changer de tty |
@@ -25,7 +28,7 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 
 ## Commandes
 
-    ./odysseus-session.sh          # session complète sur un tty (sans sway)
+    ./odysseus-session.sh          # session complète sur un tty (lancée d'office sur tty1, sway en secours sur tty2)
 
     cargo build --release          # tout compiler
     cargo run -p shell-bar         # lancer la barre (depuis un terminal dans sway)
