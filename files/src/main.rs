@@ -80,10 +80,12 @@ const INFO_W: f32 = 280.0;
 const INFO_MIN_WINDOW: u32 = 860;
 /// Distance au-delà de laquelle un appui sur une ligne devient un glisser
 const DRAG_START: f64 = 6.0;
+/// Durée de la confirmation d'une action sur son bouton
+const CONFIRM_TIME: Duration = Duration::from_millis(1500);
 const BTN_LEFT: u32 = 0x110;
 
 /// Zones cliquables, en coordonnées logiques de la fenêtre
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Hit {
     Row(usize),
     Place(PathBuf),
@@ -133,6 +135,9 @@ struct Files {
     /// Panneau d'informations ouvert, et détails de l'élément affiché
     info: bool,
     details: Option<Details>,
+    /// Bouton du panneau survolé, et action tout juste faite (confirmée un instant)
+    hover: Option<Hit>,
+    done: Option<(Hit, Instant)>,
     thumbs: channel::Sender<(PathBuf, Option<Image>)>,
     loop_handle: LoopHandle<'static, Files>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -320,6 +325,8 @@ fn main() {
         drop_target: None,
         info: false,
         details: None,
+        hover: None,
+        done: None,
         thumbs,
         loop_handle: event_loop.handle(),
         keyboard: None,
@@ -535,7 +542,10 @@ impl Files {
                 self.info = false;
                 self.draw();
             }
-            Some(Hit::Open) => self.open_selected(),
+            Some(Hit::Open) => {
+                self.open_selected();
+                self.confirm(Hit::Open, Ok(()));
+            }
             Some(Hit::CopyPath) => self.copy_path(),
             Some(Hit::CopyImage) => self.copy_image(),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
@@ -565,11 +575,8 @@ impl Files {
             return;
         };
         let text = path.to_string_lossy().into_owned();
-        self.browser.message = Some(match wl_copy(&["--", &text], None) {
-            Ok(()) => format!("Chemin copié : {text}"),
-            Err(e) => e,
-        });
-        self.draw();
+        let result = wl_copy(&["--", &text], None);
+        self.confirm(Hit::CopyPath, result);
     }
 
     /// L'image elle-même dans le presse-papiers, prête à coller (Ctrl+V)
@@ -577,13 +584,48 @@ impl Files {
         let Some(path) = self.selected_path() else {
             return;
         };
-        self.browser.message = Some(
-            match wl_copy(&["--type", info::image_mime(&path)], Some(&path)) {
-                Ok(()) => "Image copiée — Ctrl+V pour la coller".into(),
-                Err(e) => e,
-            },
-        );
+        let result = wl_copy(&["--type", info::image_mime(&path)], Some(&path));
+        self.confirm(Hit::CopyImage, result);
+    }
+
+    /// Action faite : le bouton le confirme un instant ; une erreur va dans la
+    /// barre d'état.
+    fn confirm(&mut self, button: Hit, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.done = Some((button, Instant::now()));
+                let _ = self.loop_handle.insert_source(
+                    Timer::from_duration(CONFIRM_TIME),
+                    |_, _, files| {
+                        if files
+                            .done
+                            .as_ref()
+                            .is_some_and(|(_, at)| at.elapsed() >= CONFIRM_TIME)
+                        {
+                            files.done = None;
+                            files.draw();
+                        }
+                        TimeoutAction::Drop
+                    },
+                );
+            }
+            Err(e) => self.browser.message = Some(e),
+        }
         self.draw();
+    }
+
+    /// Survol des boutons du panneau : redessin seulement quand il change
+    fn update_hover(&mut self, x: f64, y: f64) {
+        let hover = self.hit_at(x, y).filter(|h| {
+            matches!(
+                h,
+                Hit::Open | Hit::CopyPath | Hit::CopyImage | Hit::Trash | Hit::CloseInfo
+            )
+        });
+        if hover != self.hover {
+            self.hover = hover;
+            self.draw();
+        }
     }
 
     fn in_trash(&self) -> bool {
@@ -1208,6 +1250,12 @@ impl Files {
                 regular: &self.regular,
                 bold: &self.bold,
                 icons: &self.icons,
+                hover: self.hover.as_ref(),
+                done: self
+                    .done
+                    .as_ref()
+                    .filter(|(_, at)| at.elapsed() < CONFIRM_TIME)
+                    .map(|(h, _)| h),
             };
             let in_trash = common::trash::files_dir().is_some_and(|t| self.browser.cwd == t);
             draw_info(&fonts, d, in_trash, &mut c, right, h as f32, s, &mut hit);
@@ -1228,6 +1276,9 @@ struct Fonts<'a> {
     regular: &'a Text,
     bold: &'a Text,
     icons: &'a Text,
+    /// Bouton survolé, et bouton dont l'action vient d'être faite
+    hover: Option<&'a Hit>,
+    done: Option<&'a Hit>,
 }
 
 /// Panneau d'informations : aperçu, détails, actions rapides.
@@ -1256,9 +1307,15 @@ fn draw_info(
         .bold
         .draw_in(c, "Informations", x, 0.0, TOOLBAR_H * s, 14.0 * s, p.text);
     let cx = x0 + w - pad - 10.0 * s;
+    let close_color = if fonts.hover == Some(&Hit::CloseInfo) {
+        c.fill_circle(cx, mid, 14.0 * s, p.tile_hover());
+        p.text
+    } else {
+        p.text_dim
+    };
     fonts
         .icons
-        .icon(c, icon::CLOSE, cx, mid, 16.0 * s, p.text_dim);
+        .icon(c, icon::CLOSE, cx, mid, 16.0 * s, close_color);
     hit(
         cx - 16.0 * s,
         mid - 16.0 * s,
@@ -1366,13 +1423,28 @@ fn draw_info(
         if y + bh > h - 48.0 * s {
             break;
         }
-        c.fill_rounded(x, y, inner, bh, 8.0 * s, p.tile());
+        // Fait : vert avec une coche et le libellé de confirmation ; survolé : plus clair
+        let done = fonts.done == Some(&what);
+        let (bg, glyph, label, color) = if done {
+            let label = match what {
+                Hit::CopyPath => "Chemin copié",
+                Hit::CopyImage => "Image copiée",
+                _ => "Ouverture…",
+            };
+            (p.success.with_alpha(0.22), icon::CHECK, label, p.success)
+        } else if fonts.hover == Some(&what) {
+            (p.tile_hover(), glyph, label, color)
+        } else {
+            (p.tile(), glyph, label, color)
+        };
+        c.fill_rounded(x, y, inner, bh, 8.0 * s, bg);
         fonts
             .icons
             .icon(c, glyph, x + 18.0 * s, y + bh / 2.0, 14.0 * s, color);
+        let label = fonts.regular.truncate(label, 13.0 * s, inner - 44.0 * s);
         fonts
             .regular
-            .draw_in(c, label, x + 36.0 * s, y, bh, 13.0 * s, color);
+            .draw_in(c, &label, x + 36.0 * s, y, bh, 13.0 * s, color);
         hit(x, y, inner, bh, what);
         y += bh + 6.0 * s;
     }
@@ -1663,7 +1735,15 @@ impl PointerHandler for Files {
                     };
                     self.click(x, y, serial);
                 }
-                PointerEventKind::Motion { .. } => self.pointer_moved(x, y),
+                PointerEventKind::Motion { .. } => {
+                    self.pointer_moved(x, y);
+                    self.update_hover(x, y);
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.hover.take().is_some() {
+                        self.draw();
+                    }
+                }
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
                 } => self.press = None,
