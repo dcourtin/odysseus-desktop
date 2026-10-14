@@ -126,6 +126,12 @@ pub struct Odysseus {
     /// Claviers Apple branchés : disposition « mac » tant qu'il y en a un
     pub apple_keyboards: usize,
     /// Réglages d'écran demandés par IPC, appliqués par le backend à l'image suivante
+    /// Réglages (application Réglages), relus quand le fichier change
+    pub settings: common::settings::Settings,
+    /// Écran affiché : modes possibles et état courant (IPC GET_OUTPUTS)
+    pub screen: Option<ScreenInfo>,
+    /// Mise en veille automatique déjà demandée pour cette période d'inactivité
+    pub idle_suspended: bool,
     pub pending_scale: Option<f64>,
     pub pending_mode: Option<(i32, i32, Option<i32>)>,
     pub night: crate::night::NightLight,
@@ -185,14 +191,20 @@ impl Odysseus {
         // Notify clients that we have a keyboard, for the sake of the example we assume that keyboard is always present.
         // You may want to track keyboard hot-plug in real compositor.
         // Disposition clavier : XKB_DEFAULT_LAYOUT / _VARIANT / _OPTIONS (fr par défaut)
-        let (layout, variant, options) = keymap_env(false);
+        let settings = common::settings::Settings::load();
+        let (layout, variant, options) = keymap_env(&settings, false);
         let xkb = XkbConfig {
             layout: &layout,
             variant: &variant,
             options,
             ..Default::default()
         };
-        seat.add_keyboard(xkb, 200, 25).unwrap();
+        seat.add_keyboard(
+            xkb,
+            settings.repeat_delay as i32,
+            settings.repeat_rate as i32,
+        )
+        .unwrap();
 
         // Notify clients that we have a pointer (mouse)
         // Here we assume that there is always pointer plugged in
@@ -266,8 +278,11 @@ impl Odysseus {
             layers_focused_once: HashSet::new(),
             apple_keyboards: 0,
             pending_scale: None,
+            screen: None,
+            idle_suspended: false,
             pending_mode: None,
-            night: crate::night::NightLight::load(),
+            night: crate::night::NightLight::load(&settings),
+            settings,
             motions: HashMap::new(),
             slide: None,
             snap_preview: None,
@@ -513,20 +528,55 @@ impl Odysseus {
     }
 }
 
-/// Disposition, variante et options XKB ; `apple` : variante « mac »
-/// (touches @ et < à leur place sur un clavier Apple français).
-fn keymap_env(apple: bool) -> (String, String, Option<String>) {
-    let layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "fr".into());
-    let variant = if apple {
-        "mac".to_string()
-    } else {
-        std::env::var("XKB_DEFAULT_VARIANT").unwrap_or_default()
-    };
-    let options = std::env::var("XKB_DEFAULT_OPTIONS").ok();
-    (layout, variant, options)
+/// Disposition, variante et options XKB : celles des Réglages, ou en
+/// automatique, `apple` donne la variante « mac » (touches @ et < à leur place
+/// sur un clavier Apple français).
+fn keymap_env(
+    settings: &common::settings::Settings,
+    apple: bool,
+) -> (String, String, Option<String>) {
+    let (layout, variant) = settings.keymap(apple);
+    (layout, variant, std::env::var("XKB_DEFAULT_OPTIONS").ok())
+}
+
+/// Écran affiché, pour les Réglages : modes (largeur, hauteur, Hz), mode
+/// préféré et courant, échelle, taille physique en mm
+#[derive(Clone)]
+pub struct ScreenInfo {
+    pub name: String,
+    pub modes: Vec<(i32, i32, i32)>,
+    pub preferred: (i32, i32, i32),
+    pub current: (i32, i32, i32),
+    pub scale: f64,
+    pub size_mm: (u32, u32),
 }
 
 impl Odysseus {
+    /// Fichier des réglages modifié : on applique ce qui a changé ; vrai si
+    /// le fond d'écran est à recharger.
+    pub fn reload_settings(&mut self) -> bool {
+        let new = common::settings::Settings::load();
+        if new == self.settings {
+            return false;
+        }
+        let old = std::mem::replace(&mut self.settings, new);
+        if old.keyboard != self.settings.keyboard {
+            self.apply_keymap();
+        }
+        if (old.repeat_delay, old.repeat_rate)
+            != (self.settings.repeat_delay, self.settings.repeat_rate)
+        {
+            // Envoyée aussitôt à toutes les applications
+            self.seat.get_keyboard().unwrap().change_repeat_info(
+                self.settings.repeat_rate as i32,
+                self.settings.repeat_delay as i32,
+            );
+        }
+        self.night.configure(&self.settings);
+        self.night.applied = None;
+        old.wallpaper != self.settings.wallpaper
+    }
+
     /// Clavier branché ou débranché : un clavier Apple (fabricant USB 05ac)
     /// passe la disposition en « mac », le dernier retiré la rend au PC.
     pub fn keyboard_device_changed(&mut self, apple: bool, added: bool) {
@@ -543,7 +593,12 @@ impl Odysseus {
         if before == now {
             return;
         }
-        let (layout, variant, options) = keymap_env(now);
+        self.apply_keymap();
+    }
+
+    /// Applique la disposition clavier des Réglages (ou automatique)
+    pub fn apply_keymap(&mut self) {
+        let (layout, variant, options) = keymap_env(&self.settings, self.apple_keyboards > 0);
         let keyboard = self.seat.get_keyboard().unwrap();
         let config = XkbConfig {
             layout: &layout,

@@ -6,7 +6,7 @@
 //! Messages pris en charge : RUN_COMMAND (« workspace N », « workspace number N »,
 //! « workspace next_on_output|prev_on_output », et propres à odysseus :
 //! « nightlight on|off|auto|toggle », « output scale X », « output mode WxH[@Hz] »),
-//! GET_WORKSPACES, SUBSCRIBE (événements « workspace »).
+//! GET_WORKSPACES, SUBSCRIBE (événements « workspace »), GET_OUTPUTS.
 
 use std::{
     ffi::OsStr,
@@ -23,6 +23,7 @@ const MAGIC: &[u8; 6] = b"i3-ipc";
 const RUN_COMMAND: u32 = 0;
 const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
+const GET_OUTPUTS: u32 = 3;
 /// Bit des événements ; l'événement « workspace » a le type 0
 const EVENT_WORKSPACE: u32 = 0x8000_0000;
 
@@ -124,6 +125,7 @@ fn handle_message(state: &mut Odysseus, kind: u32, payload: &str, stream: &UnixS
             format!("[{{\"success\":{ok}}}]")
         }
         GET_WORKSPACES => workspaces_json(state),
+        GET_OUTPUTS => outputs_json(state),
         SUBSCRIBE => {
             if payload.contains("\"workspace\"")
                 && let Ok(clone) = stream.try_clone()
@@ -134,6 +136,20 @@ fn handle_message(state: &mut Odysseus, kind: u32, payload: &str, stream: &UnixS
         }
         _ => "{\"success\":false,\"error\":\"message non pris en charge\"}".into(),
     }
+}
+
+/// « 2560x1440@60 » (ou « 2560x1440@59.95Hz », ou sans fréquence)
+pub fn parse_mode(v: &str) -> Option<(i32, i32, Option<i32>)> {
+    let (size, refresh) = match v.split_once('@') {
+        Some((size, r)) => (size, r.trim_end_matches("Hz").parse::<f32>().ok()),
+        None => (v, None),
+    };
+    let (w, h) = size.split_once('x')?;
+    Some((
+        w.parse().ok()?,
+        h.parse().ok()?,
+        refresh.map(|r| r.round() as i32),
+    ))
 }
 
 fn run_command(state: &mut Odysseus, command: &str) -> bool {
@@ -163,22 +179,13 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
                 }
                 _ => false,
             },
-            Some(("mode", Some(v))) => {
-                let (size, refresh) = match v.split_once('@') {
-                    Some((size, r)) => (size, r.trim_end_matches("Hz").parse::<f32>().ok()),
-                    None => (*v, None),
-                };
-                let parsed = size
-                    .split_once('x')
-                    .and_then(|(w, h)| Some((w.parse::<i32>().ok()?, h.parse::<i32>().ok()?)));
-                match parsed {
-                    Some((w, h)) => {
-                        state.pending_mode = Some((w, h, refresh.map(|r| r.round() as i32)));
-                        true
-                    }
-                    None => false,
+            Some(("mode", Some(v))) => match parse_mode(v) {
+                Some(mode) => {
+                    state.pending_mode = Some(mode);
+                    true
                 }
-            }
+                None => false,
+            },
             _ => false,
         };
     }
@@ -202,6 +209,28 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
         },
     }
     true
+}
+
+/// Écrans, à la manière de sway (nom, mode courant, modes, échelle), plus le
+/// mode préféré et la taille physique (pour les Réglages)
+fn outputs_json(state: &Odysseus) -> String {
+    let Some(s) = state.screen.as_ref() else {
+        return "[]".into();
+    };
+    let mode = |(w, h, r): (i32, i32, i32)| {
+        format!("{{\"width\":{w},\"height\":{h},\"refresh\":{}}}", r * 1000)
+    };
+    let modes: Vec<String> = s.modes.iter().map(|m| mode(*m)).collect();
+    format!(
+        "[{{\"name\":\"{}\",\"active\":true,\"scale\":{},\"current_mode\":{},\"preferred_mode\":{},\"modes\":[{}],\"physical_width\":{},\"physical_height\":{}}}]",
+        s.name,
+        s.scale,
+        mode(s.current),
+        mode(s.preferred),
+        modes.join(","),
+        s.size_mm.0,
+        s.size_mm.1
+    )
 }
 
 fn workspaces_json(state: &Odysseus) -> String {

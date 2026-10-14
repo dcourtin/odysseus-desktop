@@ -3,6 +3,9 @@
 
 pub mod draw;
 pub mod icons;
+pub mod settings;
+pub mod shortcuts;
+pub mod sysinfo;
 pub mod theme;
 pub mod trash;
 pub mod watch;

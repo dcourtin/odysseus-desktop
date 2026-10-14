@@ -3,9 +3,9 @@
 //! graphique AMD (charge, mémoire vidéo, température, consommation,
 //! ventilateur), disques (place et débit), réseau, processus les plus actifs.
 
+use common::sysinfo;
 use std::{
     collections::{HashMap, VecDeque},
-    ffi::CString,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -103,11 +103,11 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new() -> Self {
-        let gpu_dir = gpu_device();
+        let gpu_dir = sysinfo::gpu_device();
         let mut snapshot = Snapshot::default();
-        snapshot.cpu.model = cpu_model();
+        snapshot.cpu.model = sysinfo::cpu_model();
         snapshot.gpu = gpu_dir.as_ref().map(|d| Gpu {
-            name: gpu_name(d),
+            name: sysinfo::gpu_name(d),
             ..Default::default()
         });
         let mut sampler = Self {
@@ -319,73 +319,6 @@ fn hwmon(name: &str) -> Option<PathBuf> {
         .find(|p| read_to_string(p.join("name")).trim() == name)
 }
 
-/// « AMD Ryzen 5 8400F 6-Core Processor » → « Ryzen 5 8400F »
-fn cpu_model() -> String {
-    let info = read_to_string("/proc/cpuinfo");
-    let model = info
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("model name")
-                .map(|r| r.trim_start_matches([' ', '\t', ':']))
-        })
-        .unwrap_or("Processeur");
-    model
-        .split_whitespace()
-        .filter(|w| !matches!(*w, "AMD" | "Intel(R)" | "Core(TM)" | "Processor" | "CPU"))
-        .filter(|w| !w.ends_with("-Core"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Carte graphique : premier périphérique DRM qui donne sa charge (amdgpu)
-fn gpu_device() -> Option<PathBuf> {
-    let mut cards: Vec<PathBuf> = std::fs::read_dir("/sys/class/drm")
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("card") && !n.contains('-'))
-        })
-        .map(|p| p.join("device"))
-        .filter(|d| d.join("gpu_busy_percent").exists())
-        .collect();
-    cards.sort();
-    cards.into_iter().next()
-}
-
-/// Nom commercial d'après la base PCI : « Navi 44 [Radeon RX 9060 XT] » → « Radeon RX 9060 XT »
-fn gpu_name(dir: &Path) -> String {
-    let id = |f: &str| {
-        read_to_string(dir.join(f))
-            .trim()
-            .trim_start_matches("0x")
-            .to_string()
-    };
-    let (vendor, device) = (id("vendor"), id("device"));
-    let ids = read_to_string("/usr/share/hwdata/pci.ids");
-    let mut in_vendor = false;
-    for line in ids.lines() {
-        if !line.starts_with('\t') && !line.starts_with('#') {
-            in_vendor = line.starts_with(&vendor);
-            continue;
-        }
-        if in_vendor
-            && let Some(rest) = line.strip_prefix('\t')
-            && !rest.starts_with('\t')
-            && rest.starts_with(&device)
-        {
-            let name = rest[device.len()..].trim();
-            return match (name.find('['), name.rfind(']')) {
-                (Some(a), Some(b)) if b > a => name[a + 1..b].to_string(),
-                _ => name.to_string(),
-            };
-        }
-    }
-    "Carte graphique".into()
-}
-
 fn memory() -> Memory {
     let info = read_to_string("/proc/meminfo");
     let kb = |key: &str| {
@@ -420,7 +353,7 @@ fn disks() -> Vec<Disk> {
             continue;
         }
         let mount = mount.replace("\\040", " ");
-        let Some((total, free)) = statvfs(&mount) else {
+        let Some((total, free)) = sysinfo::statvfs(&mount) else {
             continue;
         };
         if total < 2_000_000_000 {
@@ -441,16 +374,6 @@ fn disks() -> Vec<Disk> {
         });
     }
     list
-}
-
-fn statvfs(path: &str) -> Option<(u64, u64)> {
-    let c = CString::new(path).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
-    let block = st.f_frsize as u64;
-    Some((st.f_blocks as u64 * block, st.f_bavail as u64 * block))
 }
 
 /// Octets lus et écrits par les disques physiques (pas leurs partitions)

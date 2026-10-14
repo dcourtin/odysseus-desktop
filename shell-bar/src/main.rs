@@ -1,8 +1,8 @@
 //! Barre du haut : surface layer-shell ancrée en haut de l'écran. À gauche le
 //! nom de la machine et les bureaux (clic pour y aller, molette pour passer au
-//! suivant). À droite : l'aide-mémoire des raccourcis (clavier), le centre de
-//! contrôle (réseau, son, Bluetooth… y sont tous), puis la date et l'heure
-//! (clic : centre de notifications).
+//! suivant). À droite : le moniteur système (jauge), le centre de contrôle
+//! (réseau, son, Bluetooth, Réglages…), la cloche des notifications, puis la
+//! date et l'heure (clic : centre de notifications).
 
 mod sway;
 
@@ -71,7 +71,6 @@ struct Bar {
     icons: Text,
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
-    keys_zone: (f64, f64),
     monitor_zone: (f64, f64),
     /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
     cpu_prev: (u64, u64),
@@ -131,7 +130,6 @@ fn main() {
         bold: Text::load(theme::FONT_BOLD).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
-        keys_zone: (0.0, 0.0),
         monitor_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
@@ -343,10 +341,6 @@ impl Bar {
             spawn_sibling("odysseus-moniteur", &[]);
             return;
         }
-        if x >= self.keys_zone.0 && x < self.keys_zone.1 {
-            spawn_sibling("odysseus-raccourcis", &[]);
-            return;
-        }
         if x >= self.status_zone.0 && x < self.status_zone.1 {
             spawn_sibling("odysseus-control", &[]);
             return;
@@ -462,7 +456,7 @@ impl Bar {
 
         // Cloche du centre de notifications (barrée en « Ne pas déranger »,
         // pastille quand des notifications n'ont pas été vues), puis centre de
-        // contrôle et aide-mémoire des raccourcis à sa gauche
+        // contrôle et moniteur système à sa gauche
         let icon_px = 15.0 * sf;
         let step = 26.0 * sf;
         let cy = h as f32 / 2.0;
@@ -494,16 +488,8 @@ impl Bar {
         let color = highlight(&mut canvas, ix, cy, sf, panel_open("control"));
         self.icons
             .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, color);
-        let kx = ix - step;
-        let color = highlight(&mut canvas, kx, cy, sf, panel_open("raccourcis"));
-        self.icons
-            .icon(&mut canvas, icon::KEYBOARD, kx, cy, icon_px + sf, color);
-        self.keys_zone = (
-            ((kx - step / 2.0) / sf) as f64,
-            ((kx + step / 2.0) / sf) as f64,
-        );
         // Moniteur système : jauge colorée selon la charge (processeur ou mémoire)
-        let mx = kx - step;
+        let mx = ix - step;
         let color = if panel_open("moniteur") {
             highlight(&mut canvas, mx, cy, sf, true)
         } else if load >= 0.9 {

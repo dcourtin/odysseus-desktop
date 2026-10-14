@@ -25,16 +25,15 @@ pub fn init_winit(
         use smithay::backend::renderer::Renderer;
         state.renderer_context = Some(backend.renderer().context_id());
     }
-    let wallpaper =
-        crate::wallpaper::find().and_then(|path| {
-            match crate::wallpaper::Wallpaper::load(backend.renderer(), &path) {
-                Ok(w) => Some(w),
-                Err(e) => {
-                    tracing::warn!("fond d'écran {} : {e}", path.display());
-                    None
-                }
+    let wallpaper = crate::wallpaper::find(&state.settings).and_then(|path| {
+        match crate::wallpaper::Wallpaper::load(backend.renderer(), &path) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                tracing::warn!("fond d'écran {} : {e}", path.display());
+                None
             }
-        });
+        }
+    });
 
     // linux-dmabuf pour les clients GL
     {

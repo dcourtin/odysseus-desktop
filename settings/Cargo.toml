@@ -1,0 +1,17 @@
+[package]
+name = "settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Réglages d'odysseus-desktop : apparence, fond d'écran, écran, clavier et langue, énergie"
+
+[[bin]]
+name = "odysseus-reglages"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+dbus.workspace = true
+serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

@@ -320,4 +320,11 @@ pub mod icon {
     pub const FAN: char = '\u{e379}';
     pub const ARROW_DOWN: char = '\u{e042}';
     pub const ARROW_UP: char = '\u{e04a}';
+    pub const SETTINGS: char = '\u{e154}';
+    pub const BATTERY_CHARGING: char = '\u{e054}';
+    pub const LANGUAGES: char = '\u{e0fe}';
+    pub const IMAGE_PLUS: char = '\u{e1f7}';
+    pub const SPARKLES: char = '\u{e412}';
+    pub const COMMAND: char = '\u{e09a}';
+    pub const CHECK_CIRCLE: char = '\u{e07c}';
 }

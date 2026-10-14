@@ -121,8 +121,8 @@ pub fn init_udev(
         use smithay::backend::renderer::Renderer;
         data.state.renderer_context = Some(renderer.context_id());
     }
-    let wallpaper =
-        crate::wallpaper::find().and_then(|path| Wallpaper::load(&mut renderer, &path).ok());
+    let wallpaper = crate::wallpaper::find(&data.state.settings)
+        .and_then(|path| Wallpaper::load(&mut renderer, &path).ok());
 
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -159,10 +159,19 @@ pub fn init_udev(
     );
 
     data.state.mod_key = ModKey::Super;
-    let scale: f64 = std::env::var("ODYSSEUS_SCALE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.5);
+    // Échelle et mode : Réglages > Écran, sinon ODYSSEUS_SCALE et le mode préféré
+    let scale: f64 = data.state.settings.scale.unwrap_or_else(|| {
+        std::env::var("ODYSSEUS_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.5)
+    });
+    data.state.pending_mode = data
+        .state
+        .settings
+        .mode
+        .as_deref()
+        .and_then(crate::ipc::parse_mode);
     let cursor_size = std::env::var("XCURSOR_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -252,12 +261,19 @@ pub fn init_udev(
             Generic::new(fd, Interest::READ, Mode::Level),
             |_, fd, data| {
                 theme::drain(fd.as_fd());
-                if theme::reload()
-                    && let Some(udev) = data.udev.as_ref()
-                {
-                    let crtcs: Vec<_> = udev.surfaces.keys().copied().collect();
-                    for crtc in crtcs {
-                        render(data, crtc);
+                let theme_changed = theme::reload();
+                // Réglages modifiés : fond d'écran rechargé s'il a changé
+                let wallpaper_changed = data.state.reload_settings();
+                if let Some(udev) = data.udev.as_mut() {
+                    if wallpaper_changed {
+                        udev.wallpaper = crate::wallpaper::find(&data.state.settings)
+                            .and_then(|path| Wallpaper::load(&mut udev.renderer, &path).ok());
+                    }
+                    if theme_changed || wallpaper_changed {
+                        let crtcs: Vec<_> = udev.surfaces.keys().copied().collect();
+                        for crtc in crtcs {
+                            render(data, crtc);
+                        }
                     }
                 }
                 Ok(PostAction::Continue)
@@ -437,6 +453,26 @@ fn scan_outputs(data: &mut CalloopData) {
         wl_mode.refresh,
         udev.scale
     );
+    let mut modes: Vec<(i32, i32, i32)> = info
+        .modes()
+        .iter()
+        .map(|m| (m.size().0 as i32, m.size().1 as i32, m.vrefresh() as i32))
+        .collect();
+    modes.sort_by(|a, b| b.cmp(a));
+    modes.dedup();
+    let preferred = (
+        drm_mode.size().0 as i32,
+        drm_mode.size().1 as i32,
+        drm_mode.vrefresh() as i32,
+    );
+    state.screen = Some(crate::state::ScreenInfo {
+        name: name.clone(),
+        modes,
+        preferred,
+        current: preferred,
+        scale: udev.scale,
+        size_mm: (w_mm, h_mm),
+    });
     udev.surfaces.insert(
         crtc,
         OutputSurface {
@@ -474,6 +510,9 @@ fn apply_output_settings(udev: &mut UdevData, state: &mut crate::Odysseus, crtc:
         layer_map_for_output(&surface.output).arrange();
         udev.cursor = Cursor::load((udev.cursor_size as f64 * scale).round() as u32);
         state.fit_windows_to_output();
+        if let Some(screen) = state.screen.as_mut() {
+            screen.scale = scale;
+        }
         tracing::info!("échelle {scale}");
     }
     if let Some((w, h, refresh)) = state.pending_mode.take() {
@@ -509,6 +548,9 @@ fn apply_output_settings(udev: &mut UdevData, state: &mut crate::Odysseus, crtc:
                     layer_map_for_output(&surface.output).arrange();
                     state.fit_windows_to_output();
                     surface.pending = false;
+                    if let Some(screen) = state.screen.as_mut() {
+                        screen.current = (w, h, mode.vrefresh() as i32);
+                    }
                     tracing::info!("mode {w}x{h} @ {} Hz", mode.vrefresh());
                 }
                 Err(e) => tracing::warn!("mode {w}x{h} refusé : {e:?}"),

@@ -30,6 +30,10 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 |---|---|
 | ![Fichiers](docs/captures/fichiers.png) | ![Lanceur](docs/captures/lanceur.png) |
 
+| Réglages : fond d'écran, et six autres pages |
+|---|
+| ![Réglages](docs/captures/reglages.png) |
+
 | Aide-mémoire des raccourcis (Super+K) |
 |---|
 | ![Raccourcis](docs/captures/raccourcis.png) |
@@ -53,9 +57,10 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
-| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), aide-mémoire, centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
+| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume | fonctionne |
-| `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, apparence (thèmes Odyssée bleue, sombre et claire, appliqués à chaud à tout le bureau), son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
+| `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
+| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, À propos | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
@@ -79,16 +84,20 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Impr. écran ou Mod+Maj+s | capture d'une zone (glisser) ; Espace : d'une fenêtre (avec son ombre) ; Échap : annuler |
 | Maj+Impr. écran | capture de l'écran entier |
 | Mod+l | verrouiller |
-| Mod+k (ou l'icône clavier de la barre) | aide-mémoire des raccourcis |
+| Mod+k (ou Réglages > Raccourcis) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
-| icônes de la barre (de gauche à droite) | moniteur système, aide-mémoire, centre de contrôle |
+| icônes de la barre (de gauche à droite) | moniteur système, centre de contrôle (dont l'accès aux Réglages) |
 | cloche de la barre, clic sur l'heure, ou souris dans le coin en haut à droite | centre de notifications (point sur la cloche : notifications non vues) |
 | Ctrl+Alt+F1…F12 | changer de tty |
 | Mod+Maj+e | quitter |
 
-Thèmes : Odyssée bleue (par défaut), sombre et claire, choisis dans le centre de
-contrôle (Apparence) et appliqués à chaud à tout le bureau ; le choix est gardé dans
-`~/.config/odysseus/theme`.
+Réglages (`odysseus-reglages`, ou centre de contrôle > Réglages) : enregistrés dans
+`~/.config/odysseus/reglages` (« clé = valeur ») et `theme`, relus à chaud par le
+compositeur et les applications. Ils priment sur les variables d'environnement
+(`ODYSSEUS_SCALE`, `ODYSSEUS_IDLE`, `ODYSSEUS_NIGHT_*`, `XKB_DEFAULT_*`), qui restent
+les valeurs par défaut sans fichier de réglages. Thèmes : Odyssée bleue (par défaut),
+sombre et claire. Une nouvelle définition d'écran revient d'elle-même à l'ancienne
+au bout de 15 s si on ne la garde pas.
 
 Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
 connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
@@ -114,8 +123,9 @@ retiré, elle revient au PC. Variables : `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARI
 
 Animations : `ODYSSEUS_ANIM_SLOW=10` les ralentit toutes dix fois (pour les régler à l'œil).
 
-Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
-(`ODYSSEUS_IDLE`, en secondes) ; une vidéo en lecture l'empêche.
+Inactivité (Réglages > Énergie) : l'écran s'éteint au bout de 10 min et la session se
+verrouille, puis, si demandé, l'ordinateur se met en veille ; une vidéo en lecture
+l'empêche.
 
 ## Commandes
 
@@ -126,6 +136,7 @@ Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
     odysseus-control --vue wifi              # centre de contrôle, vue Wi-Fi
     odysseus-notify --center [show]          # centre de notifications (bascule, ou ouvre)
     odysseus-moniteur                        # moniteur système (bascule)
+    odysseus-reglages [ecran|fond|clavier…]  # Réglages, sur une page donnée
 
     cargo build --release          # tout compiler
     cargo run -p shell-bar         # lancer la barre (depuis un terminal dans sway)

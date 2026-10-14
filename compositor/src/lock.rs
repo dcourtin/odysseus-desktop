@@ -4,10 +4,12 @@
 //! et ne lui transmet que le clavier et la souris : aucune fenêtre n'est visible.
 //! Si le verrou plante, l'écran reste noir et verrouillé ; Super+L le relance.
 //!
-//! Inactivité (aucune entrée) : au bout de `ODYSSEUS_IDLE` secondes (600 par
-//! défaut, comme macOS), l'écran s'éteint et la session se verrouille. Écran
-//! verrouillé, il se rééteint après 30 s. Une vidéo en lecture (idle-inhibit)
-//! suspend le compte à rebours.
+//! Inactivité (aucune entrée) : au bout du délai choisi dans Réglages > Énergie
+//! (10 min par défaut, comme macOS ; `ODYSSEUS_IDLE` en secondes sans fichier
+//! de réglages), l'écran s'éteint et, si demandé, la session se verrouille ;
+//! plus tard, éventuellement, le système se met en veille. Écran verrouillé,
+//! il se rééteint après 30 s. Une vidéo en lecture (idle-inhibit) suspend le
+//! compte à rebours.
 
 use std::time::{Duration, Instant};
 
@@ -124,26 +126,50 @@ impl Odysseus {
             return;
         }
         let idle = self.last_activity.elapsed();
+        if idle < Duration::from_secs(5) {
+            self.idle_suspended = false;
+        }
+        // Mise en veille du système (Réglages > Énergie), une fois par période
+        let suspend = self.settings.suspend_min;
+        if suspend > 0 && idle >= Duration::from_secs(suspend as u64 * 60) && !self.idle_suspended {
+            self.idle_suspended = true;
+            if self.settings.lock_on_idle && !self.is_locked() {
+                self.lock_session();
+            }
+            tracing::info!("veille automatique");
+            self.spawn("systemctl suspend");
+            return;
+        }
         if self.is_locked() {
             if idle >= LOCKED_SCREEN_OFF && !self.screen_off {
                 self.screen_off = true;
                 self.screen_power_changed = true;
             }
-        } else if idle >= idle_timeout() {
-            self.lock_session();
+        } else if let Some(timeout) = self.idle_timeout()
+            && idle >= timeout
+            && !self.screen_off
+        {
+            if self.settings.lock_on_idle {
+                self.lock_session();
+            }
             self.screen_off = true;
             self.screen_power_changed = true;
         }
     }
-}
 
-/// Délai d'inactivité avant extinction et verrouillage
-fn idle_timeout() -> Duration {
-    std::env::var("ODYSSEUS_IDLE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(Duration::from_secs(600))
+    /// Délai d'inactivité avant extinction de l'écran (et verrouillage) :
+    /// Réglages > Énergie (aucun : jamais), sinon `ODYSSEUS_IDLE` en secondes
+    fn idle_timeout(&self) -> Option<Duration> {
+        if let Some(secs) = std::env::var("ODYSSEUS_IDLE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            && common::settings::path().is_none_or(|p| !p.exists())
+        {
+            return Some(Duration::from_secs(secs));
+        }
+        let min = self.settings.screen_off_min;
+        (min > 0).then(|| Duration::from_secs(min as u64 * 60))
+    }
 }
 
 pub fn init_idle_timer(handle: &LoopHandle<'static, CalloopData>) {

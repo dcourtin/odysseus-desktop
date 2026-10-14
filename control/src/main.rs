@@ -73,7 +73,6 @@ enum View {
     Wifi,
     Bluetooth,
     Sound,
-    Theme,
 }
 
 /// Élément cliquable
@@ -97,8 +96,7 @@ enum Target {
     Device(usize),
     Sink(usize),
     Password,
-    ThemeOpen,
-    Theme(usize),
+    Settings,
 }
 
 struct Zone {
@@ -318,7 +316,7 @@ fn main_height() -> f32 {
     2.0 * MARGIN + PAD + 3.0 * ROW + 2.0 * (GAP + NIGHT_H) + GAP + 76.0 + GAP + 80.0 + PAD
 }
 
-/// Hauteur des tuiles « Lumière de nuit » et « Apparence »
+/// Hauteur des tuiles « Lumière de nuit » et « Réglages »
 const NIGHT_H: f32 = 56.0;
 
 /// Icône Wi-Fi selon la qualité du signal
@@ -403,7 +401,6 @@ impl Control {
             }
             View::Bluetooth => rows(self.state.bt.devices.len()),
             View::Sound => 56.0 + rows(self.state.sound.sinks.len()),
-            View::Theme => rows(theme::THEMES.len()),
         };
         2.0 * MARGIN + PAD + header + body + message + PAD
     }
@@ -499,14 +496,10 @@ impl Control {
             }
             Target::Mute => self.send(Act::Mute),
             Target::SoundOpen => self.open_view(View::Sound),
-            Target::ThemeOpen => self.open_view(View::Theme),
-            Target::Theme(i) => {
-                if let Err(e) = theme::set(theme::THEMES[i].id) {
-                    self.message = Some(format!("Thème : {e}"));
-                }
-                // Le fond du panneau change de couleur : à redessiner
-                self.background = None;
-                self.resize_or_draw();
+            // Réglages du système : l'application, et le panneau se ferme
+            Target::Settings => {
+                spawn_sibling("odysseus-reglages");
+                self.exit = true;
             }
             Target::Back => self.back(),
             // Veille : comme sur macOS, la session est verrouillée avant
@@ -721,7 +714,6 @@ impl Control {
             ),
             View::Bluetooth => draw_bt(&mut d, &self.state, x, y, inner),
             View::Sound => draw_sound(&mut d, &self.state, self.volume, x, y, inner),
-            View::Theme => draw_theme(&mut d, x, y, inner),
         }
         // Ligne d'état en bas : opération en cours ou erreur
         let status = self.busy.clone().or_else(|| self.message.clone());
@@ -1125,9 +1117,9 @@ fn draw_main(
     );
     d.zone(x, ny, w, NIGHT_H, target);
 
-    // Apparence
+    // Réglages (apparence, fond d'écran, écran, clavier, énergie…)
     let ay = ny + NIGHT_H + GAP;
-    let target = Target::ThemeOpen;
+    let target = Target::Settings;
     let hovered = d.hovered(&target);
     d.tile(x, ay, w, NIGHT_H);
     d.hover_bg(x + 4.0, ay + 4.0, w - 8.0, NIGHT_H - 8.0, &target);
@@ -1135,12 +1127,12 @@ fn draw_main(
         x + 26.0,
         ay + NIGHT_H / 2.0,
         16.0,
-        icon::PALETTE,
+        icon::SETTINGS,
         false,
         hovered,
     );
     d.text(
-        "Apparence",
+        "Réglages",
         x + 50.0,
         ay + 9.0,
         20.0,
@@ -1150,7 +1142,7 @@ fn draw_main(
         w - 76.0,
     );
     d.text(
-        theme::palette().name,
+        "Apparence, fond d'écran, écran, clavier…",
         x + 50.0,
         ay + 27.0,
         18.0,
@@ -1572,64 +1564,6 @@ fn draw_bt(d: &mut Drawer, st: &Snapshot, x: f32, y: f32, w: f32) {
             sw + 4.0,
         );
         let _ = s;
-        d.zone(x, ry, w, LIST_ROW, target);
-        ry += LIST_ROW;
-    }
-}
-
-/// Choix du thème : un aperçu de chaque palette (fond, texte, accent)
-fn draw_theme(d: &mut Drawer, x: f32, y: f32, w: f32) {
-    d.header(x, y, w, "Apparence", None);
-    let s = d.s;
-    let current = theme::palette().id;
-    let mut ry = y + 52.0;
-    for (i, t) in theme::THEMES.iter().enumerate() {
-        let target = Target::Theme(i);
-        d.hover_bg(x, ry, w, LIST_ROW, &target);
-        // Vignette : fond du thème, une ligne de texte et une pastille d'accent
-        let (vx, vy, vw, vh) = (x + 6.0, ry + 7.0, 44.0, LIST_ROW - 14.0);
-        d.canvas
-            .fill_rounded(vx * s, vy * s, vw * s, vh * s, 6.0 * s, t.background);
-        d.canvas.stroke_rounded(
-            vx * s,
-            vy * s,
-            vw * s,
-            vh * s,
-            6.0 * s,
-            s.max(1.0),
-            theme::palette().panel_border(),
-        );
-        d.canvas.fill_rounded(
-            (vx + 7.0) * s,
-            (vy + vh / 2.0 - 2.0) * s,
-            16.0 * s,
-            4.0 * s,
-            2.0 * s,
-            t.text,
-        );
-        d.canvas
-            .fill_circle((vx + vw - 11.0) * s, (vy + vh / 2.0) * s, 5.0 * s, t.accent);
-        let chosen = t.id == current;
-        d.text(
-            t.name,
-            x + 62.0,
-            ry,
-            LIST_ROW,
-            13.0,
-            chosen,
-            theme::palette().text,
-            w - 92.0,
-        );
-        if chosen {
-            d.icons.icon(
-                d.canvas,
-                icon::CHECK,
-                (x + w - 16.0) * s,
-                (ry + LIST_ROW / 2.0) * s,
-                15.0 * s,
-                theme::palette().accent,
-            );
-        }
         d.zone(x, ry, w, LIST_ROW, target);
         ry += LIST_ROW;
     }

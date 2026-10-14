@@ -1,9 +1,9 @@
 //! Lumière de nuit : l'écran tire vers l'orangé le soir, par la table de
 //! couleurs (gamma) du CRTC — aucun programme supplémentaire, aucun coût de rendu.
 //!
-//! Trois modes : désactivé, activé, automatique (de `ODYSSEUS_NIGHT_FROM` à
-//! `ODYSSEUS_NIGHT_TO`, 21:00 → 07:00 par défaut). Température cible
-//! `ODYSSEUS_NIGHT_TEMP` (3400 K par défaut). Le changement est progressif.
+//! Trois modes : désactivé, activé, automatique (horaires et température des
+//! Réglages, ou `ODYSSEUS_NIGHT_FROM` / `_TO` / `_TEMP` ; 21:00 → 07:00 et
+//! 3400 K par défaut). Le changement est progressif.
 //! Le mode est gardé dans ~/.local/state/odysseus/nightlight (lu par le centre
 //! de contrôle) ; il se change par IPC : `nightlight on|off|auto|toggle`.
 
@@ -42,8 +42,7 @@ fn parse_hm(s: &str) -> Option<u32> {
 }
 
 impl NightLight {
-    pub fn load() -> Self {
-        let env = |k: &str| std::env::var(k).ok();
+    pub fn load(settings: &common::settings::Settings) -> Self {
         let mode = match state_file()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .as_deref()
@@ -57,19 +56,33 @@ impl NightLight {
             mode,
             current: NEUTRAL,
             applied: None,
-            temperature: env("ODYSSEUS_NIGHT_TEMP")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3400.0f32)
-                .clamp(1500.0, NEUTRAL),
-            from_min: env("ODYSSEUS_NIGHT_FROM")
-                .and_then(|v| parse_hm(&v))
-                .unwrap_or(21 * 60),
-            to_min: env("ODYSSEUS_NIGHT_TO")
-                .and_then(|v| parse_hm(&v))
-                .unwrap_or(7 * 60),
+            temperature: 3400.0,
+            from_min: 21 * 60,
+            to_min: 7 * 60,
         };
+        night.configure(settings);
         night.current = night.target();
         night
+    }
+
+    /// Horaires et température : réglages, sinon variables d'environnement,
+    /// sinon 21:00 → 07:00 et 3400 K
+    pub fn configure(&mut self, settings: &common::settings::Settings) {
+        let env = |k: &str| std::env::var(k).ok();
+        self.temperature = settings
+            .night_temp
+            .map(|t| t as f32)
+            .or_else(|| env("ODYSSEUS_NIGHT_TEMP").and_then(|v| v.parse().ok()))
+            .unwrap_or(3400.0)
+            .clamp(1500.0, NEUTRAL);
+        let hm = |set: &Option<String>, var: &str, default: u32| {
+            set.clone()
+                .or_else(|| env(var))
+                .and_then(|v| parse_hm(&v))
+                .unwrap_or(default)
+        };
+        self.from_min = hm(&settings.night_from, "ODYSSEUS_NIGHT_FROM", 21 * 60);
+        self.to_min = hm(&settings.night_to, "ODYSSEUS_NIGHT_TO", 7 * 60);
     }
 
     pub fn set_mode(&mut self, mode: Mode) {

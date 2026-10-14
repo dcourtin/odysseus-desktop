@@ -17,8 +17,14 @@ use smithay::{
     utils::{Buffer, Logical, Rectangle, Size, Transform},
 };
 
-/// ~/.config/odysseus/wallpaper.jpg en priorité, sinon wallpaper.png
-pub fn find() -> Option<std::path::PathBuf> {
+/// Fond choisi dans les Réglages (« uni » : aucun) ; sinon
+/// ~/.config/odysseus/wallpaper.jpg en priorité, puis wallpaper.png
+pub fn find(settings: &common::settings::Settings) -> Option<std::path::PathBuf> {
+    match settings.wallpaper.as_deref() {
+        Some("uni") => return None,
+        Some(path) if std::path::Path::new(path).exists() => return Some(path.into()),
+        _ => {}
+    }
     let dir = std::path::PathBuf::from(std::env::var("HOME").ok()?).join(".config/odysseus");
     ["wallpaper.jpg", "wallpaper.png"]
         .iter()
