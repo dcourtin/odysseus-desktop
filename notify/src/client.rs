@@ -23,6 +23,12 @@ pub fn unseen_file() -> Option<PathBuf> {
     Some(PathBuf::from(dir).join("odysseus-notifications-non-vues"))
 }
 
+/// Présent tant que le centre de notifications est ouvert (lu par la barre)
+pub fn center_open_file() -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    Some(PathBuf::from(dir).join("odysseus-notifications.ouvert"))
+}
+
 const USAGE: &str = "usage : odysseus-notify [--center [show] | --dnd on|off|toggle | --volume |
        --send TITRE [TEXTE] [--image FICHIER] [--open FICHIER]]
   --image : vignette de la notification ; --open : un clic ouvre le fichier (Aperçu)";

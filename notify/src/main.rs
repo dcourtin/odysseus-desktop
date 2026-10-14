@@ -125,7 +125,19 @@ struct App {
     last_frame: Instant,
 }
 
+/// Centre ouvert ou non, pour la barre (icône de la cloche en surbrillance)
+fn center_marker(open: bool) {
+    if let Some(path) = client::center_open_file() {
+        if open {
+            let _ = std::fs::write(path, "");
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 fn main() {
+    center_marker(false);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {
         std::process::exit(client::run(&args));
@@ -508,6 +520,8 @@ impl App {
         match self.center.as_mut() {
             Some(center) if center.closing.is_none() => {
                 center.closing = Some(Instant::now());
+                center_marker(false);
+                center_marker(false);
                 self.draw_center();
             }
             Some(_) => {}
@@ -521,6 +535,7 @@ impl App {
         match self.center.as_mut() {
             Some(center) => {
                 if center.closing.take().is_some() {
+                    center_marker(true);
                     self.draw_center();
                 }
             }
@@ -530,6 +545,7 @@ impl App {
 
     fn open_center(&mut self) {
         self.store.unseen = 0;
+        center_marker(true);
         // Les bannières affichées rejoignent le centre, comme sur macOS
         for n in self.store.banners.iter_mut() {
             if n.leaving.is_none() {
@@ -583,6 +599,7 @@ impl App {
             .is_some_and(|c| c.closing.is_some_and(|t| t.elapsed() >= LEAVE))
         {
             self.center = None;
+            center_marker(false);
             return;
         }
         let Some(center) = self.center.as_mut() else {
@@ -877,6 +894,7 @@ impl LayerShellHandler for App {
             .is_some_and(|c| &c.panel.layer == layer)
         {
             self.center = None;
+            center_marker(false);
         }
     }
 

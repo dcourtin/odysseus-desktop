@@ -2,11 +2,7 @@
 //! (avant mise à l'échelle de l'écran).
 
 use std::{
-    ffi::CString,
-    os::{
-        fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
-        unix::ffi::OsStrExt,
-    },
+    os::fd::{BorrowedFd, OwnedFd},
     path::PathBuf,
     sync::{
         Once,
@@ -210,24 +206,12 @@ pub fn set(id: &str) -> std::io::Result<()> {
 /// Surveillance du réglage (inotify) : le descripteur devient lisible quand le
 /// thème change ; appeler alors [`drain()`] puis [`reload()`].
 pub fn watch() -> Option<OwnedFd> {
-    let dir = config_path()?.parent()?.to_path_buf();
-    std::fs::create_dir_all(&dir).ok()?;
-    let c_dir = CString::new(dir.as_os_str().as_bytes()).ok()?;
-    unsafe {
-        let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
-        if fd < 0 {
-            return None;
-        }
-        let fd = OwnedFd::from_raw_fd(fd);
-        let mask = libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_DELETE;
-        (libc::inotify_add_watch(fd.as_raw_fd(), c_dir.as_ptr(), mask) >= 0).then_some(fd)
-    }
+    crate::watch::dir(config_path()?.parent()?)
 }
 
 /// Vide les événements en attente du descripteur de [`watch()`]
 pub fn drain(fd: BorrowedFd) {
-    let mut buf = [0u8; 1024];
-    while unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+    crate::watch::drain(fd)
 }
 
 /// Grille d'espacement : tout est multiple de 4.

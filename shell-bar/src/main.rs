@@ -175,6 +175,21 @@ fn main() {
         );
     }
 
+    // Panneaux ouverts ou fermés (marqueurs dans XDG_RUNTIME_DIR) : l'icône
+    // correspondante s'allume ou s'éteint aussitôt
+    if let Some(fd) = std::env::var_os("XDG_RUNTIME_DIR")
+        .and_then(|d| common::watch::dir(std::path::Path::new(&d)))
+    {
+        let _ = handle.insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, bar| {
+                common::watch::drain(fd.as_fd());
+                bar.draw();
+                Ok(PostAction::Continue)
+            },
+        );
+    }
+
     // Événements « workspace » de sway, lus dans un fil séparé (lecture bloquante)
     if watch_sway {
         let (tx, rx) = channel::channel::<()>();
@@ -202,6 +217,49 @@ fn main() {
 }
 
 /// Lance un programme d'odysseus installé à côté de la barre.
+/// Panneau d'odysseus ouvert : son processus vit (fichier .pid), ou, pour le
+/// centre de notifications, son marqueur existe
+fn panel_open(name: &str) -> bool {
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else {
+        return false;
+    };
+    if name == "notifications" {
+        return dir.join("odysseus-notifications.ouvert").exists();
+    }
+    std::fs::read_to_string(dir.join(format!("odysseus-{name}.pid")))
+        .ok()
+        .and_then(|p| p.trim().parse::<u32>().ok())
+        .and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok())
+        // Processus terminé mais pas encore ramassé : fermé
+        .is_some_and(|stat| {
+            !stat
+                .rsplit(')')
+                .next()
+                .unwrap_or("")
+                .trim_start()
+                .starts_with('Z')
+        })
+}
+
+/// Icône d'un panneau ouvert : pastille arrondie d'accent derrière ; renvoie
+/// la couleur de l'icône
+fn highlight(canvas: &mut Canvas, cx: f32, cy: f32, sf: f32, open: bool) -> theme::Rgba {
+    let p = theme::palette();
+    if !open {
+        return p.text;
+    }
+    let (w, h) = (26.0 * sf, 22.0 * sf);
+    canvas.fill_rounded(
+        cx - w / 2.0,
+        cy - h / 2.0,
+        w,
+        h,
+        7.0 * sf,
+        p.accent.with_alpha(0.22),
+    );
+    p.accent
+}
+
 /// « Ne pas déranger » actif, et notifications non vues (fichiers tenus par
 /// odysseus-notify, relus à chaque dessin : une fois par seconde)
 fn notification_state() -> (bool, bool) {
@@ -410,13 +468,14 @@ impl Bar {
         let cy = h as f32 / 2.0;
         let bx = clock_x - 14.0 * sf - step / 2.0;
         let (dnd, unseen) = notification_state();
+        let bell_color = highlight(&mut canvas, bx, cy, sf, panel_open("notifications"));
         self.icons.icon(
             &mut canvas,
             if dnd { icon::BELL_OFF } else { icon::BELL },
             bx,
             cy,
             icon_px,
-            theme::palette().text,
+            bell_color,
         );
         if unseen && !dnd {
             canvas.fill_circle(
@@ -432,30 +491,22 @@ impl Bar {
         );
         let ix = bx - step;
         let right = ix + step / 2.0;
-        self.icons.icon(
-            &mut canvas,
-            icon::CONTROLS,
-            ix,
-            cy,
-            icon_px,
-            theme::palette().text,
-        );
+        let color = highlight(&mut canvas, ix, cy, sf, panel_open("control"));
+        self.icons
+            .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, color);
         let kx = ix - step;
-        self.icons.icon(
-            &mut canvas,
-            icon::KEYBOARD,
-            kx,
-            cy,
-            icon_px + sf,
-            theme::palette().text,
-        );
+        let color = highlight(&mut canvas, kx, cy, sf, panel_open("raccourcis"));
+        self.icons
+            .icon(&mut canvas, icon::KEYBOARD, kx, cy, icon_px + sf, color);
         self.keys_zone = (
             ((kx - step / 2.0) / sf) as f64,
             ((kx + step / 2.0) / sf) as f64,
         );
         // Moniteur système : jauge colorée selon la charge (processeur ou mémoire)
         let mx = kx - step;
-        let color = if load >= 0.9 {
+        let color = if panel_open("moniteur") {
+            highlight(&mut canvas, mx, cy, sf, true)
+        } else if load >= 0.9 {
             theme::palette().danger
         } else if load >= 0.7 {
             theme::palette().accent
