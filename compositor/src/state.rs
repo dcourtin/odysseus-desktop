@@ -91,8 +91,10 @@ pub struct Odysseus {
     pub cursor_status: CursorImageStatus,
     /// Session logind (mode tty) : changement de terminal virtuel
     pub session: Option<LibSeatSession>,
-    /// Capture d'écran demandée (Impr. écran ou Mod+Maj+s), faite à la prochaine image
-    pub capture_pending: bool,
+    /// Capture d'écran : sélection en cours, capture à faire, éclair de confirmation
+    pub selection: Option<crate::screenshot::Selection>,
+    pub capture_request: Option<crate::screenshot::Request>,
+    pub flash: Option<Instant>,
     pub workspaces: crate::workspaces::Workspaces,
     /// IPC compatible sway : chemin du socket et abonnés aux événements
     pub ipc_path: Option<std::path::PathBuf>,
@@ -221,7 +223,9 @@ impl Odysseus {
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
             session: None,
-            capture_pending: false,
+            selection: None,
+            capture_request: None,
+            flash: None,
             workspaces: Default::default(),
             ipc_path: None,
             ipc_subscribers: Vec::new(),

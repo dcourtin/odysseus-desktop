@@ -12,6 +12,7 @@ mod ipc;
 mod lock;
 mod night;
 mod render;
+mod screenshot;
 mod snap;
 mod state;
 mod udev;

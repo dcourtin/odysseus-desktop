@@ -25,6 +25,8 @@ pub struct Cursor {
     buffer: MemoryRenderBuffer,
     /// Point chaud, en pixels de l'image
     hotspot: Point<i32, Physical>,
+    /// Croix de visée (capture d'écran)
+    crosshair: Option<(MemoryRenderBuffer, Point<i32, Physical>)>,
 }
 
 /// Créé une fois par image, consommé aussitôt : la taille des variantes importe peu
@@ -37,9 +39,18 @@ pub enum CursorElement {
 impl Cursor {
     /// Charge l'image « default » du thème, à la taille la plus proche de `size_px`.
     pub fn load(size_px: u32) -> Option<Self> {
+        let (buffer, hotspot) = Self::load_icon("default", size_px)?;
+        Some(Self {
+            buffer,
+            hotspot,
+            crosshair: Self::load_icon("crosshair", size_px),
+        })
+    }
+
+    fn load_icon(icon: &str, size_px: u32) -> Option<(MemoryRenderBuffer, Point<i32, Physical>)> {
         let name =
             std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "Bibata-Modern-Classic".into());
-        let path = CursorTheme::load(&name).load_icon("default")?;
+        let path = CursorTheme::load(&name).load_icon(icon)?;
         let mut data = Vec::new();
         std::fs::File::open(path)
             .ok()?
@@ -57,10 +68,7 @@ impl Cursor {
             Transform::Normal,
             None,
         );
-        Some(Self {
-            buffer,
-            hotspot: (image.xhot as i32, image.yhot as i32).into(),
-        })
+        Some((buffer, (image.xhot as i32, image.yhot as i32).into()))
     }
 
     /// Éléments du curseur à la position logique `pos` (relative à la sortie).
@@ -70,7 +78,22 @@ impl Cursor {
         status: &mut CursorImageStatus,
         pos: Point<f64, Logical>,
         scale: f64,
+        crosshair: bool,
     ) -> Option<CursorElement> {
+        if crosshair && let Some((buffer, hotspot)) = self.crosshair.as_ref() {
+            let loc = pos.to_physical(scale) - hotspot.to_f64();
+            return MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                loc,
+                buffer,
+                None,
+                None,
+                None,
+                Kind::Cursor,
+            )
+            .ok()
+            .map(CursorElement::Theme);
+        }
         if let CursorImageStatus::Surface(surface) = status
             && !surface.alive()
         {

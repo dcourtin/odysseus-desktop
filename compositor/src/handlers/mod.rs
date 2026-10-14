@@ -52,7 +52,24 @@ delegate_seat!(Odysseus);
 //
 
 impl SelectionHandler for Odysseus {
-    type SelectionUserData = ();
+    /// Contenu mis dans le presse-papiers par le compositeur (capture d'écran)
+    type SelectionUserData = crate::screenshot::ClipboardData;
+
+    fn send_selection(
+        &mut self,
+        _ty: smithay::wayland::selection::SelectionTarget,
+        _mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        user_data: &Self::SelectionUserData,
+    ) {
+        // Écriture dans un fil : le client lit à son rythme
+        let data = user_data.clone();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = std::fs::File::from(fd).write_all(&data);
+        });
+    }
 }
 
 impl DataDeviceHandler for Odysseus {

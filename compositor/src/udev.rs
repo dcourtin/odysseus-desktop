@@ -554,11 +554,18 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         .map(|g| g.loc)
         .unwrap_or_default();
 
-    // Curseur au-dessus de tout
+    // Curseur au-dessus de tout (croix de visée pendant une capture)
     let mut elements: Vec<OdysseusElement> = Vec::new();
     if let Some(cursor) = udev.cursor.as_ref() {
         let pos = state.seat.get_pointer().unwrap().current_location() - output_loc.to_f64();
-        match cursor.element(&mut udev.renderer, &mut state.cursor_status, pos, scale) {
+        let crosshair = state.selection.is_some();
+        match cursor.element(
+            &mut udev.renderer,
+            &mut state.cursor_status,
+            pos,
+            scale,
+            crosshair,
+        ) {
             Some(CursorElement::Theme(e)) => elements.push(OdysseusElement::CursorTheme(e)),
             Some(CursorElement::Surface(list)) => {
                 elements.extend(list.into_iter().map(OdysseusElement::Layer))
@@ -567,6 +574,18 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         }
     }
     let focused = state.seat.get_keyboard().unwrap().current_focus();
+    // Couche de capture d'écran (voile, sélection, éclair), sous le curseur
+    if !state.is_locked() {
+        elements.extend(crate::render::overlay_elements(
+            state,
+            &output,
+            &mut udev.renderer,
+            &udev.shaders,
+            mode.size,
+        ));
+    }
+    // La scène seule (sans curseur ni couche de capture) : c'est ce qu'on capture
+    let scene_start = elements.len();
     match crate::lock::lock_elements(state, &output, &mut udev.renderer) {
         Some(lock) => elements.extend(lock),
         None => {
@@ -583,10 +602,72 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         }
     }
 
-    if state.capture_pending || crate::capture::requested_by_file() {
-        state.capture_pending = false;
-        match crate::capture::save(&mut udev.renderer, &elements, mode.size, scale) {
-            Ok(path) => tracing::info!("capture : {}", path.display()),
+    // Capture par fichier (outils de test) : l'écran tel qu'il est affiché,
+    // couche de sélection et curseur compris
+    if crate::capture::requested_by_file()
+        && let Err(e) =
+            crate::capture::save(&mut udev.renderer, &elements, mode.size, scale, None, false)
+    {
+        tracing::warn!("capture de contrôle impossible : {e}");
+    }
+    let request = state.capture_request.take();
+    if let Some(request) = request {
+        let to_px = |r: smithay::utils::Rectangle<f64, smithay::utils::Logical>| {
+            r.to_physical(scale).to_i32_round()
+        };
+        let result = match request {
+            crate::screenshot::Request::Full => crate::capture::save(
+                &mut udev.renderer,
+                &elements[scene_start..],
+                mode.size,
+                scale,
+                None,
+                false,
+            ),
+            crate::screenshot::Request::Area(rect) => crate::capture::save(
+                &mut udev.renderer,
+                &elements[scene_start..],
+                mode.size,
+                scale,
+                Some(to_px(smithay::utils::Rectangle::new(
+                    rect.to_f64().loc - output_loc.to_f64(),
+                    rect.to_f64().size,
+                ))),
+                false,
+            ),
+            crate::screenshot::Request::Window(window) => {
+                let loc = state.space.element_location(&window).unwrap_or_default();
+                let only = crate::render::single_window_elements(
+                    &window,
+                    loc,
+                    &output,
+                    &mut udev.renderer,
+                    &udev.shaders,
+                    mode.size,
+                );
+                // L'ombre comprise, comme sur macOS
+                let m = theme::SHADOW_BLUR as f64;
+                let geo = window.geometry().size.to_f64();
+                let area = smithay::utils::Rectangle::new(
+                    (loc.to_f64() - output_loc.to_f64()) - smithay::utils::Point::from((m, m)),
+                    (
+                        geo.w + 2.0 * m,
+                        geo.h + 2.0 * m + theme::SHADOW_OFFSET_Y as f64,
+                    )
+                        .into(),
+                );
+                crate::capture::save(
+                    &mut udev.renderer,
+                    &only,
+                    mode.size,
+                    scale,
+                    Some(to_px(area)),
+                    true,
+                )
+            }
+        };
+        match result {
+            Ok((path, png)) => state.capture_done(path, png),
             Err(e) => tracing::warn!("capture impossible : {e}"),
         }
     }

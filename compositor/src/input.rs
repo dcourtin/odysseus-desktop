@@ -30,7 +30,11 @@ enum Action {
     Quit,
     /// Ctrl+Alt+F1…F12 : changer de terminal virtuel (mode tty)
     SwitchVt(i32),
+    /// Capture d'écran : sélection (zone ou fenêtre), ou écran entier
     Capture,
+    CaptureFull,
+    /// Touche pendant une sélection de capture
+    SelectionKey(Keysym),
     Workspace(usize),
     MoveToWorkspace(usize),
     Launcher,
@@ -77,6 +81,7 @@ impl Odysseus {
             return;
         }
         let locked = self.is_locked();
+        let selecting = self.selection.is_some();
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -98,6 +103,14 @@ impl Odysseus {
                                 (raw - 0x1008_FE00) as i32,
                             ));
                         }
+                        // Sélection de capture en cours : elle reçoit tout le clavier
+                        if selecting {
+                            return FilterResult::Intercept(Action::SelectionKey(if pressed {
+                                handle.modified_sym()
+                            } else {
+                                Keysym::NoSymbol
+                            }));
+                        }
                         // Verrouillé : seuls le changement de tty et Super+L (relancer le verrou)
                         if locked {
                             if pressed
@@ -110,6 +123,7 @@ impl Odysseus {
                         }
                         if pressed {
                             let media = match handle.modified_sym() {
+                                Keysym::Print if mods.shift => Some(Action::CaptureFull),
                                 Keysym::Print => Some(Action::Capture),
                                 Keysym::XF86_AudioRaiseVolume => Some(Action::Volume(5)),
                                 Keysym::XF86_AudioLowerVolume => Some(Action::Volume(-5)),
@@ -191,6 +205,10 @@ impl Odysseus {
 
                 let button_state = event.state();
 
+                if selecting {
+                    self.selection_button(button_state == ButtonState::Pressed);
+                    return;
+                }
                 if locked {
                     pointer.button(
                         self,
@@ -272,6 +290,7 @@ impl Odysseus {
                 );
                 pointer.frame(self);
             }
+            InputEvent::PointerAxis { .. } if selecting => {}
             InputEvent::PointerAxis { event, .. } => {
                 let source = event.source();
 
@@ -335,7 +354,13 @@ impl Odysseus {
                 }
             }
             Action::Quit => self.loop_signal.stop(),
-            Action::Capture => self.capture_pending = true,
+            Action::Capture => self.start_selection(),
+            Action::CaptureFull => self.capture_full(),
+            Action::SelectionKey(sym) => {
+                if sym != Keysym::NoSymbol {
+                    self.selection_key(sym);
+                }
+            }
             Action::Launcher => {
                 // Le lanceur est installé à côté du compositeur
                 let launcher = std::env::current_exe()
@@ -395,7 +420,13 @@ impl Odysseus {
     fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: u32) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
-        let under = self.surface_under(pos);
+        // Pendant une sélection de capture, aucun client ne reçoit le pointeur
+        let under = if self.selection.is_some() {
+            self.selection_motion(pos);
+            None
+        } else {
+            self.surface_under(pos)
+        };
         pointer.motion(
             self,
             under,

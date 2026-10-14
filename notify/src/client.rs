@@ -17,8 +17,9 @@ pub fn dnd_file() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".local/state/odysseus/dnd"))
 }
 
-const USAGE: &str =
-    "usage : odysseus-notify [--center | --dnd on|off|toggle | --send TITRE [TEXTE] | --volume]";
+const USAGE: &str = "usage : odysseus-notify [--center | --dnd on|off|toggle | --volume |
+       --send TITRE [TEXTE] [--image FICHIER] [--open FICHIER]]
+  --image : vignette de la notification ; --open : un clic ouvre le fichier (Aperçu)";
 
 pub fn run(args: &[String]) -> i32 {
     let result = match args[0].as_str() {
@@ -34,11 +35,7 @@ pub fn run(args: &[String]) -> i32 {
             };
             on.and_then(|on| call(OWN_IFACE, "SetDoNotDisturb", |m| m.append1(on)).map(|_| ()))
         }
-        "--send" => {
-            let title = args.get(1).cloned().unwrap_or_default();
-            let body = args.get(2).cloned().unwrap_or_default();
-            notify("odysseus", &title, &body, PropMap::new(), 0)
-        }
+        "--send" => send(&args[1..]),
         "--volume" => volume(),
         "-h" | "--help" => {
             println!("{USAGE}");
@@ -74,6 +71,80 @@ fn notify(app: &str, title: &str, body: &str, hints: PropMap, replaces: u32) -> 
             .append2(hints, -1i32)
     })
     .map(|_| ())
+}
+
+/// `--send TITRE [TEXTE] [--image F] [--open F]`
+fn send(args: &[String]) -> Result<(), String> {
+    let mut texts = Vec::new();
+    let (mut image, mut open) = (None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--image" => image = it.next().cloned(),
+            "--open" => open = it.next().cloned(),
+            _ => texts.push(a.clone()),
+        }
+    }
+    let title = texts.first().cloned().unwrap_or_default();
+    let body = texts.get(1).cloned().unwrap_or_default();
+    let mut hints = PropMap::new();
+    if let Some(img) = image {
+        hints.insert("image-path".into(), Variant(Box::new(img)));
+    }
+    let Some(target) = open else {
+        return notify("odysseus", &title, &body, hints, 0);
+    };
+    // Avec --open : on reste à l'écoute ; un clic sur la notification ouvre le fichier
+    let ch = Channel::get_private(BusType::Session).map_err(|e| e.to_string())?;
+    let rule = format!("type='signal',interface='{NAME}',path='{PATH}'");
+    let add = Message::new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "AddMatch",
+    )?
+    .append1(rule);
+    ch.send_with_reply_and_block(add, Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let msg = Message::new_method_call(NAME, PATH, NAME, "Notify")?
+        .append3("odysseus", 0u32, "")
+        .append3(
+            &title,
+            &body,
+            vec!["default".to_string(), "Ouvrir".to_string()],
+        )
+        .append2(hints, -1i32);
+    let id: u32 = ch
+        .send_with_reply_and_block(msg, Duration::from_secs(10))
+        .map_err(|e| e.to_string())?
+        .read1()
+        .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    while std::time::Instant::now() < deadline {
+        ch.read_write(Some(Duration::from_millis(500)))
+            .map_err(|_| "bus de session perdu".to_string())?;
+        while let Some(m) = ch.pop_message() {
+            match (m.member().as_deref(), m.get2::<u32, String>()) {
+                (Some("ActionInvoked"), (Some(n), Some(_))) if n == id => {
+                    open_file(&target);
+                    return Ok(());
+                }
+                (Some("NotificationClosed"), (Some(n), _)) if n == id => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ouvre un fichier : les images dans Aperçu (voisin de ce programme).
+fn open_file(path: &str) {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("apercu")));
+    if let Some(exe) = exe {
+        let _ = Command::new(exe).arg(path).spawn();
+    }
 }
 
 /// Indicateur de volume : lit le volume courant (wpctl) et l'affiche.

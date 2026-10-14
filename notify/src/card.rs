@@ -68,8 +68,23 @@ fn title(n: &Notification) -> &str {
     }
 }
 
-fn text_width() -> f32 {
-    CARD_W - PAD - ICON - GAP - PAD
+/// Taille de l'icône : carrée, ou vraie vignette pour une image large
+/// (capture d'écran, photo) comme sur macOS.
+fn icon_size(n: &Notification) -> (f32, f32) {
+    match n.icon.as_ref() {
+        Some(img) if img.width as f32 >= img.height as f32 * 1.25 => {
+            let w = 76.0;
+            (
+                w,
+                (w * img.height as f32 / img.width.max(1) as f32).clamp(28.0, 52.0),
+            )
+        }
+        _ => (ICON, ICON),
+    }
+}
+
+fn text_width(n: &Notification) -> f32 {
+    CARD_W - PAD - icon_size(n).0 - GAP - PAD
 }
 
 /// Lignes de texte du corps (à l'échelle 1, pour la mise en page).
@@ -77,14 +92,14 @@ fn body_lines(fonts: &Fonts, n: &Notification, max_lines: usize) -> Vec<String> 
     if n.body.is_empty() {
         return Vec::new();
     }
-    fonts.regular.wrap(&n.body, 13.0, text_width(), max_lines)
+    fonts.regular.wrap(&n.body, 13.0, text_width(n), max_lines)
 }
 
 /// Hauteur logique d'une carte
 pub fn height(fonts: &Fonts, n: &Notification, max_lines: usize) -> f32 {
     let lines = body_lines(fonts, n, max_lines).len() as f32;
     let progress = if n.value.is_some() { PROGRESS_H } else { 0.0 };
-    let content = (LINE + lines * LINE + progress).max(ICON);
+    let content = (LINE + lines * LINE + progress).max(icon_size(n).1);
     let buttons = if n.buttons.is_empty() { 0.0 } else { BUTTONS_H };
     PAD + content + PAD + buttons
 }
@@ -135,8 +150,9 @@ pub fn draw(
     // Icône : image, ou pastille à l'initiale de l'application (ou glyphe du volume)
     let (ix, iy) = (px + PAD * s, py + PAD * s);
     let isz = ICON * s;
+    let (iw, ih) = icon_size(n);
     if let Some(img) = n.icon.as_ref() {
-        canvas.image(img, ix, iy, isz, isz, 8.0 * s);
+        canvas.image(img, ix, iy, iw * s, ih * s, 6.0 * s);
     } else if n.synchronous.as_deref() == Some("volume") {
         canvas.fill_rounded(ix, iy, isz, isz, 8.0 * s, theme::TILE_HOVER);
         let glyph = match n.value {
@@ -174,8 +190,8 @@ pub fn draw(
     }
 
     // Titre et heure
-    let tx = px + (PAD + ICON + GAP) * s;
-    let tw = text_width() * s;
+    let tx = px + (PAD + iw + GAP) * s;
+    let tw = text_width(n) * s;
     let mut ty = py + PAD * s;
     let time = when(n);
     let time_w = fonts.regular.measure(&time, theme::FONT_SMALL * s);

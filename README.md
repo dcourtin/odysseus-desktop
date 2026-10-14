@@ -62,7 +62,8 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | glisser une fenêtre contre un bord | aimantation : moitié (gauche/droite), plein (haut), quart (coins) ; la décrocher lui rend sa taille |
 | Mod+← / Mod+→ / Mod+↑ / Mod+↓ | moitié gauche / droite / agrandir / restaurer |
 | Mod+1…9 / Mod+Maj+1…9 | aller au bureau / y envoyer la fenêtre |
-| Impr. écran ou Mod+Maj+s | capture dans ~/Images |
+| Impr. écran ou Mod+Maj+s | capture d'une zone (glisser) ; Espace : d'une fenêtre (avec son ombre) ; Échap : annuler |
+| Maj+Impr. écran | capture de l'écran entier |
 | Mod+l | verrouiller |
 | touches Volume +/−, Muet | volume (avec indicateur) |
 | clic sur les icônes de la barre | centre de contrôle |
@@ -78,6 +79,9 @@ Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Aperçu : ← → (image précédente / suivante),
 molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
 (recadrer), I (infos), F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / une copie).
+
+Captures d'écran : enregistrées dans `~/Images` (« Capture d’écran AAAA-MM-JJ à HH.MM.SS.png »),
+copiées dans le presse-papiers et annoncées par une notification avec vignette (clic : Aperçu).
 
 Animations : `ODYSSEUS_ANIM_SLOW=10` les ralentit toutes dix fois (pour les régler à l'œil).
 

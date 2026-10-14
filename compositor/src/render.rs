@@ -285,6 +285,244 @@ render_elements! {
     CursorTheme=MemoryRenderBufferRenderElement<GlesRenderer>,
 }
 
+/// Rectangle uni (aperçu, voile) dessiné par le shader d'aperçu.
+fn fill_element(
+    shaders: &Shaders,
+    frame: &Frame,
+    rect: Rectangle<f64, Logical>,
+    radius: f32,
+    fill: [f32; 4],
+    border: [f32; 4],
+) -> OdysseusElement {
+    OdysseusElement::Shadow(PixelShaderElement::new(
+        shaders.preview.clone(),
+        rect.to_i32_round(),
+        None,
+        1.0,
+        vec![
+            Uniform::new(
+                "geo",
+                gl_rect(rect, frame.scale, frame.transform, frame.fb_size),
+            ),
+            Uniform::new("radius", radius),
+            Uniform::new("border_width", (1.5 * frame.scale) as f32),
+            Uniform::new("fill", fill),
+            Uniform::new("border", border),
+        ],
+        Kind::Unspecified,
+    ))
+}
+
+/// Étiquette (pastille sombre et texte) dessinée en mémoire, centrée sur `center`.
+fn label_element(
+    renderer: &mut GlesRenderer,
+    text: &str,
+    center: Point<f64, Logical>,
+    scale: f64,
+) -> Option<OdysseusElement> {
+    use common::draw::{Canvas, Text};
+    use smithay::backend::{allocator::Fourcc, renderer::element::memory::MemoryRenderBuffer};
+    static FONT: OnceLock<Option<Text>> = OnceLock::new();
+    let font = FONT
+        .get_or_init(|| Text::load(theme::FONT_BOLD).ok())
+        .as_ref()?;
+    let px = 13.0 * scale as f32;
+    let (w, h) = (
+        (font.measure(text, px) + 24.0 * scale as f32).ceil() as u32,
+        (28.0 * scale).ceil() as u32,
+    );
+    let mut data = vec![0u8; (w * h * 4) as usize];
+    let mut c = Canvas {
+        buf: &mut data,
+        width: w,
+        height: h,
+    };
+    c.fill_rounded(
+        0.0,
+        0.0,
+        w as f32,
+        h as f32,
+        h as f32 / 2.0,
+        common::theme::Rgba::hex(0x000000, 0.72),
+    );
+    font.draw_centered(&mut c, text, w as f32 / 2.0, 0.0, h as f32, px, theme::TEXT);
+    let buffer = MemoryRenderBuffer::from_slice(
+        &data,
+        Fourcc::Argb8888,
+        (w as i32, h as i32),
+        1,
+        Transform::Normal,
+        None,
+    );
+    let loc = center.to_physical(scale) - Point::from((w as f64 / 2.0, h as f64 / 2.0));
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        loc,
+        &buffer,
+        None,
+        None,
+        None,
+        Kind::Unspecified,
+    )
+    .ok()
+    .map(OdysseusElement::CursorTheme)
+}
+
+/// Couche de la capture d'écran, au-dessus de tout (sauf le curseur) : voile,
+/// rectangle tracé et ses dimensions, fenêtre surlignée, éclair de confirmation.
+pub fn overlay_elements(
+    state: &crate::Odysseus,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    fb_size: Size<i32, Physical>,
+) -> Vec<OdysseusElement> {
+    let mut out = Vec::new();
+    let Some(geo) = state.space.output_geometry(output) else {
+        return out;
+    };
+    let scale = output.current_scale().fractional_scale();
+    let frame = Frame {
+        scale,
+        transform: output.current_transform(),
+        fb_size,
+        radius: (theme::WINDOW_RADIUS as f64 * scale) as f32,
+        border_color: [0.0; 4],
+    };
+    let screen = geo.to_f64();
+    let dim = [0.0, 0.0, 0.0, 0.38];
+    let none = [0.0; 4];
+    let white = [1.0, 1.0, 1.0, 1.0];
+
+    if let Some(sel) = state.selection.as_ref() {
+        let hint_at = Point::from((screen.loc.x + screen.size.w / 2.0, screen.loc.y + 60.0));
+        match (sel.mode, sel.rect()) {
+            (crate::screenshot::Mode::Area, Some(r)) => {
+                let r = r.to_f64();
+                // Voile tout autour du rectangle, cadre blanc, dimensions dessous
+                let (x0, y0, x1, y1) = (r.loc.x, r.loc.y, r.loc.x + r.size.w, r.loc.y + r.size.h);
+                let (sx1, sy1) = (screen.loc.x + screen.size.w, screen.loc.y + screen.size.h);
+                for (x, y, w, h) in [
+                    (screen.loc.x, screen.loc.y, screen.size.w, y0 - screen.loc.y),
+                    (screen.loc.x, y1, screen.size.w, sy1 - y1),
+                    (screen.loc.x, y0, x0 - screen.loc.x, y1 - y0),
+                    (x1, y0, sx1 - x1, y1 - y0),
+                ] {
+                    if w > 0.0 && h > 0.0 {
+                        out.push(fill_element(
+                            shaders,
+                            &frame,
+                            Rectangle::new((x, y).into(), (w, h).into()),
+                            0.0,
+                            dim,
+                            none,
+                        ));
+                    }
+                }
+                out.push(fill_element(shaders, &frame, r, 0.0, none, white));
+                let text = format!(
+                    "{} × {}",
+                    (r.size.w * scale).round() as i32,
+                    (r.size.h * scale).round() as i32
+                );
+                let below = (y1 + 22.0).min(sy1 - 20.0);
+                if let Some(l) =
+                    label_element(renderer, &text, (x0 + r.size.w / 2.0, below).into(), scale)
+                {
+                    out.insert(0, l);
+                }
+            }
+            (crate::screenshot::Mode::Area, None) => {
+                out.push(fill_element(
+                    shaders,
+                    &frame,
+                    screen,
+                    0.0,
+                    [0.0, 0.0, 0.0, 0.22],
+                    none,
+                ));
+                if let Some(l) = label_element(
+                    renderer,
+                    "Glissez pour sélectionner · Espace : fenêtre · Échap : annuler",
+                    hint_at,
+                    scale,
+                ) {
+                    out.insert(0, l);
+                }
+            }
+            (crate::screenshot::Mode::Window, _) => {
+                if let Some(w) = state.selection_window_rect() {
+                    let a = theme::ACCENT;
+                    out.push(fill_element(
+                        shaders,
+                        &frame,
+                        w.to_f64(),
+                        frame.radius,
+                        [a.r * 0.3, a.g * 0.3, a.b * 0.3, 0.3],
+                        [a.r, a.g, a.b, 1.0],
+                    ));
+                }
+                if let Some(l) = label_element(
+                    renderer,
+                    "Cliquez sur une fenêtre · Espace : zone · Échap : annuler",
+                    hint_at,
+                    scale,
+                ) {
+                    out.insert(0, l);
+                }
+            }
+        }
+    }
+    // Éclair blanc après la capture
+    if let Some(t) = state.flash {
+        let p = (t.elapsed().as_secs_f64() / 0.28).min(1.0);
+        if p < 1.0 {
+            let a = (0.45 * (1.0 - p) * (1.0 - p)) as f32;
+            out.push(fill_element(
+                shaders,
+                &frame,
+                screen,
+                0.0,
+                [a, a, a, a],
+                none,
+            ));
+        }
+    }
+    out
+}
+
+/// Une fenêtre seule (contenu et ombre), pour la capture d'une fenêtre.
+pub fn single_window_elements(
+    window: &Window,
+    loc: Point<i32, Logical>,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    fb_size: Size<i32, Physical>,
+) -> Vec<OdysseusElement> {
+    let scale = output.current_scale().fractional_scale();
+    let b = theme::WINDOW_BORDER;
+    let frame = Frame {
+        scale,
+        transform: output.current_transform(),
+        fb_size,
+        radius: (theme::WINDOW_RADIUS as f64 * scale) as f32,
+        border_color: [b.r * b.a, b.g * b.a, b.b * b.a, b.a],
+    };
+    let empty_open = HashMap::new();
+    let empty_motion = HashMap::new();
+    let scene = Scene {
+        focused: window.toplevel().map(|t| t.wl_surface()),
+        opening: &empty_open,
+        closing: &[],
+        hide_top_layer: false,
+        motions: &empty_motion,
+        slide: None,
+        snap_preview: None,
+    };
+    window_elements(window, loc, 0.0, renderer, shaders, &frame, &scene)
+}
+
 /// Contenu (coins arrondis) et ombre d'une fenêtre, à sa position animée :
 /// trajet en cours (aimantation, agrandissement…), ouverture, glissement de bureau.
 fn window_elements(
