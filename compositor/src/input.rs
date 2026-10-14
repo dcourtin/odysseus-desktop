@@ -43,6 +43,8 @@ enum Action {
     Lock,
     /// Super+K : aide-mémoire des raccourcis
     Shortcuts,
+    /// Super+A : panneau de l'Assistant
+    Assistant,
     /// Super+← / → / ↑ : ranger la fenêtre active ; Super+↓ : la restaurer
     Snap(crate::snap::Zone),
     Unsnap,
@@ -155,6 +157,7 @@ impl Odysseus {
                                 Keysym::Tab => Some(Action::CycleWindows),
                                 Keysym::l | Keysym::L => Some(Action::Lock),
                                 Keysym::k | Keysym::K => Some(Action::Shortcuts),
+                                Keysym::a | Keysym::A => Some(Action::Assistant),
                                 Keysym::Left => Some(Action::Snap(crate::snap::Zone::Left)),
                                 Keysym::Right => Some(Action::Snap(crate::snap::Zone::Right)),
                                 Keysym::Up => Some(Action::Snap(crate::snap::Zone::Top)),
@@ -383,6 +386,7 @@ impl Odysseus {
             Action::CycleWindows => self.cycle_windows(),
             Action::Lock => self.lock_session(),
             Action::Shortcuts => self.spawn_sibling("odysseus-raccourcis", &[]),
+            Action::Assistant => self.spawn_sibling("odysseus-assistant", &[]),
             Action::Snap(zone) => {
                 if let Some(window) = self.focused_window() {
                     self.snap_window(&window, zone);

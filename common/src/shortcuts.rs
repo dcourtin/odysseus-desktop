@@ -52,6 +52,7 @@ pub const RIGHT: &[Section] = &[
         &[
             (&["Super", "L"], "Verrouiller"),
             (&["Super", "K"], "Aide-mémoire des raccourcis"),
+            (&["Super", "A"], "Assistant (agent du bureau)"),
             (&["Volume +", "Volume −"], "Volume"),
             (&["Muet"], "Couper le son"),
             (&["Ctrl", "Alt", "F1…F12"], "Changer de terminal"),

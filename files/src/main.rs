@@ -110,6 +110,8 @@ enum Hit {
     Terminal(PathBuf),
     /// Décompresser l'archive sélectionnée
     Extract,
+    /// Ouvrir l'Assistant avec l'élément en pièce jointe
+    AskAgent,
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -575,6 +577,23 @@ impl Files {
             Some(Hit::CopyImage) => self.copy_image(),
             Some(Hit::Terminal(dir)) => self.open_terminal(&dir),
             Some(Hit::Extract) => self.extract_selected(),
+            Some(Hit::AskAgent) => {
+                if let Some(path) = self.selected_path() {
+                    let exe = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")));
+                    if let Some(exe) = exe
+                        && let Ok(mut child) = std::process::Command::new(exe)
+                            .arg("--joindre")
+                            .arg(&path)
+                            .process_group(0)
+                            .spawn()
+                    {
+                        std::thread::spawn(move || child.wait());
+                        self.confirm(Hit::AskAgent, Ok(()));
+                    }
+                }
+            }
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -709,6 +728,7 @@ impl Files {
                     | Hit::CloseInfo
                     | Hit::Terminal(_)
                     | Hit::Extract
+                    | Hit::AskAgent
             )
         });
         if hover != self.hover {
@@ -1534,6 +1554,7 @@ fn draw_info(
         ));
     }
     actions.push((icon::COPY, "Copier le chemin", Hit::CopyPath, p.text));
+    actions.push((icon::BOT, "Demander à l'Assistant", Hit::AskAgent, p.text));
     if info::is_image(&d.path) {
         actions.push((icon::IMAGE, "Copier l'image", Hit::CopyImage, p.text));
     }
@@ -1555,6 +1576,7 @@ fn draw_info(
                 Hit::CopyImage => "Image copiée",
                 Hit::Extract => "Décompression…",
                 Hit::Terminal(_) => "Terminal ouvert",
+                Hit::AskAgent => "Assistant ouvert",
                 _ => "Ouverture…",
             };
             (p.success.with_alpha(0.22), icon::CHECK, label, p.success)

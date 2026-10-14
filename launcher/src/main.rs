@@ -64,6 +64,8 @@ enum Entry {
     App(usize),
     /// Exécuter le texte tapé comme commande
     Run(String),
+    /// Poser la question à l'Assistant (« ? question », ou en dernier choix)
+    Ask(String),
 }
 
 struct Launcher {
@@ -233,8 +235,13 @@ impl Launcher {
             .take(limit)
             .map(|(_, i)| Entry::App(i))
             .collect();
-        if !self.query.trim().is_empty() {
+        // « ? question » : rien que l'Assistant
+        if let Some(q) = self.query.trim_start().strip_prefix('?') {
+            self.entries = vec![Entry::Ask(q.trim().to_string())];
+        } else if !self.query.trim().is_empty() {
+            self.entries.truncate(MAX_ROWS - 2);
             self.entries.push(Entry::Run(self.query.trim().to_string()));
+            self.entries.push(Entry::Ask(self.query.trim().to_string()));
         }
         self.selected = 0;
     }
@@ -263,6 +270,18 @@ impl Launcher {
                 }
             }
             Some(Entry::Run(cmd)) => cmd.clone(),
+            Some(Entry::Ask(question)) => {
+                let exe = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")))
+                    .unwrap_or_else(|| "odysseus-assistant".into());
+                let _ = std::process::Command::new(exe)
+                    .arg(question)
+                    .process_group(0)
+                    .spawn();
+                self.exit = true;
+                return;
+            }
             None => return,
         };
         // Groupe de processus à part : l'application survit à la fermeture du lanceur
@@ -492,6 +511,16 @@ impl Launcher {
                     "›".to_string(),
                     0x9a9ab0,
                 ),
+                Entry::Ask(q) => (
+                    if q.is_empty() {
+                        "Demander à l'Assistant".to_string()
+                    } else {
+                        format!("Demander à l'Assistant : « {q} »")
+                    },
+                    "Assistant".to_string(),
+                    "?".to_string(),
+                    0xd97757,
+                ),
             };
             // Icône : celle de l'application, sinon carré arrondi coloré avec l'initiale
             let icon = 30.0 * s;
@@ -499,7 +528,7 @@ impl Launcher {
             let iy = y + (row_h - icon) / 2.0;
             let image = match entry {
                 Entry::App(idx) => self.icon_cache.get(idx).and_then(Option::as_ref),
-                Entry::Run(_) => None,
+                Entry::Run(_) | Entry::Ask(_) => None,
             };
             if let Some(image) = image {
                 c.image(image, ix, iy, icon, icon, 0.0);

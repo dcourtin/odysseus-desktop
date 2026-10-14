@@ -29,6 +29,10 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|---|
 | ![Fichiers](docs/captures/fichiers.png) | ![Lanceur](docs/captures/lanceur.png) |
 
+| Assistant (Super+A) : l'agent choisi, avec les outils du bureau |
+|---|
+| ![Assistant](docs/captures/assistant.png) |
+
 | Réglages : fond d'écran, et six autres pages |
 |---|
 | ![Réglages](docs/captures/reglages.png) |
@@ -61,8 +65,9 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
 | `mcp/` | `odysseus-mcp` : le bureau exposé aux agents (Model Context Protocol) — état du système, écran, réglages, journaux, fenêtres, notifications, captures, actions (notifier, ouvrir, bureaux, thème, fond, lumière de nuit, échelle), presse-papiers ; chaque catégorie autorisée ou non dans Réglages > Agent, chaque appel consigné | fonctionne |
+| `assistant/` | `odysseus-assistant` : panneau de conversation avec l'agent choisi dans Réglages > Agent (Claude Code, Ollama ou commande personnalisée), qui passe par odysseus-mcp ; réponse en direct, outils appelés affichés, fichiers joints (glisser-déposer, Ctrl+V, depuis Fichiers), arrêt avec Échap ; ouvert par Super+A, « ? » dans le lanceur ou Fichiers > Demander à l'Assistant | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
-| `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
+| `launcher/` | Lanceur façon Spotlight (Mod+Espace) ; « ? question » ou dernière ligne : demander à l'Assistant | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
 | `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions selon le type — décompresser une archive, terminal dans un dossier —, glisser-déposer vers d'autres fenêtres ou dans un dossier) | fonctionne |
 | `preview/` | `apercu` : visionneuse d'images (dossier parcouru aux flèches, zoom vers le pointeur, rotation, recadrage, infos EXIF, corbeille) | fonctionne |
@@ -83,6 +88,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Mod+1…9 / Mod+Maj+1…9 | aller au bureau / y envoyer la fenêtre |
 | Impr. écran ou Mod+Maj+s | capture d'une zone (glisser) ; Espace : d'une fenêtre (avec son ombre) ; Échap : annuler |
 | Maj+Impr. écran | capture de l'écran entier |
+| Mod+a | Assistant (Entrée : envoyer, ↑ : rappeler, Ctrl+L : nouvelle conversation, Échap : arrêter puis fermer) |
 | Mod+l | verrouiller |
 | Mod+k (ou Réglages > Raccourcis) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
@@ -106,7 +112,7 @@ connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@6
 Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
 second clic pour inverser), clic sur un élément (panneau d'informations : copier
-le chemin, copier l'image, ouvrir, décompresser, terminal, corbeille), Ctrl+C (copier
+le chemin, copier l'image, ouvrir, décompresser, terminal, demander à l'Assistant, corbeille), Ctrl+C (copier
 le chemin), Ctrl+I (panneau), Ctrl+T (terminal dans le dossier affiché), double-clic sur
 une archive (décompression à côté : zip, tar, gz, xz, bz2, zst), glisser un élément vers une autre fenêtre (un terminal reçoit son
 chemin) ou sur un dossier (déplacement). Aperçu : ← → (image précédente / suivante),
@@ -138,6 +144,7 @@ l'empêche.
     odysseus-notify --center [show]          # centre de notifications (bascule, ou ouvre)
     odysseus-moniteur                        # moniteur système (bascule)
     odysseus-reglages [ecran|fond|clavier…]  # Réglages, sur une page donnée
+    odysseus-assistant [--joindre f] ["question"]  # Assistant (bascule), question posée d'emblée
 
     cargo build --release          # tout compiler
     cargo run -p shell-bar         # lancer la barre (depuis un terminal dans sway)
