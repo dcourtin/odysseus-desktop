@@ -361,7 +361,10 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         return;
     }
     if surface.blanked {
-        // Le prochain queue_frame rallume l'écran
+        // Réveil : état DRM remis à zéro, la prochaine image rallume l'écran
+        if let Err(e) = surface.drm_output.with_compositor(|c| c.reset_state()) {
+            tracing::warn!("rallumage de l'écran : {e}");
+        }
         surface.blanked = false;
         surface.pending = false;
     }
