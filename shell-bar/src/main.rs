@@ -2,9 +2,11 @@
 //! nom de la machine et les bureaux (clic pour y aller, molette pour passer au
 //! suivant). À droite : le moniteur système (jauge), le centre de contrôle
 //! (réseau, son, Bluetooth, Réglages…), la cloche des notifications, puis la
-//! date et l'heure (clic : centre de notifications).
+//! date et l'heure (clic : centre de notifications). Avant eux, les icônes des
+//! applications (zone de notification StatusNotifierItem, menu au clic droit).
 
 mod sway;
+mod tray;
 
 use std::os::fd::AsFd;
 use std::time::Duration;
@@ -15,12 +17,12 @@ use common::theme::{self, icon};
 use smithay_client_toolkit::reexports::client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
@@ -35,6 +37,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -52,8 +55,30 @@ const MOIS: [&str; 12] = [
     "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
     "déc.",
 ];
-/// Code evdev du bouton gauche
+/// Codes evdev des boutons de la souris
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
+
+/// Menu d'une icône de la zone de notification : largeur du panneau, marge
+/// pour l'ombre, hauteur des lignes (en logique)
+const MENU_MARGIN: f32 = 14.0;
+const MENU_ROW: f32 = 30.0;
+const MENU_SEPARATOR: f32 = 9.0;
+const MENU_PAD: f32 = 6.0;
+
+/// Menu ouvert : sa propre surface, au-dessus de tout, qui prend le clavier
+struct TrayMenu {
+    layer: LayerSurface,
+    key: String,
+    entries: Vec<tray::MenuEntry>,
+    /// Ligne survolée ou choisie au clavier
+    hover: Option<usize>,
+    /// Taille logique de la surface (ombre comprise)
+    width: u32,
+    height: u32,
+    configured: bool,
+}
 
 struct Bar {
     registry_state: RegistryState,
@@ -67,7 +92,9 @@ struct Bar {
     layer_shell: LayerShell,
     qh: QueueHandle<Bar>,
     pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
     bold: Text,
+    regular: Text,
     icons: Text,
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
@@ -76,6 +103,11 @@ struct Bar {
     cpu_prev: (u64, u64),
     bell_zone: (f64, f64),
     clock_zone: (f64, f64),
+    /// Icônes des applications, leurs zones cliquables (début, fin, clé)
+    tray: Vec<tray::Item>,
+    tray_zones: Vec<(f64, f64, String)>,
+    tray_cmd: std::sync::mpsc::Sender<tray::Command>,
+    menu: Option<TrayMenu>,
     /// Connexion IPC pour les requêtes et commandes (None hors de sway)
     ipc: Option<sway::Ipc>,
     workspaces: Vec<sway::Workspace>,
@@ -115,6 +147,8 @@ fn main() {
         .and_then(|i| i.workspaces().ok())
         .unwrap_or_default();
     let watch_sway = ipc.is_some();
+    let (tray_tx, tray_rx) = channel::channel::<tray::Update>();
+    let tray_cmd = tray::spawn(tray_tx);
 
     let mut bar = Bar {
         registry_state: RegistryState::new(&globals),
@@ -127,13 +161,19 @@ fn main() {
         layer_shell,
         qh: qh.clone(),
         pointer: None,
+        keyboard: None,
         bold: Text::load(theme::FONT_BOLD).expect("police"),
+        regular: Text::load(theme::FONT_REGULAR).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
         monitor_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
+        tray: Vec::new(),
+        tray_zones: Vec::new(),
+        tray_cmd,
+        menu: None,
         ipc,
         workspaces,
         pills: Vec::new(),
@@ -187,6 +227,18 @@ fn main() {
             },
         );
     }
+
+    // Zone de notification : icônes et menus venus du fil D-Bus
+    handle
+        .insert_source(tray_rx, |event, _, bar| match event {
+            Event::Msg(tray::Update::Items(items)) => {
+                bar.tray = items;
+                bar.draw();
+            }
+            Event::Msg(tray::Update::Menu { key, entries }) => bar.open_menu(key, entries),
+            Event::Closed => {}
+        })
+        .expect("canal de la zone de notification");
 
     // Événements « workspace » de sway, lus dans un fil séparé (lecture bloquante)
     if watch_sway {
@@ -342,7 +394,35 @@ impl Bar {
         }
     }
 
-    fn click(&mut self, x: f64) {
+    fn click(&mut self, x: f64, button: u32) {
+        // Un clic dans la barre ferme le menu ouvert (sur la même icône : seulement le fermer)
+        let menu_key = self.menu.take().map(|m| m.key);
+        if let Some((x0, x1, key)) = self
+            .tray_zones
+            .iter()
+            .find(|(x0, x1, _)| x >= *x0 && x < *x1)
+            .cloned()
+        {
+            if menu_key.as_deref() == Some(key.as_str()) {
+                self.draw();
+                return;
+            }
+            let (cx, cy) = (((x0 + x1) / 2.0) as i32, self.height as i32);
+            let cmd = match button {
+                BTN_RIGHT => tray::Command::Menu(key),
+                BTN_MIDDLE => tray::Command::Secondary { key, x: cx, y: cy },
+                _ => tray::Command::Activate { key, x: cx, y: cy },
+            };
+            let _ = self.tray_cmd.send(cmd);
+            self.draw();
+            return;
+        }
+        if menu_key.is_some() {
+            self.draw();
+        }
+        if button != BTN_LEFT {
+            return;
+        }
         let bell = x >= self.bell_zone.0 && x < self.bell_zone.1;
         if bell || (x >= self.clock_zone.0 && x < self.clock_zone.1) {
             spawn_sibling("odysseus-notify", &["--center"]);
@@ -534,11 +614,377 @@ impl Bar {
         let ix = ix - step;
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
+        // Icônes des applications, à gauche des icônes du bureau
+        let mut tx = mx - step - if agent_watching() { step } else { 0.0 } - 6.0 * sf;
+        let size = 16.0 * sf;
+        self.tray_zones.clear();
+        let menu_key = self.menu.as_ref().map(|m| m.key.clone());
+        for item in self.tray.iter().rev() {
+            highlight(
+                &mut canvas,
+                tx,
+                cy,
+                sf,
+                menu_key.as_deref() == Some(item.key.as_str()),
+            );
+            match &item.icon {
+                Some(img) => canvas.image(img, tx - size / 2.0, cy - size / 2.0, size, size, 0.0),
+                None => {
+                    // Sans icône : l'initiale du titre dans une pastille
+                    let p = theme::palette();
+                    canvas.fill_circle(tx, cy, size / 2.0, p.subtle);
+                    let initial: String = item
+                        .title
+                        .chars()
+                        .take(1)
+                        .collect::<String>()
+                        .to_uppercase();
+                    let fpx = 10.0 * sf;
+                    let iw = self.bold.measure(&initial, fpx);
+                    self.bold.draw_in(
+                        &mut canvas,
+                        &initial,
+                        tx - iw / 2.0,
+                        cy - size / 2.0,
+                        size,
+                        fpx,
+                        p.text,
+                    );
+                }
+            }
+            if item.attention {
+                canvas.fill_circle(
+                    tx + 6.0 * sf,
+                    cy - 6.0 * sf,
+                    3.5 * sf,
+                    theme::palette().accent,
+                );
+            }
+            self.tray_zones.push((
+                ((tx - step / 2.0) / sf) as f64,
+                ((tx + step / 2.0) / sf) as f64,
+                item.key.clone(),
+            ));
+            tx -= step;
+        }
+
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);
         surface.damage_buffer(0, 0, w as i32, h as i32);
         buffer.attach_to(surface).expect("attache du tampon");
         self.layer.commit();
+    }
+}
+
+/// Menu de la zone de notification
+impl Bar {
+    fn open_menu(&mut self, key: String, entries: Vec<tray::MenuEntry>) {
+        self.close_menu();
+        let Some(&(x0, x1, _)) = self.tray_zones.iter().find(|(_, _, k)| *k == key) else {
+            return;
+        };
+        let px = theme::FONT_SIZE;
+        let text_w = entries
+            .iter()
+            .map(|e| self.regular.measure(&e.label, px) + e.depth as f32 * 14.0)
+            .fold(0.0f32, f32::max);
+        let check = if entries.iter().any(|e| e.toggle.is_some()) {
+            22.0
+        } else {
+            0.0
+        };
+        let panel_w = (text_w + 2.0 * 14.0 + check + 4.0).clamp(180.0, 380.0);
+        let panel_h: f32 = 2.0 * MENU_PAD
+            + entries
+                .iter()
+                .map(|e| {
+                    if e.separator {
+                        MENU_SEPARATOR
+                    } else {
+                        MENU_ROW
+                    }
+                })
+                .sum::<f32>();
+        let (w, h) = (
+            (panel_w + 2.0 * MENU_MARGIN).ceil() as u32,
+            (panel_h + 2.0 * MENU_MARGIN).ceil() as u32,
+        );
+        // Centré sous l'icône, sans sortir de l'écran
+        let cx = (x0 + x1) / 2.0;
+        let right = (self.width as f64 - cx - w as f64 / 2.0)
+            .clamp(0.0, (self.width.saturating_sub(w)) as f64);
+        let surface = self.compositor.create_surface(&self.qh);
+        let layer = self.layer_shell.create_layer_surface(
+            &self.qh,
+            surface,
+            Layer::Overlay,
+            Some("odysseus-tray-menu"),
+            None,
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
+        layer.set_size(w, h);
+        layer.set_margin(0, right as i32, 0, 0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        layer.commit();
+        self.menu = Some(TrayMenu {
+            layer,
+            key,
+            entries,
+            hover: None,
+            width: w,
+            height: h,
+            configured: false,
+        });
+        self.draw();
+    }
+
+    fn close_menu(&mut self) {
+        if self.menu.take().is_some() {
+            self.draw();
+        }
+    }
+
+    /// Ligne sous le point (coordonnées logiques de la surface du menu)
+    fn menu_row_at(&self, y: f64) -> Option<usize> {
+        let menu = self.menu.as_ref()?;
+        let mut top = MENU_MARGIN + MENU_PAD;
+        for (i, e) in menu.entries.iter().enumerate() {
+            let h = if e.separator {
+                MENU_SEPARATOR
+            } else {
+                MENU_ROW
+            };
+            if (y as f32) >= top && (y as f32) < top + h {
+                return (!e.separator && !e.header && e.enabled).then_some(i);
+            }
+            top += h;
+        }
+        None
+    }
+
+    fn menu_pointer(&mut self, event: &PointerEvent) {
+        match event.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                let row = self.menu_row_at(event.position.1);
+                if let Some(menu) = self.menu.as_mut()
+                    && menu.hover != row
+                {
+                    menu.hover = row;
+                    self.draw_menu();
+                }
+            }
+            PointerEventKind::Leave { .. } => {
+                if let Some(menu) = self.menu.as_mut()
+                    && menu.hover.take().is_some()
+                {
+                    self.draw_menu();
+                }
+            }
+            PointerEventKind::Press {
+                button: BTN_LEFT | BTN_RIGHT,
+                ..
+            } => {
+                if let Some(row) = self.menu_row_at(event.position.1) {
+                    self.choose(row);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn choose(&mut self, row: usize) {
+        let Some(menu) = self.menu.take() else {
+            return;
+        };
+        if let Some(e) = menu.entries.get(row) {
+            let _ = self.tray_cmd.send(tray::Command::MenuEvent {
+                key: menu.key.clone(),
+                id: e.id,
+            });
+        }
+        self.draw();
+    }
+
+    fn menu_key(&mut self, event: KeyEvent) {
+        let Some(menu) = self.menu.as_mut() else {
+            return;
+        };
+        let choosable: Vec<usize> = menu
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.separator && !e.header && e.enabled)
+            .map(|(i, _)| i)
+            .collect();
+        let pos = menu
+            .hover
+            .and_then(|h| choosable.iter().position(|&i| i == h));
+        match event.keysym {
+            Keysym::Escape => self.close_menu(),
+            Keysym::Down | Keysym::Up if !choosable.is_empty() => {
+                let n = choosable.len();
+                let next = match (pos, event.keysym == Keysym::Down) {
+                    (None, true) => 0,
+                    (None, false) => n - 1,
+                    (Some(p), true) => (p + 1) % n,
+                    (Some(p), false) => (p + n - 1) % n,
+                };
+                menu.hover = Some(choosable[next]);
+                self.draw_menu();
+            }
+            Keysym::Return | Keysym::KP_Enter | Keysym::space => {
+                if let Some(row) = menu.hover {
+                    self.choose(row);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_menu(&mut self) {
+        let Some(menu) = self.menu.as_ref() else {
+            return;
+        };
+        if !menu.configured {
+            return;
+        }
+        let s = self.scale.max(1) as f32;
+        let (w, h) = (menu.width * s as u32, menu.height * s as u32);
+        let Ok((buffer, data)) =
+            self.pool
+                .create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
+        else {
+            return;
+        };
+        let mut c = Canvas {
+            buf: data,
+            width: w,
+            height: h,
+        };
+        c.clear();
+        let p = theme::palette();
+        let (x0, y0) = (MENU_MARGIN * s, MENU_MARGIN * s);
+        let (pw, ph) = (w as f32 - 2.0 * x0, h as f32 - 2.0 * y0);
+        let r = 10.0 * s;
+        c.shadow(x0, y0 + 4.0 * s, pw, ph, r, 18.0 * s, 0.45);
+        c.fill_rounded(x0, y0, pw, ph, r, p.panel.with_alpha(0.98));
+        c.stroke_rounded(x0, y0, pw, ph, r, s.max(1.0), p.panel_border());
+        let px = theme::FONT_SIZE * s;
+        let mut top = y0 + MENU_PAD * s;
+        for (i, e) in menu.entries.iter().enumerate() {
+            if e.separator {
+                let y = top + MENU_SEPARATOR * s / 2.0;
+                c.fill_rect(x0 + 12.0 * s, y, pw - 24.0 * s, s.max(1.0), p.ink(0.08));
+                top += MENU_SEPARATOR * s;
+                continue;
+            }
+            let row_h = MENU_ROW * s;
+            if menu.hover == Some(i) {
+                c.fill_rounded(
+                    x0 + MENU_PAD * s,
+                    top,
+                    pw - 2.0 * MENU_PAD * s,
+                    row_h,
+                    6.0 * s,
+                    p.accent.with_alpha(0.22),
+                );
+            }
+            let indent = e.depth as f32 * 14.0 * s;
+            // Colonne des coches seulement si le menu en a
+            let check = if menu.entries.iter().any(|e| e.toggle.is_some()) {
+                22.0 * s
+            } else {
+                0.0
+            };
+            let tx = x0 + 14.0 * s + check + indent;
+            if e.toggle == Some(true) {
+                self.icons.icon(
+                    &mut c,
+                    icon::CHECK,
+                    x0 + 14.0 * s + 8.0 * s + indent,
+                    top + row_h / 2.0,
+                    13.0 * s,
+                    p.accent,
+                );
+            }
+            let color = if e.header || !e.enabled {
+                p.text_dim
+            } else if menu.hover == Some(i) {
+                p.accent
+            } else {
+                p.text
+            };
+            let font = if e.header { &self.bold } else { &self.regular };
+            let label = font.truncate(&e.label, px, pw - (tx - x0) - 12.0 * s);
+            font.draw_in(&mut c, &label, tx, top, row_h, px, color);
+            top += row_h;
+        }
+        let surface = menu.layer.wl_surface();
+        surface.set_buffer_scale(self.scale.max(1));
+        surface.damage_buffer(0, 0, w as i32, h as i32);
+        if buffer.attach_to(surface).is_ok() {
+            menu.layer.commit();
+        }
+    }
+}
+
+impl KeyboardHandler for Bar {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    /// Clic ailleurs : une autre surface prend le clavier, le menu se ferme.
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.layer.wl_surface() == surface)
+        {
+            self.close_menu();
+        }
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.menu_key(event);
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: Modifiers,
+        _: u32,
+    ) {
     }
 }
 
@@ -584,7 +1030,15 @@ impl CompositorHandler for Bar {
 
 impl LayerShellHandler for Bar {
     /// Surface fermée par le compositeur (sortie disparue…) : on en recrée une.
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.layer.wl_surface() == layer.wl_surface())
+        {
+            self.close_menu();
+            return;
+        }
         self.layer = create_layer(&self.compositor, &self.layer_shell, &self.qh);
         self.configured = false;
     }
@@ -593,10 +1047,17 @@ impl LayerShellHandler for Bar {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if let Some(menu) = self.menu.as_mut()
+            && menu.layer.wl_surface() == layer.wl_surface()
+        {
+            menu.configured = true;
+            self.draw_menu();
+            return;
+        }
         let (w, h) = configure.new_size;
         if w > 0 {
             self.width = w;
@@ -621,6 +1082,9 @@ impl SeatHandler for Bar {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
+        }
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seat_state.get_pointer(qh, &seat) {
                 Ok(pointer) => self.pointer = Some(pointer),
@@ -635,6 +1099,11 @@ impl SeatHandler for Bar {
         _: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
+        }
         if capability == Capability::Pointer
             && let Some(pointer) = self.pointer.take()
         {
@@ -653,13 +1122,19 @@ impl PointerHandler for Bar {
         events: &[PointerEvent],
     ) {
         for event in events {
+            if self
+                .menu
+                .as_ref()
+                .is_some_and(|m| &event.surface == m.layer.wl_surface())
+            {
+                self.menu_pointer(event);
+                continue;
+            }
             if &event.surface != self.layer.wl_surface() {
                 continue;
             }
             match event.kind {
-                PointerEventKind::Press {
-                    button: BTN_LEFT, ..
-                } => self.click(event.position.0),
+                PointerEventKind::Press { button, .. } => self.click(event.position.0, button),
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
                     let dir = if vertical.absolute > 0.0 {
                         "next_on_output"
@@ -700,6 +1175,7 @@ delegate_compositor!(Bar);
 delegate_output!(Bar);
 delegate_seat!(Bar);
 delegate_pointer!(Bar);
+delegate_keyboard!(Bar);
 delegate_shm!(Bar);
 delegate_layer!(Bar);
 delegate_registry!(Bar);

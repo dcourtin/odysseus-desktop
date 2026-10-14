@@ -60,7 +60,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
-| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
+| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite les icônes des applications (zone de notification StatusNotifierItem : la barre tient le registre, clic gauche pour l'action de l'application, clic droit pour son menu dbusmenu, clic du milieu pour l'action secondaire), puis moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; portail des réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
@@ -92,6 +92,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Mod+l | verrouiller |
 | Mod+k (ou Réglages > Raccourcis) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
+| icônes d'applications de la barre | clic : action de l'application (souvent afficher ou masquer sa fenêtre) ; clic droit : son menu (↑ ↓, Entrée, Échap) |
 | icônes de la barre (de gauche à droite) | moniteur système, centre de contrôle (dont l'accès aux Réglages) |
 | cloche de la barre, clic sur l'heure, ou souris dans le coin en haut à droite | centre de notifications (point sur la cloche : notifications non vues) |
 | Ctrl+Alt+F1…F12 | changer de tty |

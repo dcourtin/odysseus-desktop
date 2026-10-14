@@ -1846,6 +1846,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
+ "dbus",
  "serde",
  "serde_json",
  "smithay-client-toolkit",
