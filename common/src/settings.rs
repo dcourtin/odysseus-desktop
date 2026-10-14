@@ -31,40 +31,6 @@ pub struct Settings {
     /// répétitions par seconde
     pub repeat_delay: u32,
     pub repeat_rate: u32,
-    /// Agent du bureau (panneau Assistant) : « claude », « ollama » ou
-    /// « commande » (commande personnalisée, qui reçoit la question en argument)
-    pub agent: String,
-    pub agent_command: String,
-    pub agent_model: String,
-    /// Ce qu'odysseus-mcp laisse faire aux agents
-    pub agent_perms: AgentPerms,
-}
-
-/// Autorisations des agents sur le bureau (odysseus-mcp), par catégorie
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AgentPerms {
-    /// État du système : charge, températures, mémoire, disques, réseau, écran, réglages, journaux
-    pub read: bool,
-    /// Fenêtres, bureaux, historique des notifications
-    pub desktop: bool,
-    /// Captures de l'écran ou d'une fenêtre (envoyées à l'agent)
-    pub screen: bool,
-    /// Actions : notifier, ouvrir, changer de bureau ou de fenêtre, régler le thème…
-    pub act: bool,
-    /// Lire et écrire le presse-papiers
-    pub clipboard: bool,
-}
-
-impl Default for AgentPerms {
-    fn default() -> Self {
-        Self {
-            read: true,
-            desktop: true,
-            screen: false,
-            act: false,
-            clipboard: false,
-        }
-    }
 }
 
 impl Default for Settings {
@@ -82,10 +48,6 @@ impl Default for Settings {
             keyboard: "auto".into(),
             repeat_delay: 300,
             repeat_rate: 25,
-            agent: "claude".into(),
-            agent_command: String::new(),
-            agent_model: "llama3.2".into(),
-            agent_perms: AgentPerms::default(),
         }
     }
 }
@@ -123,14 +85,7 @@ impl Settings {
                 "clavier" if !value.is_empty() => s.keyboard = value.to_string(),
                 "repetition_delai" => s.repeat_delay = num().unwrap_or(300).clamp(150, 1500),
                 "repetition_vitesse" => s.repeat_rate = num().unwrap_or(25).clamp(5, 60),
-                "agent" if !value.is_empty() => s.agent = value.to_string(),
-                "agent_commande" => s.agent_command = value.to_string(),
-                "agent_modele" if !value.is_empty() => s.agent_model = value.to_string(),
-                "agent_lecture" => s.agent_perms.read = value == "oui",
-                "agent_bureau" => s.agent_perms.desktop = value == "oui",
-                "agent_ecran" => s.agent_perms.screen = value == "oui",
-                "agent_actions" => s.agent_perms.act = value == "oui",
-                "agent_presse_papiers" => s.agent_perms.clipboard = value == "oui",
+                // Les clés agent_* ont rejoint agent.json (common::agent)
                 _ => {}
             }
         }
@@ -167,18 +122,6 @@ impl Settings {
         line("clavier", self.keyboard.clone());
         line("repetition_delai", self.repeat_delay.to_string());
         line("repetition_vitesse", self.repeat_rate.to_string());
-        line("agent", self.agent.clone());
-        if !self.agent_command.is_empty() {
-            line("agent_commande", self.agent_command.clone());
-        }
-        line("agent_modele", self.agent_model.clone());
-        let yes = |b: bool| if b { "oui" } else { "non" }.to_string();
-        let p = self.agent_perms;
-        line("agent_lecture", yes(p.read));
-        line("agent_bureau", yes(p.desktop));
-        line("agent_ecran", yes(p.screen));
-        line("agent_actions", yes(p.act));
-        line("agent_presse_papiers", yes(p.clipboard));
         out
     }
 
@@ -239,16 +182,6 @@ mod tests {
             keyboard: "fr:mac".into(),
             repeat_delay: 450,
             repeat_rate: 30,
-            agent: "ollama".into(),
-            agent_command: "mon-agent --question".into(),
-            agent_model: "qwen3".into(),
-            agent_perms: AgentPerms {
-                read: false,
-                desktop: true,
-                screen: true,
-                act: true,
-                clipboard: false,
-            },
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         assert_eq!(Settings::parse(""), Settings::default());

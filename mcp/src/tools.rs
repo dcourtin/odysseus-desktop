@@ -9,7 +9,12 @@ use std::{
     time::Duration,
 };
 
-use common::{ipc, settings::Settings, stats, theme};
+use common::{
+    agent::{AgentConfig, AgentPerms},
+    ipc,
+    settings::Settings,
+    stats, theme,
+};
 use serde_json::{Value, json};
 
 /// Catégories d'autorisation (Réglages > Agent)
@@ -36,8 +41,7 @@ impl Cat {
         }
     }
 
-    fn allowed(self, s: &Settings) -> bool {
-        let p = s.agent_perms;
+    fn allowed(self, p: &AgentPerms) -> bool {
         match self {
             Cat::Always => true,
             Cat::Read => p.read,
@@ -239,8 +243,10 @@ pub fn call(name: &str, args: &Value) -> Value {
     let Some(tool) = TOOLS.iter().find(|t| t.name == name) else {
         return json!({"isError": true, "content": text(format!("Outil inconnu : {name}"))});
     };
+    // Autorisations relues à chaque appel : Réglages > Agent ou agent.json
+    let perms = AgentConfig::load().perms;
     let settings = Settings::load();
-    if !tool.cat.allowed(&settings) {
+    if !tool.cat.allowed(&perms) {
         log(name, false, "catégorie désactivée");
         return json!({"isError": true, "content": text(format!(
             "Refusé : la catégorie « {} » est désactivée dans Réglages > Agent. \
@@ -260,7 +266,7 @@ fn run(name: &str, args: &Value, settings: &Settings) -> Outcome {
     let s = |k: &str| args.get(k).and_then(Value::as_str);
     let n = |k: &str| args.get(k).and_then(Value::as_f64);
     match name {
-        "autorisations" => Ok(text(permissions(settings))),
+        "autorisations" => Ok(text(permissions(&AgentConfig::load().perms))),
         "etat_systeme" => Ok(text(system_state())),
         "ecran" => screen(),
         "reglages" => Ok(text(settings_text(settings))),
@@ -356,8 +362,10 @@ fn summary(args: &Value) -> String {
 
 // --- Lecture --------------------------------------------------------------------
 
-fn permissions(s: &Settings) -> String {
-    let mut out = String::from("Autorisations de l'agent sur ce bureau (Réglages > Agent) :\n");
+fn permissions(p: &AgentPerms) -> String {
+    let mut out = String::from(
+        "Autorisations de l'agent sur ce bureau (Réglages > Agent, ou ~/.config/odysseus/agent.json) :\n",
+    );
     for cat in [
         Cat::Read,
         Cat::Desktop,
@@ -373,7 +381,7 @@ fn permissions(s: &Settings) -> String {
         out.push_str(&format!(
             "- {} : {} ({})\n",
             cat.label(),
-            if cat.allowed(s) { "permis" } else { "refusé" },
+            if cat.allowed(p) { "permis" } else { "refusé" },
             tools.join(", ")
         ));
     }
@@ -565,7 +573,7 @@ fn settings_text(s: &Settings) -> String {
         } else {
             format!("après {} min", s.suspend_min)
         },
-        s.agent
+        AgentConfig::load().agent
     )
 }
 

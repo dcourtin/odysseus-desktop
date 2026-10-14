@@ -59,7 +59,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; portail des réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
-| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (choix de l'agent, autorisations d'odysseus-mcp, activité), À propos | fonctionne |
+| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
 | `mcp/` | `odysseus-mcp` : le bureau exposé aux agents (Model Context Protocol) — état du système, écran, réglages, journaux, fenêtres, notifications, captures, actions (notifier, ouvrir, bureaux, thème, fond, lumière de nuit, échelle), presse-papiers ; chaque catégorie autorisée ou non dans Réglages > Agent, chaque appel consigné | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
@@ -154,13 +154,21 @@ le brancher sur Claude Code (une fois) :
 
     claude mcp add odysseus -s user -- ~/odysseus-desktop/target/release/odysseus-mcp
 
-Catégories, réglées dans Réglages > Agent : lire l'état du système, voir le bureau
+Catégories, réglées dans Réglages > Agent (ou dans `~/.config/odysseus/agent.json`, clé
+`autorisations`) : lire l'état du système, voir le bureau
 (permises par défaut) ; voir l'écran, agir sur le bureau, presse-papiers (refusées par
 défaut). Un refus est expliqué à l'agent ; chaque appel est consigné dans
 `~/.local/state/odysseus/agent.log` et affiché dans Réglages. Pendant une capture, un œil
 rouge s'allume dans la barre. Lancé par un agent qui tourne en root, le serveur prend
 l'identité de l'utilisateur du bureau. Le compositeur offre pour cela, par IPC, la liste
 des fenêtres (`GET_WINDOWS`, 100), `focus <id>` et `agent-capture <fichier> [<id>]`.
+
+Agent local : Réglages > Agent installe Ollama (archive officielle, empreinte SHA-256
+vérifiée, dans `~/.local/opt/ollama`, service utilisateur systemd ; bibliothèques NVIDIA
+retirées sur une carte AMD) et télécharge les modèles du catalogue de `agent.json`
+(clé `modeles_conseilles`, à compléter librement). Sur une carte AMD, le calcul passe par
+Vulkan (Mesa RADV) : `/dev/dri/renderD*` doit appartenir au groupe `render` (règle udev
+de systemd ; le groupe doit exister).
 
 ## Dépendances système
 

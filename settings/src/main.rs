@@ -6,6 +6,7 @@
 //!
 //! `odysseus-reglages [apparence|fond|ecran|clavier|energie|raccourcis|apropos]`
 
+mod agents;
 mod fonds;
 mod system;
 
@@ -112,7 +113,7 @@ const AGENTS: [(&str, &str, &str); 3] = [
     (
         "commande",
         "Commande personnalisée",
-        "clé agent_commande du fichier de réglages",
+        "commande définie dans agent.json",
     ),
 ];
 /// Autorisations d'odysseus-mcp : titre, explication
@@ -175,16 +176,16 @@ const PAGES: [Page; 8] = [
 ];
 
 impl Page {
-    fn info(self) -> (&'static str, char, u32) {
+    fn info(self) -> (&'static str, char) {
         match self {
-            Page::Apparence => ("Apparence", icon::PALETTE, 0x8e6cf0),
-            Page::Fond => ("Fond d'écran", icon::IMAGE, 0x2fb6d6),
-            Page::Ecran => ("Écran", icon::MONITOR, 0x3d7cf0),
-            Page::Clavier => ("Clavier et langue", icon::KEYBOARD, 0x8a8f9c),
-            Page::Energie => ("Énergie", icon::BATTERY_CHARGING, 0x34b35a),
-            Page::Raccourcis => ("Raccourcis", icon::COMMAND, 0xe0607e),
-            Page::Agent => ("Agent", icon::BOT, 0xd97757),
-            Page::APropos => ("À propos", icon::INFO, 0x6b7280),
+            Page::Apparence => ("Apparence", icon::PALETTE),
+            Page::Fond => ("Fond d'écran", icon::IMAGE),
+            Page::Ecran => ("Écran", icon::MONITOR),
+            Page::Clavier => ("Clavier et langue", icon::KEYBOARD),
+            Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
+            Page::Raccourcis => ("Raccourcis", icon::COMMAND),
+            Page::Agent => ("Agent", icon::BOT),
+            Page::APropos => ("À propos", icon::INFO),
         }
     }
 
@@ -228,6 +229,14 @@ enum Hit {
     Revert,
     CopyInfo,
     AgentKind(usize),
+    InstallOllama,
+    PullModel(String),
+    DeleteModel(String),
+    UseModel(String),
+    InstallClaude,
+    UpdateClaude,
+    ClaudeLogin,
+    EditAgentJson,
     Perm(usize),
     CopyMcp,
 }
@@ -269,6 +278,8 @@ struct App {
     msgs: channel::Sender<Msg>,
     page: Page,
     settings: Settings,
+    /// Agent du bureau : ~/.config/odysseus/agent.json (modifiable à la main)
+    agent: common::agent::AgentConfig,
     screen: Option<Screen>,
     night: String,
     locales: Vec<String>,
@@ -283,6 +294,12 @@ struct App {
     confirm: Option<Confirm>,
     toast: Option<(String, Instant)>,
     typed: String,
+    /// Agents : état (programmes, service, modèles), tâches longues en cours,
+    /// modèle dont la suppression est armée (second clic)
+    agent_status: agents::Status,
+    tasks: Vec<(agents::Task, f32, String)>,
+    news: channel::Sender<agents::News>,
+    delete_armed: Option<(String, Instant)>,
     drop_hover: bool,
     width: u32,
     height: u32,
@@ -291,8 +308,12 @@ struct App {
     exit: bool,
 }
 
+/// Une seule fenêtre de Réglages par bureau (affichage Wayland)
 fn pid_file() -> Option<PathBuf> {
-    std::env::var_os("XDG_RUNTIME_DIR").map(|d| PathBuf::from(d).join("odysseus-reglages.pid"))
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    let display = display.rsplit('/').next().unwrap_or("").to_string();
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| PathBuf::from(d).join(format!("odysseus-reglages.{display}.pid")))
 }
 
 /// Déjà ouvert : rien à faire (la fenêtre existe), on renvoie vrai
@@ -346,6 +367,15 @@ fn main() {
         .insert(event_loop.handle())
         .expect("source Wayland");
 
+    let (news, news_rx) = channel::channel::<agents::News>();
+    event_loop
+        .handle()
+        .insert_source(news_rx, |event, _, app| {
+            if let ChannelEvent::Msg(news) = event {
+                app.on_news(news);
+            }
+        })
+        .expect("canal des installations");
     let (msgs, rx) = channel::channel::<Msg>();
     event_loop
         .handle()
@@ -366,9 +396,11 @@ fn main() {
             Generic::new(fd, Interest::READ, Mode::Level),
             |_, fd, app| {
                 theme::drain(fd.as_fd());
-                if theme::reload() {
-                    app.draw();
-                }
+                theme::reload();
+                // agent.json ou reglages modifiés à la main : la page suit
+                app.agent = common::agent::AgentConfig::load();
+                app.settings = Settings::load();
+                app.draw();
                 Ok(PostAction::Continue)
             },
         );
@@ -406,6 +438,7 @@ fn main() {
         msgs,
         page,
         settings: Settings::load(),
+        agent: common::agent::AgentConfig::load(),
         screen: system::screen(),
         night: system::night_mode(),
         locales: system::locales(),
@@ -420,6 +453,10 @@ fn main() {
         confirm: None,
         toast: None,
         typed: String::new(),
+        agent_status: agents::Status::default(),
+        tasks: Vec::new(),
+        news,
+        delete_armed: None,
         drop_hover: false,
         width: 1060,
         height: 720,
@@ -428,6 +465,9 @@ fn main() {
         exit: false,
     };
     app.about = about(&app.screen);
+    if app.page == Page::Agent {
+        app.agent_status = agents::status();
+    }
     app.load_thumbs();
     // Fonds d'odysseus pas encore calculés : un fil, l'un après l'autre
     if !missing.is_empty() {
@@ -516,20 +556,6 @@ fn mcp_command() -> String {
     format!("claude mcp add odysseus -s user -- {}", exe.display())
 }
 
-/// Programme trouvé dans le PATH ou les emplacements usuels
-fn installed(program: &str) -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .map(PathBuf::from)
-        .chain([
-            PathBuf::from(&home).join(".local/bin"),
-            PathBuf::from("/usr/local/bin"),
-        ])
-        .any(|d| d.join(program).exists())
-}
-
 /// odysseus-mcp déjà déclaré dans la configuration de Claude Code de l'utilisateur
 fn mcp_declared() -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -575,6 +601,12 @@ fn read_drop(
 impl App {
     fn toast(&mut self, text: impl Into<String>) {
         self.toast = Some((text.into(), Instant::now()));
+    }
+
+    fn save_agent(&mut self) {
+        if let Err(e) = self.agent.save() {
+            self.toast(format!("agent.json non enregistré : {e}"));
+        }
     }
 
     fn save(&mut self) {
@@ -648,6 +680,48 @@ impl App {
                 }
                 Err(e) => self.toast(format!("Langue non changée : {e}")),
             },
+        }
+        self.draw();
+    }
+
+    fn start(&mut self, task: agents::Task) {
+        if !self.tasks.iter().any(|(t, ..)| *t == task) {
+            self.tasks.push((task, -1.0, "Démarrage…".into()));
+        }
+    }
+
+    fn on_news(&mut self, news: agents::News) {
+        match news {
+            agents::News::Step(task, frac, text) => {
+                match self.tasks.iter_mut().find(|(t, ..)| *t == task) {
+                    Some(entry) => {
+                        entry.1 = frac;
+                        entry.2 = text;
+                    }
+                    None => self.tasks.push((task, frac, text)),
+                }
+            }
+            agents::News::Done(task, result) => {
+                self.tasks.retain(|(t, ..)| *t != task);
+                match result {
+                    Ok(text) => {
+                        // Premier modèle téléchargé : c'est lui que l'agent utilisera
+                        if let agents::Task::Pull(m) = &task
+                            && !self
+                                .agent_status
+                                .models
+                                .iter()
+                                .any(|(n, _)| *n == self.agent.ollama_model)
+                        {
+                            self.agent.ollama_model = m.clone();
+                            self.save_agent();
+                        }
+                        self.toast(text);
+                    }
+                    Err(e) => self.toast(format!("Échec : {e}")),
+                }
+                self.agent_status = agents::status();
+            }
         }
         self.draw();
     }
@@ -757,6 +831,9 @@ impl App {
             Hit::Page(p) => {
                 self.page = p;
                 self.scroll = 0.0;
+                if p == Page::Agent {
+                    self.agent_status = agents::status();
+                }
                 if p == Page::Ecran || p == Page::APropos {
                     self.screen = system::screen();
                     self.about = about(&self.screen);
@@ -875,11 +952,77 @@ impl App {
             }
             Hit::SleepNow => system::suspend_now(),
             Hit::AgentKind(i) => {
-                self.settings.agent = AGENTS[i].0.to_string();
-                self.save();
+                self.agent.agent = AGENTS[i].0.to_string();
+                self.save_agent();
             }
+            Hit::InstallOllama => {
+                self.start(agents::Task::InstallOllama);
+                agents::install_ollama(self.news.clone());
+            }
+            Hit::PullModel(m) => {
+                self.start(agents::Task::Pull(m.clone()));
+                agents::pull(m, self.news.clone());
+            }
+            Hit::DeleteModel(m) => {
+                let armed = self
+                    .delete_armed
+                    .as_ref()
+                    .is_some_and(|(a, at)| *a == m && at.elapsed() < Duration::from_secs(4));
+                if armed {
+                    self.delete_armed = None;
+                    match agents::delete(&m) {
+                        Ok(()) => self.toast(format!("{m} supprimé")),
+                        Err(e) => self.toast(e),
+                    }
+                    self.agent_status = agents::status();
+                } else {
+                    self.delete_armed = Some((m, Instant::now()));
+                }
+            }
+            Hit::UseModel(m) => {
+                self.agent.ollama_model = m;
+                self.agent.agent = "ollama".into();
+                self.save_agent();
+            }
+            Hit::InstallClaude | Hit::UpdateClaude => {
+                let update = hit == Hit::UpdateClaude;
+                self.start(if update {
+                    agents::Task::UpdateClaude
+                } else {
+                    agents::Task::InstallClaude
+                });
+                agents::install_claude(update, self.news.clone());
+            }
+            Hit::EditAgentJson => {
+                // Fichier créé s'il n'existe pas encore, puis ouvert dans l'éditeur
+                if common::agent::path().is_none_or(|p| !p.exists()) {
+                    self.save_agent();
+                }
+                if let Some(path) = common::agent::path() {
+                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+                    let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+                    use std::os::unix::process::CommandExt;
+                    match std::process::Command::new(term)
+                        .arg("--title=agent.json")
+                        .arg(editor)
+                        .arg(&path)
+                        .process_group(0)
+                        .spawn()
+                    {
+                        Ok(mut child) => {
+                            std::thread::spawn(move || child.wait());
+                            self.toast("Enregistrez : Réglages suit le fichier aussitôt");
+                        }
+                        Err(e) => self.toast(format!("Terminal introuvable : {e}")),
+                    }
+                }
+            }
+            Hit::ClaudeLogin => match agents::claude_login() {
+                Ok(()) => self.toast("Dans le terminal : /login, puis suivez les indications"),
+                Err(e) => self.toast(e),
+            },
             Hit::Perm(i) => {
-                let p = &mut self.settings.agent_perms;
+                let p = &mut self.agent.perms;
                 let flag = match i {
                     0 => &mut p.read,
                     1 => &mut p.desktop,
@@ -888,7 +1031,7 @@ impl App {
                     _ => &mut p.clipboard,
                 };
                 *flag = !*flag;
-                self.save();
+                self.save_agent();
             }
             Hit::CopyMcp => match system::copy_text(&mcp_command()) {
                 Ok(()) => self.toast("Commande copiée — collez-la dans un terminal"),
@@ -1007,7 +1150,7 @@ impl App {
         let content_h = bottom + self.scroll + 32.0;
 
         // En-tête : titre de la page, par-dessus le contenu qui défile
-        let (title, _, _) = self.page.info();
+        let (title, _) = self.page.info();
         ui.rect(SIDEBAR_W, 0.0, avail, HEADER_H, p.content);
         ui.bold_text(title, cx, 12.0, 44.0, 22.0, p.text);
         ui.rect(SIDEBAR_W, HEADER_H - 1.0, avail, 1.0, p.ink(0.06));
@@ -1053,7 +1196,7 @@ impl App {
         );
         let mut y = 88.0;
         for page in PAGES {
-            let (label, glyph, color) = page.info();
+            let (label, glyph) = page.info();
             let selected = page == self.page;
             let hovered = ui.hover == Some(Hit::Page(page));
             if selected {
@@ -1068,8 +1211,9 @@ impl App {
             } else if hovered {
                 ui.rounded(10.0, y, SIDEBAR_W - 20.0, 38.0, 8.0, p.ink(0.05));
             }
-            ui.rounded(20.0, y + 7.0, 24.0, 24.0, 7.0, Rgba::hex(color, 1.0));
-            ui.icon(glyph, 32.0, y + 19.0, 14.0, Rgba::hex(0xffffff, 1.0));
+            // Icônes monochromes, comme dans la barre : l'accent pour la page ouverte
+            let icon_color = if selected { p.accent } else { p.text_soft() };
+            ui.icon(glyph, 32.0, y + 19.0, 16.0, icon_color);
             let font_color = if selected { p.text } else { p.text_soft() };
             if selected {
                 ui.bold_text(label, 54.0, y, 38.0, 13.5, font_color);
@@ -1680,78 +1824,228 @@ impl App {
     fn page_agent(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
         let p = theme::palette();
         let mut y = ui.section(x, y, "Agent du bureau");
-        let rh = 52.0;
-        ui.card(x, y, w, AGENTS.len() as f32 * rh);
-        for (i, (id, name, detail)) in AGENTS.iter().enumerate() {
-            let ry = y + i as f32 * rh;
-            let hit = Hit::AgentKind(i);
-            if ui.hover == Some(hit.clone()) {
-                ui.rounded(x + 4.0, ry + 3.0, w - 8.0, rh - 6.0, 8.0, p.ink(0.05));
+        let st = &self.agent_status;
+        let task = |t: &agents::Task| self.tasks.iter().find(|(k, ..)| k == t).cloned();
+
+        // Claude Code
+        let claude_task = task(&agents::Task::InstallClaude).or(task(&agents::Task::UpdateClaude));
+        let ch = 112.0 + if claude_task.is_some() { 30.0 } else { 0.0 };
+        ui.card(x, y, w, ch);
+        let pill = match &st.claude_version {
+            Some(v) => (format!("version {v}"), p.success),
+            None => ("non installé".into(), p.text_dim),
+        };
+        agent_header(
+            ui,
+            x,
+            y,
+            w,
+            0,
+            self.agent.agent == "claude",
+            AGENTS[0].1,
+            AGENTS[0].2,
+            &pill,
+        );
+        let line = match (&st.claude_version, st.claude_logged_in) {
+            (None, _) => "Installeur officiel d'Anthropic, dans ~/.local/bin, sans droits root.",
+            (Some(_), true) => {
+                "Connecté. Les questions et ce que vous autorisez partent chez Anthropic."
             }
-            if i > 0 {
-                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            (Some(_), false) => {
+                "Pas encore connecté : « Se connecter » ouvre un terminal (/login)."
             }
-            let on = self.settings.agent == *id;
-            let (cx, cy) = (x + 26.0, ry + rh / 2.0);
-            if on {
-                ui.circle(cx, cy, 8.0, p.accent);
-                ui.circle(cx, cy, 3.0, p.on_accent);
-            } else {
-                ui.circle(cx, cy, 8.0, p.ink(0.25));
-                ui.circle(cx, cy, 6.5, p.content);
-            }
-            ui.text(
-                name,
+        };
+        ui.text(line, x + 44.0, y + 46.0, 18.0, 11.5, p.text_dim);
+        let by = y + 70.0;
+        match &claude_task {
+            Some((_, frac, text)) => progress(ui, x + 44.0, by + 4.0, w - 62.0, *frac, text),
+            None if st.claude_version.is_none() => ui.button(
                 x + 44.0,
-                ry + 7.0,
-                20.0,
-                13.5,
-                if on { p.text } else { p.text_soft() },
-            );
-            ui.text(detail, x + 44.0, ry + 26.0, 18.0, 11.5, p.text_dim);
-            // Présence du programme
-            let status = match *id {
-                "claude" => Some(installed("claude")),
-                "ollama" => Some(installed("ollama")),
-                _ => None,
-            };
-            if let Some(found) = status {
-                let label = if found { "installé" } else { "introuvable" };
-                let lw = ui.measure(label, 11.0) + 16.0;
-                let color = if found { p.success } else { p.text_dim };
-                ui.rounded(
-                    x + w - 18.0 - lw,
-                    ry + 16.0,
-                    lw,
-                    20.0,
-                    10.0,
-                    color.with_alpha(0.16),
-                );
-                ui.centered(
-                    label,
-                    x + w - 18.0 - lw / 2.0,
-                    ry + 16.0,
-                    20.0,
-                    11.0,
+                by,
+                170.0,
+                "Installer Claude Code",
+                true,
+                Hit::InstallClaude,
+            ),
+            None => {
+                ui.button(
+                    x + 44.0,
+                    by,
+                    130.0,
+                    "Mettre à jour",
                     false,
-                    color,
+                    Hit::UpdateClaude,
+                );
+                ui.button(
+                    x + 184.0,
+                    by,
+                    130.0,
+                    "Se connecter",
+                    !st.claude_logged_in,
+                    Hit::ClaudeLogin,
                 );
             }
-            ui.hit((x, ry, w, rh), hit);
         }
-        y += AGENTS.len() as f32 * rh + 8.0;
+        y += ch + 12.0;
+
+        // Ollama
+        let install = task(&agents::Task::InstallOllama);
+        let oh = if st.ollama_running {
+            70.0 + 36.0 + self.agent.models.len() as f32 * 56.0 + 2.0
+        } else {
+            112.0
+        } + if install.is_some() { 30.0 } else { 0.0 };
+        ui.card(x, y, w, oh);
+        let pill = if st.ollama_running {
+            (format!("version {}", st.ollama_version), p.success)
+        } else if st.ollama_installed {
+            ("service arrêté".into(), p.danger)
+        } else {
+            ("non installé".into(), p.text_dim)
+        };
+        agent_header(
+            ui,
+            x,
+            y,
+            w,
+            1,
+            self.agent.agent == "ollama",
+            AGENTS[1].1,
+            AGENTS[1].2,
+            &pill,
+        );
+        let line = if st.ollama_running {
+            match &st.acceleration {
+                Some(acc) => format!("Calcul : {acc}"),
+                None => "Calcul : connu au premier usage d'un modèle".to_string(),
+            }
+        } else if st.ollama_installed {
+            "Installé ; démarrez-le : systemctl --user start ollama".to_string()
+        } else {
+            "Archive officielle (1,4 Go, empreinte vérifiée), dans ~/.local/opt/ollama, sans droits root.".to_string()
+        };
+        let line = ui.truncate(&line, 11.5, w - 62.0);
+        ui.text(&line, x + 44.0, y + 46.0, 18.0, 11.5, p.text_dim);
+        let mut by = y + 70.0;
+        if let Some((_, frac, text)) = &install {
+            progress(ui, x + 44.0, by + 4.0, w - 62.0, *frac, text);
+            by += 30.0;
+        } else if !st.ollama_installed {
+            ui.button(
+                x + 44.0,
+                by,
+                160.0,
+                "Installer Ollama",
+                true,
+                Hit::InstallOllama,
+            );
+        }
+        if st.ollama_running {
+            ui.text(
+                "Modèles conseillés pour votre carte (16 Go)",
+                x + 44.0,
+                by,
+                24.0,
+                12.0,
+                p.text_soft(),
+            );
+            let mut ry = by + 36.0;
+            for card in &self.agent.models {
+                let (name, label, size, why) = (
+                    card.model.as_str(),
+                    card.name.as_str(),
+                    card.size.as_str(),
+                    card.notes.as_str(),
+                );
+                ui.rect(x + 44.0, ry - 4.0, w - 62.0, 1.0, p.ink(0.06));
+                let installed = st.models.iter().any(|(n, _)| n == name);
+                let chosen = installed && self.agent.ollama_model == name;
+                // Pastille de choix : seulement pour un modèle présent
+                let (cx, cy) = (x + 54.0, ry + 20.0);
+                if chosen {
+                    ui.circle(cx, cy, 7.0, p.accent);
+                    ui.circle(cx, cy, 2.5, p.on_accent);
+                } else if installed {
+                    ui.circle(cx, cy, 7.0, p.ink(0.25));
+                    ui.circle(cx, cy, 5.5, p.tile());
+                    ui.hit((x + 40.0, ry, 30.0, 40.0), Hit::UseModel(name.to_string()));
+                }
+                ui.bold_text(label, x + 70.0, ry + 2.0, 20.0, 13.0, p.text);
+                let lw = ui.measure(label, 13.0);
+                ui.text(size, x + 78.0 + lw, ry + 2.0, 20.0, 11.5, p.text_dim);
+                let why = ui.truncate(why, 11.5, w - 260.0);
+                ui.text(&why, x + 70.0, ry + 21.0, 18.0, 11.5, p.text_dim);
+                let pull = task(&agents::Task::Pull(name.to_string()));
+                let bx = x + w - 18.0 - 130.0;
+                match pull {
+                    Some((_, frac, text)) => progress(ui, bx - 40.0, ry + 10.0, 170.0, frac, &text),
+                    None if installed => {
+                        let armed = self.delete_armed.as_ref().is_some_and(|(m, at)| {
+                            m == name && at.elapsed() < Duration::from_secs(4)
+                        });
+                        let label = if armed { "Confirmer ?" } else { "Supprimer" };
+                        ui.button(
+                            bx,
+                            ry + 3.0,
+                            130.0,
+                            label,
+                            false,
+                            Hit::DeleteModel(name.to_string()),
+                        );
+                    }
+                    // Seul le modèle recommandé est mis en avant
+                    None => ui.button(
+                        bx,
+                        ry + 3.0,
+                        130.0,
+                        "Télécharger",
+                        Some(name) == self.agent.models.first().map(|m| m.model.as_str()),
+                        Hit::PullModel(name.to_string()),
+                    ),
+                }
+                ry += 56.0;
+            }
+        }
+        y += oh + 12.0;
+
+        // Commande personnalisée
+        ui.card(x, y, w, 56.0);
+        let pill = (String::new(), p.text_dim);
+        agent_header(
+            ui,
+            x,
+            y,
+            w,
+            2,
+            self.agent.agent == "commande",
+            AGENTS[2].1,
+            AGENTS[2].2,
+            &pill,
+        );
+        y += 56.0 + 8.0;
         y = ui.note(
             x,
             y,
             w,
             "L'agent choisi répondra dans le panneau Assistant (Super+A, bientôt). Tout agent compatible MCP peut aussi se brancher sur odysseus-mcp.",
-        ) + 16.0;
+        ) + 4.0;
+        ui.button(
+            x,
+            y,
+            210.0,
+            "Modifier agent.json",
+            false,
+            Hit::EditAgentJson,
+        );
+        let hint = "modèles, commandes, adresse d'Ollama, autorisations";
+        ui.text(hint, x + 222.0, y, 34.0, 11.5, p.text_dim);
+        y += 34.0 + 24.0;
 
         // Autorisations
         y = ui.section(x, y, "Ce que l'agent peut faire sur ce bureau");
         let rh = 66.0;
         ui.card(x, y, w, PERMS.len() as f32 * rh);
-        let perms = self.settings.agent_perms;
+        let perms = self.agent.perms;
         let values = [
             perms.read,
             perms.desktop,
@@ -1899,6 +2193,73 @@ impl App {
             "MIT — © 2026 David Courtin · github.com/dcourtin/odysseus-desktop. Travail d'exploration, à ne pas utiliser en production.",
         )
     }
+}
+
+/// En-tête d'une fiche d'agent : choix, nom, précision, étiquette d'état
+#[allow(clippy::too_many_arguments)]
+fn agent_header(
+    ui: &mut Ui,
+    x: f32,
+    y: f32,
+    w: f32,
+    index: usize,
+    on: bool,
+    name: &str,
+    detail: &str,
+    pill: &(String, Rgba),
+) {
+    let p = theme::palette();
+    let (cx, cy) = (x + 26.0, y + 26.0);
+    if on {
+        ui.circle(cx, cy, 8.0, p.accent);
+        ui.circle(cx, cy, 3.0, p.on_accent);
+    } else {
+        ui.circle(cx, cy, 8.0, p.ink(0.25));
+        ui.circle(cx, cy, 6.5, p.tile());
+    }
+    ui.bold_text(name, x + 44.0, y + 8.0, 22.0, 14.0, p.text);
+    let nw = ui.measure(name, 14.0);
+    ui.text(detail, x + 52.0 + nw, y + 9.0, 22.0, 11.5, p.text_dim);
+    if !pill.0.is_empty() {
+        let lw = ui.measure(&pill.0, 11.0) + 16.0;
+        ui.rounded(
+            x + w - 18.0 - lw,
+            y + 14.0,
+            lw,
+            20.0,
+            10.0,
+            pill.1.with_alpha(0.16),
+        );
+        ui.centered(
+            &pill.0,
+            x + w - 18.0 - lw / 2.0,
+            y + 14.0,
+            20.0,
+            11.0,
+            false,
+            pill.1,
+        );
+    }
+    ui.hit((x, y, w * 0.6, 44.0), Hit::AgentKind(index));
+}
+
+/// Barre d'avancement et son texte (avancement inconnu : un segment qui va et vient)
+fn progress(ui: &mut Ui, x: f32, y: f32, w: f32, frac: f32, text: &str) {
+    let p = theme::palette();
+    ui.rounded(x, y, w, 6.0, 3.0, p.ink(0.1));
+    if frac >= 0.0 {
+        ui.rounded(x, y, (w * frac.min(1.0)).max(6.0), 6.0, 3.0, p.accent);
+    } else {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() % 2000)
+            .unwrap_or(0) as f32
+            / 2000.0;
+        let phase = if t < 0.5 { t * 2.0 } else { 2.0 - t * 2.0 };
+        ui.rounded(x + (w - w * 0.3) * phase, y, w * 0.3, 6.0, 3.0, p.accent);
+    }
+    let t = ui.truncate(text, 11.5, w);
+    ui.text(&t, x, y + 8.0, 18.0, 11.5, p.text_dim);
 }
 
 /// Aperçu d'un thème : bureau en miniature (barre, fenêtre, accent)
