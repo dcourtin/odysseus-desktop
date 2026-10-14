@@ -117,6 +117,8 @@ pub struct Odysseus {
     pub screen_power_changed: bool,
     /// Couches « à la demande » qui ont déjà reçu le clavier à leur apparition
     pub layers_focused_once: HashSet<ObjectId>,
+    /// Claviers Apple branchés : disposition « mac » tant qu'il y en a un
+    pub apple_keyboards: usize,
     /// Réglages d'écran demandés par IPC, appliqués par le backend à l'image suivante
     pub pending_scale: Option<f64>,
     pub pending_mode: Option<(i32, i32, Option<i32>)>,
@@ -164,10 +166,12 @@ impl Odysseus {
 
         // Notify clients that we have a keyboard, for the sake of the example we assume that keyboard is always present.
         // You may want to track keyboard hot-plug in real compositor.
-        // Disposition clavier : XKB_DEFAULT_LAYOUT (profil système), fr par défaut
-        let layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "fr".into());
+        // Disposition clavier : XKB_DEFAULT_LAYOUT / _VARIANT / _OPTIONS (fr par défaut)
+        let (layout, variant, options) = keymap_env(false);
         let xkb = XkbConfig {
             layout: &layout,
+            variant: &variant,
+            options,
             ..Default::default()
         };
         seat.add_keyboard(xkb, 200, 25).unwrap();
@@ -238,6 +242,7 @@ impl Odysseus {
             screen_off: false,
             screen_power_changed: false,
             layers_focused_once: HashSet::new(),
+            apple_keyboards: 0,
             pending_scale: None,
             pending_mode: None,
             night: crate::night::NightLight::load(),
@@ -483,6 +488,51 @@ impl Odysseus {
         let mut zone = layer_map_for_output(output).non_exclusive_zone();
         zone.loc += out.loc;
         Some(zone)
+    }
+}
+
+/// Disposition, variante et options XKB ; `apple` : variante « mac »
+/// (touches @ et < à leur place sur un clavier Apple français).
+fn keymap_env(apple: bool) -> (String, String, Option<String>) {
+    let layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "fr".into());
+    let variant = if apple {
+        "mac".to_string()
+    } else {
+        std::env::var("XKB_DEFAULT_VARIANT").unwrap_or_default()
+    };
+    let options = std::env::var("XKB_DEFAULT_OPTIONS").ok();
+    (layout, variant, options)
+}
+
+impl Odysseus {
+    /// Clavier branché ou débranché : un clavier Apple (fabricant USB 05ac)
+    /// passe la disposition en « mac », le dernier retiré la rend au PC.
+    pub fn keyboard_device_changed(&mut self, apple: bool, added: bool) {
+        if !apple {
+            return;
+        }
+        let before = self.apple_keyboards > 0;
+        if added {
+            self.apple_keyboards += 1;
+        } else {
+            self.apple_keyboards = self.apple_keyboards.saturating_sub(1);
+        }
+        let now = self.apple_keyboards > 0;
+        if before == now {
+            return;
+        }
+        let (layout, variant, options) = keymap_env(now);
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let config = XkbConfig {
+            layout: &layout,
+            variant: &variant,
+            options,
+            ..Default::default()
+        };
+        match keyboard.set_xkb_config(self, config) {
+            Ok(()) => tracing::info!("disposition clavier : {layout} {variant}"),
+            Err(e) => tracing::warn!("disposition clavier : {e:?}"),
+        }
     }
 }
 

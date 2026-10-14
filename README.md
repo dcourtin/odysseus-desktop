@@ -42,7 +42,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite le centre de contrôle, la date et l'heure | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier, « Ne pas déranger », indicateur de volume | fonctionne |
-| `control/` | `odysseus-control` : centre de contrôle (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
+| `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
 | `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |
@@ -65,6 +65,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | Impr. écran ou Mod+Maj+s | capture d'une zone (glisser) ; Espace : d'une fenêtre (avec son ombre) ; Échap : annuler |
 | Maj+Impr. écran | capture de l'écran entier |
 | Mod+l | verrouiller |
+| Mod+k (ou l'icône clavier de la barre) | aide-mémoire des raccourcis |
 | touches Volume +/−, Muet | volume (avec indicateur) |
 | clic sur les icônes de la barre | centre de contrôle |
 | clic sur l'heure | centre de notifications |
@@ -82,6 +83,9 @@ molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
 
 Captures d'écran : enregistrées dans `~/Images` (« Capture d’écran AAAA-MM-JJ à HH.MM.SS.png »),
 copiées dans le presse-papiers et annoncées par une notification avec vignette (clic : Aperçu).
+
+Clavier Apple (fabricant USB 05ac) : branché, la disposition passe en Français (Mac) ;
+retiré, elle revient au PC. Variables : `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`, `XKB_DEFAULT_OPTIONS`.
 
 Animations : `ODYSSEUS_ANIM_SLOW=10` les ralentit toutes dix fois (pour les régler à l'œil).
 

@@ -204,8 +204,23 @@ pub fn init_udev(
     event_loop.handle().insert_source(
         LibinputInputBackend::new(libinput.clone()),
         |event, _, data| {
-            if let InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } = event {
-                return;
+            match &event {
+                InputEvent::DeviceAdded { device } | InputEvent::DeviceRemoved { device } => {
+                    use smithay::reexports::input::DeviceCapability;
+                    let apple = device.id_vendor() == 0x05ac
+                        && device.has_capability(DeviceCapability::Keyboard);
+                    let added = matches!(event, InputEvent::DeviceAdded { .. });
+                    if apple {
+                        tracing::info!(
+                            "clavier Apple {} : {}",
+                            if added { "branché" } else { "retiré" },
+                            device.name()
+                        );
+                    }
+                    data.state.keyboard_device_changed(apple, added);
+                    return;
+                }
+                _ => {}
             }
             data.state.process_input_event(event);
         },

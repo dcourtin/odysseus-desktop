@@ -112,6 +112,10 @@ struct Control {
     seat_state: SeatState,
     shm: Shm,
     pool: SlotPool,
+    qh: QueueHandle<Control>,
+    /// Image en attente d'affichage, et dessin demandé entre-temps
+    frame_pending: bool,
+    dirty: bool,
     layer: LayerSurface,
     loop_handle: LoopHandle<'static, Control>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -227,6 +231,9 @@ fn main() {
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         pool: SlotPool::new(1024 * 1024, &shm).expect("pool shm"),
+        qh: qh.clone(),
+        frame_pending: false,
+        dirty: false,
         shm,
         layer,
         loop_handle: handle,
@@ -613,10 +620,21 @@ impl Control {
 
     // --- Dessin --------------------------------------------------------------
 
+    /// Demande un dessin : immédiat, puis au plus un par rafraîchissement
+    /// d'écran (une souris rapide envoie bien plus d'événements que d'images).
     fn draw(&mut self) {
+        if self.frame_pending {
+            self.dirty = true;
+            return;
+        }
+        self.render();
+    }
+
+    fn render(&mut self) {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
+        self.dirty = false;
         let s = self.scale.max(1) as f32;
         let (w, h) = (self.width * s as u32, self.height * s as u32);
         let Ok((buffer, data)) =
@@ -717,6 +735,8 @@ impl Control {
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(s as i32);
         surface.damage_buffer(0, 0, w as i32, h as i32);
+        surface.frame(&self.qh, surface.clone());
+        self.frame_pending = true;
         if buffer.attach_to(surface).is_ok() {
             self.layer.commit();
         }
@@ -850,7 +870,9 @@ impl Drawer<'_, '_> {
             14.0 * s,
             theme::BACKGROUND,
         );
-        self.zone(x + h, y - 4.0, w - h, h + 8.0, Target::Slider);
+        // Tout le curseur répond (le remplissage part du bord gauche) ;
+        // l'icône du haut-parleur, ajoutée après, l'emporte : sourdine
+        self.zone(x, y - 4.0, w, h + 8.0, Target::Slider);
         self.zone(x, y, h, h, Target::Mute);
     }
 
@@ -1600,7 +1622,12 @@ impl CompositorHandler for Control {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.frame_pending = false;
+        if self.dirty {
+            self.render();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -1659,7 +1686,13 @@ impl PointerHandler for Control {
                     button: BTN_LEFT, ..
                 } if self.dragging => {
                     self.dragging = false;
+                    // La valeur relâchée reste affichée (pas de retour à l'ancienne)
+                    if let Some(v) = self.volume.take() {
+                        self.state.sound.volume = v;
+                        self.state.sound.muted = false;
+                    }
                     self.send(Act::Refresh);
+                    self.draw();
                 }
                 _ => {}
             }

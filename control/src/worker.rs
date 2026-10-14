@@ -51,12 +51,25 @@ pub fn run(rx: Receiver<Act>, tx: channel::Sender<Event>) {
     let system = Connection::new_system().ok();
     let session = Connection::new_session().ok();
     let mut last = Snapshot::default();
+    let mut pending = std::collections::VecDeque::new();
     loop {
-        let act = match rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(act) => act,
-            Err(RecvTimeoutError::Timeout) => Act::Refresh,
-            Err(RecvTimeoutError::Disconnected) => return,
+        let mut act = match pending.pop_front() {
+            Some(act) => act,
+            None => match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(act) => act,
+                Err(RecvTimeoutError::Timeout) => Act::Refresh,
+                Err(RecvTimeoutError::Disconnected) => return,
+            },
         };
+        // Curseur du volume glissé : seule la dernière valeur compte
+        if let Act::Volume(_) = act {
+            while let Ok(next) = rx.try_recv() {
+                match next {
+                    Act::Volume(v) => act = Act::Volume(v),
+                    other => pending.push_back(other),
+                }
+            }
+        }
         match act {
             Act::Refresh => {}
             Act::WifiPower(on) => {

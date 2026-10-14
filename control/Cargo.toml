@@ -13,3 +13,7 @@ path = "src/main.rs"
 common.workspace = true
 smithay-client-toolkit.workspace = true
 dbus.workspace = true
+
+[[bin]]
+name = "odysseus-raccourcis"
+path = "src/bin/raccourcis.rs"

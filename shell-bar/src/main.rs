@@ -1,7 +1,8 @@
 //! Barre du haut : surface layer-shell ancrée en haut de l'écran. À gauche le
 //! nom de la machine et les bureaux (clic pour y aller, molette pour passer au
-//! suivant). À droite : l'icône du centre de contrôle (réseau, son, Bluetooth…
-//! y sont tous), puis la date et l'heure (clic : centre de notifications).
+//! suivant). À droite : l'aide-mémoire des raccourcis (clavier), le centre de
+//! contrôle (réseau, son, Bluetooth… y sont tous), puis la date et l'heure
+//! (clic : centre de notifications).
 
 mod sway;
 
@@ -68,6 +69,7 @@ struct Bar {
     icons: Text,
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
+    keys_zone: (f64, f64),
     clock_zone: (f64, f64),
     /// Connexion IPC pour les requêtes et commandes (None hors de sway)
     ipc: Option<sway::Ipc>,
@@ -123,6 +125,7 @@ fn main() {
         bold: Text::load(theme::FONT_BOLD).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
+        keys_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
         ipc,
         workspaces,
@@ -234,6 +237,10 @@ impl Bar {
             spawn_sibling("odysseus-notify", &["--center"]);
             return;
         }
+        if x >= self.keys_zone.0 && x < self.keys_zone.1 {
+            spawn_sibling("odysseus-raccourcis", &[]);
+            return;
+        }
         if x >= self.status_zone.0 && x < self.status_zone.1 {
             spawn_sibling("odysseus-control", &[]);
             return;
@@ -313,7 +320,7 @@ impl Bar {
             .draw(&mut canvas, &clock, clock_x, px, theme::TEXT);
         self.clock_zone = (((clock_x - 6.0 * sf) / sf) as f64, self.width as f64);
 
-        // Centre de contrôle : une seule icône
+        // Centre de contrôle, puis aide-mémoire des raccourcis à sa gauche
         let icon_px = 15.0 * sf;
         let step = 26.0 * sf;
         let cy = h as f32 / 2.0;
@@ -321,6 +328,19 @@ impl Bar {
         let right = ix + step / 2.0;
         self.icons
             .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, theme::TEXT);
+        let kx = ix - step;
+        self.icons.icon(
+            &mut canvas,
+            icon::KEYBOARD,
+            kx,
+            cy,
+            icon_px + sf,
+            theme::TEXT,
+        );
+        self.keys_zone = (
+            ((kx - step / 2.0) / sf) as f64,
+            ((kx + step / 2.0) / sf) as f64,
+        );
         let ix = ix - step;
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
