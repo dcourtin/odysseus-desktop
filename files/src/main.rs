@@ -13,6 +13,7 @@
 //! pour déplacer la fenêtre. Ctrl+C copie le chemin, Ctrl+I montre ou masque
 //! le panneau, Échap le ferme.
 
+mod archive;
 mod dnd;
 mod info;
 mod model;
@@ -105,6 +106,10 @@ enum Hit {
     CopyPath,
     CopyImage,
     Trash,
+    /// Terminal ouvert dans ce dossier
+    Terminal(PathBuf),
+    /// Décompresser l'archive sélectionnée
+    Extract,
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -139,6 +144,8 @@ struct Files {
     hover: Option<Hit>,
     done: Option<(Hit, Instant)>,
     thumbs: channel::Sender<(PathBuf, Option<Image>)>,
+    /// Fin d'une décompression (fil) : ce qui a été créé, ou l'erreur
+    extracts: channel::Sender<Result<PathBuf, String>>,
     loop_handle: LoopHandle<'static, Files>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -265,6 +272,15 @@ fn main() {
 
     // Vignettes du panneau d'informations, décodées dans un fil
     let (thumbs, thumb_rx) = channel::channel::<(PathBuf, Option<Image>)>();
+    let (extracts, extract_rx) = channel::channel::<Result<PathBuf, String>>();
+    event_loop
+        .handle()
+        .insert_source(extract_rx, |event, _, files| {
+            if let ChannelEvent::Msg(result) = event {
+                files.extracted(result);
+            }
+        })
+        .expect("canal des décompressions");
     event_loop
         .handle()
         .insert_source(thumb_rx, |event, _, files| {
@@ -328,6 +344,7 @@ fn main() {
         hover: None,
         done: None,
         thumbs,
+        extracts,
         loop_handle: event_loop.handle(),
         keyboard: None,
         pointer: None,
@@ -407,6 +424,10 @@ impl Files {
             spawn_sibling("apercu", &path);
             return;
         }
+        // Double-clic sur une archive : décompression, comme sur macOS
+        if archive::kind(&path).is_some() {
+            return self.extract_selected();
+        }
         if is_text(&path, entry.size) {
             let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
@@ -467,6 +488,10 @@ impl Files {
             }
             Keysym::h if ctrl => self.browser.toggle_hidden(),
             Keysym::c if ctrl => return self.copy_path(),
+            Keysym::t if ctrl => {
+                let dir = self.browser.cwd.clone();
+                return self.open_terminal(&dir);
+            }
             Keysym::i if ctrl => self.info = !self.info,
             Keysym::Escape if self.info => self.info = false,
             Keysym::q if ctrl => {
@@ -548,6 +573,8 @@ impl Files {
             }
             Some(Hit::CopyPath) => self.copy_path(),
             Some(Hit::CopyImage) => self.copy_image(),
+            Some(Hit::Terminal(dir)) => self.open_terminal(&dir),
+            Some(Hit::Extract) => self.extract_selected(),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -577,6 +604,62 @@ impl Files {
         let text = path.to_string_lossy().into_owned();
         let result = wl_copy(&["--", &text], None);
         self.confirm(Hit::CopyPath, result);
+    }
+
+    /// Terminal (foot, ou $TERMINAL) ouvert dans un dossier
+    fn open_terminal(&mut self, dir: &Path) {
+        let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+        let result = std::process::Command::new(&term)
+            .arg(format!("--working-directory={}", dir.display()))
+            .current_dir(dir)
+            .process_group(0)
+            .spawn();
+        match result {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+                self.confirm(Hit::Terminal(dir.to_path_buf()), Ok(()));
+            }
+            Err(e) => self.confirm(
+                Hit::Terminal(dir.to_path_buf()),
+                Err(format!("Terminal introuvable ({term}) : {e}")),
+            ),
+        }
+    }
+
+    /// Décompresse l'archive sélectionnée dans un fil ; la liste suit à la fin
+    fn extract_selected(&mut self) {
+        let Some(path) = self.selected_path() else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.browser.message = Some(format!("Décompression de « {name} »…"));
+        self.done = Some((Hit::Extract, Instant::now() + Duration::from_secs(3600)));
+        let tx = self.extracts.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(archive::extract(&path));
+        });
+        self.draw();
+    }
+
+    fn extracted(&mut self, result: Result<PathBuf, String>) {
+        self.done = None;
+        match result {
+            Ok(dest) => {
+                self.browser.reload();
+                if let Some(i) = self.browser.entries.iter().position(|e| e.path == dest) {
+                    self.browser.selected = i;
+                }
+                self.browser.message = None;
+                self.navigated();
+            }
+            Err(e) => {
+                self.browser.message = Some(format!("Décompression impossible : {e}"));
+                self.draw();
+            }
+        }
     }
 
     /// L'image elle-même dans le presse-papiers, prête à coller (Ctrl+V)
@@ -619,7 +702,13 @@ impl Files {
         let hover = self.hit_at(x, y).filter(|h| {
             matches!(
                 h,
-                Hit::Open | Hit::CopyPath | Hit::CopyImage | Hit::Trash | Hit::CloseInfo
+                Hit::Open
+                    | Hit::CopyPath
+                    | Hit::CopyImage
+                    | Hit::Trash
+                    | Hit::CloseInfo
+                    | Hit::Terminal(_)
+                    | Hit::Extract
             )
         });
         if hover != self.hover {
@@ -1030,6 +1119,29 @@ impl Files {
                 cx += sep_w;
             }
         }
+        // Terminal dans le dossier affiché, à droite de la barre d'outils (Ctrl+T)
+        {
+            let size = 28.0 * s;
+            let tx = right - 16.0 * s - size;
+            let what = Hit::Terminal(self.browser.cwd.clone());
+            let bg = if self.done.as_ref().is_some_and(|(h, _)| *h == what) {
+                theme::palette().success.with_alpha(0.25)
+            } else if self.hover.as_ref() == Some(&what) {
+                theme::palette().tile_hover()
+            } else {
+                theme::palette().subtle
+            };
+            c.fill_rounded(tx, mid - size / 2.0, size, size, 8.0 * s, bg);
+            self.icons.icon(
+                &mut c,
+                icon::TERMINAL,
+                tx + size / 2.0,
+                mid,
+                15.0 * s,
+                theme::palette().text,
+            );
+            hit(tx, mid - size / 2.0, size, size, what);
+        }
         // Corbeille : bouton « Vider » à droite (second clic pour confirmer)
         if common::trash::files_dir().is_some_and(|t| self.browser.cwd == t)
             && !self.browser.entries.is_empty()
@@ -1043,7 +1155,7 @@ impl Files {
                 "Vider la corbeille"
             };
             let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
-            let bx = right - lw - 16.0 * s;
+            let bx = right - lw - 56.0 * s;
             let bh = 28.0 * s;
             let bg = if armed {
                 theme::palette().danger
@@ -1406,10 +1518,22 @@ fn draw_info(
     y += 6.0 * s;
 
     // Actions rapides
-    let mut actions = vec![
-        (icon::EXTERNAL_LINK, "Ouvrir", Hit::Open, p.text),
-        (icon::COPY, "Copier le chemin", Hit::CopyPath, p.text),
-    ];
+    // Selon la nature de l'élément : archive, dossier, image…
+    let mut actions = Vec::new();
+    if archive::kind(&d.path).is_some() {
+        actions.push((icon::PACKAGE_OPEN, "Décompresser ici", Hit::Extract, p.text));
+    } else {
+        actions.push((icon::EXTERNAL_LINK, "Ouvrir", Hit::Open, p.text));
+    }
+    if d.is_dir {
+        actions.push((
+            icon::TERMINAL,
+            "Terminal dans ce dossier",
+            Hit::Terminal(d.path.clone()),
+            p.text,
+        ));
+    }
+    actions.push((icon::COPY, "Copier le chemin", Hit::CopyPath, p.text));
     if info::is_image(&d.path) {
         actions.push((icon::IMAGE, "Copier l'image", Hit::CopyImage, p.text));
     }
@@ -1429,6 +1553,8 @@ fn draw_info(
             let label = match what {
                 Hit::CopyPath => "Chemin copié",
                 Hit::CopyImage => "Image copiée",
+                Hit::Extract => "Décompression…",
+                Hit::Terminal(_) => "Terminal ouvert",
                 _ => "Ouverture…",
             };
             (p.success.with_alpha(0.22), icon::CHECK, label, p.success)

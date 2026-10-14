@@ -28,6 +28,7 @@ pub enum Request {
     ShowCenter,
     SetDnd(bool),
     GetDnd(Message),
+    GetHistory(Message),
 }
 
 pub struct Bus {
@@ -57,6 +58,7 @@ const INTROSPECTION: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS 
   <method name="ShowCenter"/>
   <method name="SetDoNotDisturb"><arg direction="in" type="b"/></method>
   <method name="GetDoNotDisturb"><arg direction="out" type="b"/></method>
+  <method name="GetHistory"><arg direction="out" type="a(ssss)"/></method>
  </interface>
  <interface name="org.freedesktop.DBus.Introspectable">
   <method name="Introspect"><arg direction="out" type="s"/></method>
@@ -141,6 +143,7 @@ impl Bus {
                     self.reply(msg.method_return());
                 }
                 "GetDoNotDisturb" => requests.push(Request::GetDnd(msg)),
+                "GetHistory" => requests.push(Request::GetHistory(msg)),
                 "Introspect" => self.reply(msg.method_return().append1(INTROSPECTION)),
                 "Ping" => self.reply(msg.method_return()),
                 _ => self.reply(msg.error(

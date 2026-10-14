@@ -15,6 +15,7 @@ mod card;
 mod client;
 mod icons;
 mod model;
+mod portal;
 
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
@@ -113,6 +114,8 @@ struct App {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     fonts: Fonts,
     bus: Bus,
+    /// Portail des réglages d'apparence (Firefox, GTK 4), si aucun autre ne tourne
+    portal: Option<portal::Portal>,
     store: Store,
     /// Dernière valeur écrite pour la barre
     unseen_published: Option<usize>,
@@ -176,6 +179,22 @@ fn main() {
         )
         .expect("source D-Bus");
 
+    // Portail d'apparence : Firefox et GTK suivent le thème clair ou sombre
+    let portal = portal::Portal::connect();
+    if let Some(fd) = portal.as_ref().map(|p| p.fd()) {
+        handle
+            .insert_source(
+                Generic::new(unsafe { FdWrapper::new(fd) }, Interest::READ, Mode::Level),
+                |_, _, app| {
+                    if let Some(portal) = app.portal.as_mut() {
+                        portal.poll();
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
+            .expect("source du portail");
+    }
+
     // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
     if let Some(fd) = theme::watch() {
         let _ = handle.insert_source(
@@ -183,10 +202,11 @@ fn main() {
             |_, fd, app| {
                 theme::drain(fd.as_fd());
                 if theme::reload() {
-                    {
-                        app.draw_banners();
-                        app.redraw_center();
-                    };
+                    app.draw_banners();
+                    app.redraw_center();
+                    if let Some(portal) = app.portal.as_ref() {
+                        portal.theme_changed();
+                    }
                 }
                 Ok(PostAction::Continue)
             },
@@ -223,6 +243,7 @@ fn main() {
             icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         },
         bus,
+        portal,
         store,
         unseen_published: None,
         banners: None,
@@ -306,6 +327,25 @@ impl App {
                 Request::GetDnd(msg) => {
                     let reply = msg.method_return().append1(self.store.dnd);
                     self.bus.reply(reply);
+                }
+                // Bannières affichées puis historique : application, titre,
+                // texte, heure (ISO 8601) — pour les agents (odysseus-mcp)
+                Request::GetHistory(msg) => {
+                    let list: Vec<(String, String, String, String)> = self
+                        .store
+                        .banners
+                        .iter()
+                        .chain(self.store.history.iter())
+                        .map(|n| {
+                            (
+                                n.app_name.clone(),
+                                n.summary.clone(),
+                                n.body.clone(),
+                                n.time.to_rfc3339(),
+                            )
+                        })
+                        .collect();
+                    self.bus.reply(msg.method_return().append1(list));
                 }
             }
         }

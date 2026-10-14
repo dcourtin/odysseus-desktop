@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+mod agent;
 mod anim;
 mod capture;
 mod closing;

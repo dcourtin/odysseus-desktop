@@ -708,6 +708,53 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     {
         tracing::warn!("capture de contrôle impossible : {e}");
     }
+    // Capture pour un agent (odysseus-mcp) : écran tel quel, ou une fenêtre
+    if let Some(request) = state.agent_capture.take() {
+        let window = request.window.and_then(|id| state.window_by_id(id));
+        let png = match window {
+            Some((window, _)) => {
+                let loc = state.space.element_location(&window).unwrap_or_default();
+                let only = crate::render::single_window_elements(
+                    &window,
+                    loc,
+                    &output,
+                    &mut udev.renderer,
+                    &udev.shaders,
+                    mode.size,
+                );
+                let geo = smithay::utils::Rectangle::new(
+                    loc.to_f64() - output_loc.to_f64(),
+                    window.geometry().size.to_f64(),
+                );
+                crate::capture::render_png(
+                    &mut udev.renderer,
+                    &only,
+                    mode.size,
+                    scale,
+                    Some(geo.to_physical(scale).to_i32_round()),
+                    true,
+                )
+            }
+            None => crate::capture::render_png(
+                &mut udev.renderer,
+                &elements[scene_start..],
+                mode.size,
+                scale,
+                None,
+                false,
+            ),
+        };
+        // Écriture puis renommage : l'agent ne lit jamais un fichier à moitié écrit
+        let tmp = request.path.with_extension("tmp");
+        match png.map_err(|e| e.to_string()).and_then(|png| {
+            std::fs::write(&tmp, png)
+                .and_then(|_| std::fs::rename(&tmp, &request.path))
+                .map_err(|e| e.to_string())
+        }) {
+            Ok(()) => tracing::info!("capture pour un agent : {}", request.path.display()),
+            Err(e) => tracing::warn!("capture pour un agent impossible : {e}"),
+        }
+    }
     let request = state.capture_request.take();
     if let Some(request) = request {
         let to_px = |r: smithay::utils::Rectangle<f64, smithay::utils::Logical>| {

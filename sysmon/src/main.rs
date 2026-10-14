@@ -7,7 +7,7 @@
 //! Mesures une fois par seconde dans un fil ; les valeurs glissent de l'une à
 //! l'autre. Se ferme avec Échap ou dès qu'on clique ailleurs.
 
-mod stats;
+use common::stats;
 
 use std::{
     f32::consts::TAU,

@@ -66,6 +66,7 @@ pub const RIGHT: &[Section] = &[
             (&["Ctrl", "Z"], "Annuler la mise à la corbeille"),
             (&["Ctrl", "C"], "Copier le chemin (Fichiers)"),
             (&["Ctrl", "I"], "Panneau d'informations"),
+            (&["Ctrl", "T"], "Terminal dans le dossier (Fichiers)"),
             (&["←", "→"], "Image précédente / suivante"),
             (&["R"], "Pivoter"),
             (&["C", "Entrée"], "Recadrer"),

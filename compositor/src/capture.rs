@@ -40,6 +40,23 @@ pub fn save(
     crop: Option<Rectangle<i32, Physical>>,
     transparent: bool,
 ) -> Result<(PathBuf, Vec<u8>), Box<dyn Error>> {
+    let png = render_png(renderer, elements, size, scale, crop, transparent)?;
+    let dir = PathBuf::from(std::env::var("HOME")?).join("Images");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(crate::screenshot::file_name());
+    std::fs::write(&path, &png)?;
+    Ok((path, png))
+}
+
+/// Comme [`save`], sans rien enregistrer : les octets PNG seulement.
+pub fn render_png(
+    renderer: &mut GlesRenderer,
+    elements: &[OdysseusElement],
+    size: Size<i32, Physical>,
+    scale: f64,
+    crop: Option<Rectangle<i32, Physical>>,
+    transparent: bool,
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let buffer_size: Size<i32, Buffer> = (size.w, size.h).into();
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let mapping = {
@@ -102,9 +119,5 @@ pub fn save(
         area.size.h as u32,
         image::ExtendedColorType::Rgba8,
     )?;
-    let dir = PathBuf::from(std::env::var("HOME")?).join("Images");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(crate::screenshot::file_name());
-    std::fs::write(&path, &png)?;
-    Ok((path, png))
+    Ok(png)
 }

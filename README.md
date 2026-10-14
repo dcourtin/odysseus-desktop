@@ -1,6 +1,6 @@
 # odysseus-desktop
 
-Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copier.
+Bureau Wayland personnel en Rust : rapide, sobre.
 
 > ⚠️ **Travail d'exploration — à ne pas utiliser en production.**
 > Ce dépôt est un terrain d'expérimentation personnel, construit pour une seule
@@ -8,8 +8,7 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 > audité, ni testé au-delà de cette machine, ni maintenu pour d'autres usages :
 > l'écran de verrouillage, la gestion de session et le compositeur n'offrent
 > aucune garantie de sécurité ou de stabilité. Les chemins, réglages et choix
-> matériels y sont souvent codés en dur. À lire, à piocher, à s'en inspirer —
-> pas à déployer.
+> matériels y sont souvent codés en dur.
 >
 > *Exploratory work — not for production use. Personal experiment built for a
 > single machine; no security or stability guarantees.*
@@ -58,13 +57,14 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
 | `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
-| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume | fonctionne |
+| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; portail des réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
-| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, À propos | fonctionne |
+| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (choix de l'agent, autorisations d'odysseus-mcp, activité), À propos | fonctionne |
+| `mcp/` | `odysseus-mcp` : le bureau exposé aux agents (Model Context Protocol) — état du système, écran, réglages, journaux, fenêtres, notifications, captures, actions (notifier, ouvrir, bureaux, thème, fond, lumière de nuit, échelle), presse-papiers ; chaque catégorie autorisée ou non dans Réglages > Agent, chaque appel consigné | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
-| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions rapides, glisser-déposer vers d'autres fenêtres ou dans un dossier) | fonctionne |
+| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions selon le type — décompresser une archive, terminal dans un dossier —, glisser-déposer vers d'autres fenêtres ou dans un dossier) | fonctionne |
 | `preview/` | `apercu` : visionneuse d'images (dossier parcouru aux flèches, zoom vers le pointeur, rotation, recadrage, infos EXIF, corbeille) | fonctionne |
 
 ## Raccourcis (Mod = Super sur tty, Alt dans une fenêtre sway)
@@ -106,8 +106,9 @@ connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@6
 Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
 second clic pour inverser), clic sur un élément (panneau d'informations : copier
-le chemin, copier l'image, ouvrir, corbeille), Ctrl+C (copier le chemin), Ctrl+I
-(panneau), glisser un élément vers une autre fenêtre (un terminal reçoit son
+le chemin, copier l'image, ouvrir, décompresser, terminal, corbeille), Ctrl+C (copier
+le chemin), Ctrl+I (panneau), Ctrl+T (terminal dans le dossier affiché), double-clic sur
+une archive (décompression à côté : zip, tar, gz, xz, bz2, zst), glisser un élément vers une autre fenêtre (un terminal reçoit son
 chemin) ou sur un dossier (déplacement). Aperçu : ← → (image précédente / suivante),
 molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
 (recadrer), I (infos), F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / une copie).
@@ -145,6 +146,21 @@ l'empêche.
 Pour lancer la barre au démarrage de sway, ajouter dans `~/.config/sway/config` :
 
     exec ~/odysseus-desktop/target/release/shell-bar
+
+## Agents (MCP)
+
+`odysseus-mcp` parle le Model Context Protocol sur l'entrée et la sortie standard. Pour
+le brancher sur Claude Code (une fois) :
+
+    claude mcp add odysseus -s user -- ~/odysseus-desktop/target/release/odysseus-mcp
+
+Catégories, réglées dans Réglages > Agent : lire l'état du système, voir le bureau
+(permises par défaut) ; voir l'écran, agir sur le bureau, presse-papiers (refusées par
+défaut). Un refus est expliqué à l'agent ; chaque appel est consigné dans
+`~/.local/state/odysseus/agent.log` et affiché dans Réglages. Pendant une capture, un œil
+rouge s'allume dans la barre. Lancé par un agent qui tourne en root, le serveur prend
+l'identité de l'utilisateur du bureau. Le compositeur offre pour cela, par IPC, la liste
+des fenêtres (`GET_WINDOWS`, 100), `focus <id>` et `agent-capture <fichier> [<id>]`.
 
 ## Dépendances système
 

@@ -200,7 +200,38 @@ pub fn set(id: &str) -> std::io::Result<()> {
     std::fs::write(&tmp, id)?;
     std::fs::rename(&tmp, &path)?;
     reload();
+    gtk_preference(palette().ink == 0xffffff);
     Ok(())
+}
+
+/// Préférence sombre pour les applications GTK 3 et 4 (lue à leur démarrage ;
+/// le portail d'odysseus-notify prévient celles qui sont déjà ouvertes)
+fn gtk_preference(dark: bool) {
+    let Some(config) = config_path().and_then(|p| p.parent()?.parent().map(PathBuf::from)) else {
+        return;
+    };
+    let key = "gtk-application-prefer-dark-theme";
+    for version in ["gtk-3.0", "gtk-4.0"] {
+        let path = config.join(version).join("settings.ini");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(key))
+            .map(String::from)
+            .collect();
+        let line = format!("{key}={dark}");
+        match lines.iter().position(|l| l.trim() == "[Settings]") {
+            Some(i) => lines.insert(i + 1, line),
+            None => {
+                lines.insert(0, "[Settings]".into());
+                lines.insert(1, line);
+            }
+        }
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, lines.join("\n") + "\n");
+    }
 }
 
 /// Surveillance du réglage (inotify) : le descripteur devient lisible quand le
@@ -327,4 +358,9 @@ pub mod icon {
     pub const SPARKLES: char = '\u{e412}';
     pub const COMMAND: char = '\u{e09a}';
     pub const CHECK_CIRCLE: char = '\u{e07c}';
+    pub const EYE: char = '\u{e0ba}';
+    pub const BOT: char = '\u{e1bb}';
+    pub const SHIELD_CHECK: char = '\u{e1ff}';
+    pub const TERMINAL: char = '\u{e181}';
+    pub const PACKAGE_OPEN: char = '\u{e2cc}';
 }

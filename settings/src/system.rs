@@ -2,12 +2,7 @@
 //! (IPC compatible sway : écran, lumière de nuit), systemd-localed (langue du
 //! système, par D-Bus), et quelques commandes (presse-papiers, veille).
 
-use std::{
-    io::{Read, Write},
-    os::unix::{net::UnixStream, process::CommandExt},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{os::unix::process::CommandExt, path::PathBuf, time::Duration};
 
 use dbus::blocking::{Connection, stdintf::org_freedesktop_dbus::Properties};
 
@@ -51,47 +46,15 @@ impl Screen {
     }
 }
 
-fn ipc_path() -> Option<PathBuf> {
-    if let Ok(sock) = std::env::var("SWAYSOCK") {
-        return Some(sock.into());
-    }
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
-    let display = std::env::var("WAYLAND_DISPLAY").ok()?;
-    Some(PathBuf::from(dir).join(format!("odysseus-ipc.{display}.sock")))
-}
-
-/// Un message IPC (protocole i3) et sa réponse
-fn ipc(kind: u32, payload: &str) -> Result<String, String> {
-    let path = ipc_path().ok_or("compositeur injoignable")?;
-    let mut stream = UnixStream::connect(path).map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|e| e.to_string())?;
-    let mut msg = b"i3-ipc".to_vec();
-    msg.extend_from_slice(&(payload.len() as u32).to_ne_bytes());
-    msg.extend_from_slice(&kind.to_ne_bytes());
-    msg.extend_from_slice(payload.as_bytes());
-    stream.write_all(&msg).map_err(|e| e.to_string())?;
-    let mut header = [0u8; 14];
-    stream.read_exact(&mut header).map_err(|e| e.to_string())?;
-    let len = u32::from_ne_bytes([header[6], header[7], header[8], header[9]]) as usize;
-    let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&body).into_owned())
-}
-
 /// Commande au compositeur (« output scale 1.5 », « nightlight auto »…)
 pub fn command(cmd: &str) -> Result<(), String> {
-    if ipc(0, cmd)?.contains("\"success\":true") {
-        Ok(())
-    } else {
-        Err(format!("commande refusée : {cmd}"))
-    }
+    common::ipc::command(cmd)
 }
 
 /// Écran affiché (le premier)
 pub fn screen() -> Option<Screen> {
-    let json: serde_json::Value = serde_json::from_str(&ipc(3, "").ok()?).ok()?;
+    let json: serde_json::Value =
+        serde_json::from_str(&common::ipc::request(common::ipc::GET_OUTPUTS, "").ok()?).ok()?;
     let o = json.as_array()?.first()?;
     let mode = |v: &serde_json::Value| -> Option<(i32, i32, i32)> {
         Some((

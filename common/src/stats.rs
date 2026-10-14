@@ -3,7 +3,7 @@
 //! graphique AMD (charge, mémoire vidéo, température, consommation,
 //! ventilateur), disques (place et débit), réseau, processus les plus actifs.
 
-use common::sysinfo;
+use crate::sysinfo;
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -99,6 +99,12 @@ pub struct Sampler {
     gpu_dir: Option<PathBuf>,
     clk_tck: f64,
     page: u64,
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sampler {

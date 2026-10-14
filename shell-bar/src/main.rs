@@ -214,7 +214,17 @@ fn main() {
     }
 }
 
-/// Lance un programme d'odysseus installé à côté de la barre.
+/// Un agent regarde l'écran : marqueur posé par odysseus-mcp à chaque capture.
+/// Il ne vaut que 6 s (même si l'agent s'arrête avant de l'enlever) ; la barre
+/// se redessine chaque seconde, le témoin s'éteint donc de lui-même.
+fn agent_watching() -> bool {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .and_then(|d| std::fs::metadata(std::path::Path::new(&d).join("odysseus-agent-ecran")).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < std::time::Duration::from_secs(6))
+}
+
 /// Panneau d'odysseus ouvert : son processus vit (fichier .pid), ou, pour le
 /// centre de notifications, son marqueur existe
 fn panel_open(name: &str) -> bool {
@@ -278,6 +288,7 @@ fn notification_state() -> (bool, bool) {
     (dnd, unseen)
 }
 
+/// Lance un programme d'odysseus installé à côté de la barre.
 fn spawn_sibling(name: &str, args: &[&str]) {
     let path = std::env::current_exe()
         .ok()
@@ -505,6 +516,21 @@ impl Bar {
             ((mx - step / 2.0) / sf) as f64,
             ((mx + step / 2.0) / sf) as f64,
         );
+        // Témoin : un agent capture l'écran en ce moment (odysseus-mcp)
+        if agent_watching() {
+            let ex = mx - step;
+            let danger = theme::palette().danger;
+            canvas.fill_rounded(
+                ex - 13.0 * sf,
+                cy - 11.0 * sf,
+                26.0 * sf,
+                22.0 * sf,
+                7.0 * sf,
+                danger.with_alpha(0.22),
+            );
+            self.icons
+                .icon(&mut canvas, icon::EYE, ex, cy, icon_px, danger);
+        }
         let ix = ix - step;
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 

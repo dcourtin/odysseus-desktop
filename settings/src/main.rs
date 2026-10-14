@@ -101,6 +101,43 @@ const REPEAT_RATE: [(u32, &str); 4] = [
     (35, "Rapide"),
     (50, "Très rapide"),
 ];
+/// Agents proposés : réglage, nom, précision
+const AGENTS: [(&str, &str, &str); 3] = [
+    ("claude", "Claude Code", "Anthropic, en ligne"),
+    (
+        "ollama",
+        "Ollama",
+        "modèle local : rien ne quitte la machine",
+    ),
+    (
+        "commande",
+        "Commande personnalisée",
+        "clé agent_commande du fichier de réglages",
+    ),
+];
+/// Autorisations d'odysseus-mcp : titre, explication
+const PERMS: [(&str, &str); 5] = [
+    (
+        "Lire l'état du système",
+        "Charge, températures, mémoire, disques, réseau, écran, réglages, journaux d'odysseus.",
+    ),
+    (
+        "Voir le bureau",
+        "Fenêtres ouvertes et leurs titres, bureaux, historique des notifications.",
+    ),
+    (
+        "Voir l'écran",
+        "Captures de l'écran ou d'une fenêtre. Un témoin s'allume dans la barre ; avec un agent en ligne, l'image quitte la machine.",
+    ),
+    (
+        "Agir sur le bureau",
+        "Notifier, ouvrir un fichier, changer de bureau ou de fenêtre, régler thème, fond, lumière de nuit, échelle.",
+    ),
+    (
+        "Presse-papiers",
+        "Lire ce que vous avez copié, y écrire du texte.",
+    ),
+];
 const SUSPEND: [(u32, &str); 4] = [(0, "Jamais"), (30, "30 min"), (60, "1 h"), (120, "2 h")];
 /// Dispositions proposées : réglage, nom
 const KEYBOARDS: [(&str, &str); 8] = [
@@ -122,16 +159,18 @@ enum Page {
     Clavier,
     Energie,
     Raccourcis,
+    Agent,
     APropos,
 }
 
-const PAGES: [Page; 7] = [
+const PAGES: [Page; 8] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
     Page::Clavier,
     Page::Energie,
     Page::Raccourcis,
+    Page::Agent,
     Page::APropos,
 ];
 
@@ -144,6 +183,7 @@ impl Page {
             Page::Clavier => ("Clavier et langue", icon::KEYBOARD, 0x8a8f9c),
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING, 0x34b35a),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND, 0xe0607e),
+            Page::Agent => ("Agent", icon::BOT, 0xd97757),
             Page::APropos => ("À propos", icon::INFO, 0x6b7280),
         }
     }
@@ -156,6 +196,7 @@ impl Page {
             "clavier" | "langue" => Page::Clavier,
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
+            "agent" | "assistant" => Page::Agent,
             "apropos" | "a-propos" => Page::APropos,
             _ => return None,
         })
@@ -186,6 +227,9 @@ enum Hit {
     Keep,
     Revert,
     CopyInfo,
+    AgentKind(usize),
+    Perm(usize),
+    CopyMcp,
 }
 
 type Rect = (f32, f32, f32, f32);
@@ -463,6 +507,57 @@ fn about(screen: &Option<Screen>) -> Vec<(&'static str, String)> {
     rows
 }
 
+/// Commande qui déclare odysseus-mcp dans Claude Code
+fn mcp_command() -> String {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("odysseus-mcp")))
+        .unwrap_or_else(|| PathBuf::from("odysseus-mcp"));
+    format!("claude mcp add odysseus -s user -- {}", exe.display())
+}
+
+/// Programme trouvé dans le PATH ou les emplacements usuels
+fn installed(program: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .map(PathBuf::from)
+        .chain([
+            PathBuf::from(&home).join(".local/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ])
+        .any(|d| d.join(program).exists())
+}
+
+/// odysseus-mcp déjà déclaré dans la configuration de Claude Code de l'utilisateur
+fn mcp_declared() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::fs::read_to_string(PathBuf::from(home).join(".claude.json"))
+        .is_ok_and(|t| t.contains("odysseus-mcp"))
+}
+
+/// Derniers appels des agents (journal d'odysseus-mcp), du plus récent au plus ancien :
+/// heure, accordé, outil, paramètres
+fn agent_activity() -> Vec<(String, bool, String, String)> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let text = std::fs::read_to_string(PathBuf::from(home).join(".local/state/odysseus/agent.log"))
+        .unwrap_or_default();
+    text.lines()
+        .rev()
+        .take(8)
+        .filter_map(|l| {
+            let mut f = l.splitn(4, '\t');
+            let time = f.next()?;
+            let granted = f.next()? == "accordé";
+            let tool = f.next()?.to_string();
+            let detail = f.next().unwrap_or("").to_string();
+            let time = time.get(11..19).unwrap_or(time).to_string();
+            Some((time, granted, tool, detail))
+        })
+        .collect()
+}
+
 /// Lecture d'une liste d'URI déposée (dans un fil : l'autre application écrit)
 fn read_drop(
     pipe: smithay_client_toolkit::data_device_manager::ReadPipe,
@@ -558,7 +653,8 @@ impl App {
     }
 
     fn tick(&mut self) {
-        let mut redraw = false;
+        // Page Agent : le journal d'activité se met à jour tout seul
+        let mut redraw = self.page == Page::Agent;
         if let Some(c) = self.confirm.as_ref() {
             if c.since.elapsed() >= CONFIRM {
                 self.revert_mode();
@@ -778,6 +874,26 @@ impl App {
                 self.save();
             }
             Hit::SleepNow => system::suspend_now(),
+            Hit::AgentKind(i) => {
+                self.settings.agent = AGENTS[i].0.to_string();
+                self.save();
+            }
+            Hit::Perm(i) => {
+                let p = &mut self.settings.agent_perms;
+                let flag = match i {
+                    0 => &mut p.read,
+                    1 => &mut p.desktop,
+                    2 => &mut p.screen,
+                    3 => &mut p.act,
+                    _ => &mut p.clipboard,
+                };
+                *flag = !*flag;
+                self.save();
+            }
+            Hit::CopyMcp => match system::copy_text(&mcp_command()) {
+                Ok(()) => self.toast("Commande copiée — collez-la dans un terminal"),
+                Err(e) => self.toast(e),
+            },
             Hit::CopyInfo => {
                 let text: String = self
                     .about
@@ -885,6 +1001,7 @@ impl App {
             Page::Clavier => self.page_clavier(&mut ui, cx, top, cw),
             Page::Energie => self.page_energie(&mut ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
+            Page::Agent => self.page_agent(&mut ui, cx, top, cw),
             Page::APropos => self.page_apropos(&mut ui, cx, top, cw),
         };
         let content_h = bottom + self.scroll + 32.0;
@@ -1558,6 +1675,174 @@ impl App {
             y += rows.len() as f32 * 40.0 + 24.0;
         }
         y
+    }
+
+    fn page_agent(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let p = theme::palette();
+        let mut y = ui.section(x, y, "Agent du bureau");
+        let rh = 52.0;
+        ui.card(x, y, w, AGENTS.len() as f32 * rh);
+        for (i, (id, name, detail)) in AGENTS.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            let hit = Hit::AgentKind(i);
+            if ui.hover == Some(hit.clone()) {
+                ui.rounded(x + 4.0, ry + 3.0, w - 8.0, rh - 6.0, 8.0, p.ink(0.05));
+            }
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            let on = self.settings.agent == *id;
+            let (cx, cy) = (x + 26.0, ry + rh / 2.0);
+            if on {
+                ui.circle(cx, cy, 8.0, p.accent);
+                ui.circle(cx, cy, 3.0, p.on_accent);
+            } else {
+                ui.circle(cx, cy, 8.0, p.ink(0.25));
+                ui.circle(cx, cy, 6.5, p.content);
+            }
+            ui.text(
+                name,
+                x + 44.0,
+                ry + 7.0,
+                20.0,
+                13.5,
+                if on { p.text } else { p.text_soft() },
+            );
+            ui.text(detail, x + 44.0, ry + 26.0, 18.0, 11.5, p.text_dim);
+            // Présence du programme
+            let status = match *id {
+                "claude" => Some(installed("claude")),
+                "ollama" => Some(installed("ollama")),
+                _ => None,
+            };
+            if let Some(found) = status {
+                let label = if found { "installé" } else { "introuvable" };
+                let lw = ui.measure(label, 11.0) + 16.0;
+                let color = if found { p.success } else { p.text_dim };
+                ui.rounded(
+                    x + w - 18.0 - lw,
+                    ry + 16.0,
+                    lw,
+                    20.0,
+                    10.0,
+                    color.with_alpha(0.16),
+                );
+                ui.centered(
+                    label,
+                    x + w - 18.0 - lw / 2.0,
+                    ry + 16.0,
+                    20.0,
+                    11.0,
+                    false,
+                    color,
+                );
+            }
+            ui.hit((x, ry, w, rh), hit);
+        }
+        y += AGENTS.len() as f32 * rh + 8.0;
+        y = ui.note(
+            x,
+            y,
+            w,
+            "L'agent choisi répondra dans le panneau Assistant (Super+A, bientôt). Tout agent compatible MCP peut aussi se brancher sur odysseus-mcp.",
+        ) + 16.0;
+
+        // Autorisations
+        y = ui.section(x, y, "Ce que l'agent peut faire sur ce bureau");
+        let rh = 66.0;
+        ui.card(x, y, w, PERMS.len() as f32 * rh);
+        let perms = self.settings.agent_perms;
+        let values = [
+            perms.read,
+            perms.desktop,
+            perms.screen,
+            perms.act,
+            perms.clipboard,
+        ];
+        for (i, (title, detail)) in PERMS.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            ui.text(title, x + 18.0, ry + 8.0, 22.0, 13.5, p.text);
+            let lines = ui.regular.wrap(detail, 11.5 * ui.s, (w - 110.0) * ui.s, 2);
+            for (k, line) in lines.iter().enumerate() {
+                ui.text(
+                    line,
+                    x + 18.0,
+                    ry + 30.0 + k as f32 * 15.0,
+                    15.0,
+                    11.5,
+                    p.text_dim,
+                );
+            }
+            ui.switch(
+                x + w - 18.0 - 40.0,
+                ry + (rh - 24.0) / 2.0,
+                values[i],
+                Hit::Perm(i),
+            );
+        }
+        y += PERMS.len() as f32 * rh + 28.0;
+
+        // Brancher Claude Code sur odysseus-mcp
+        y = ui.section(x, y, "Brancher Claude Code sur ce bureau");
+        let cmd = mcp_command();
+        ui.rounded(x, y, w, 44.0, 10.0, p.ink(0.06));
+        let shown = ui.truncate(&cmd, 12.0, w - 130.0);
+        ui.text(&shown, x + 14.0, y, 44.0, 12.0, p.text_soft());
+        ui.button(x + w - 104.0, y + 5.0, 96.0, "Copier", false, Hit::CopyMcp);
+        y += 52.0;
+        let declared = if mcp_declared() {
+            "Déjà déclaré dans votre Claude Code : vérifiez avec /mcp dans une session."
+        } else {
+            "À lancer une fois dans un terminal ; Claude Code démarre ensuite odysseus-mcp lui-même."
+        };
+        y = ui.note(x, y, w, declared) + 16.0;
+
+        // Activité
+        y = ui.section(x, y, "Activité récente des agents");
+        let activity = agent_activity();
+        if activity.is_empty() {
+            return ui.note(x, y, w, "Aucun appel pour l'instant.");
+        }
+        let rh = 38.0;
+        ui.card(x, y, w, activity.len() as f32 * rh);
+        for (i, (time, granted, tool, detail)) in activity.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            ui.text(time, x + 16.0, ry, rh, 12.0, p.text_dim);
+            ui.bold_text(tool, x + 92.0, ry, rh, 12.5, p.text);
+            let dx = x + 92.0 + ui.measure(tool, 12.5) + 10.0;
+            let d = ui.truncate(detail, 11.5, (x + w - 110.0 - dx).max(0.0));
+            ui.text(&d, dx, ry, rh, 11.5, p.text_dim);
+            let (label, color) = if *granted {
+                ("accordé", p.success)
+            } else {
+                ("refusé", p.danger)
+            };
+            let lw = ui.measure(label, 11.0) + 16.0;
+            ui.rounded(
+                x + w - 14.0 - lw,
+                ry + 9.0,
+                lw,
+                20.0,
+                10.0,
+                color.with_alpha(0.16),
+            );
+            ui.centered(
+                label,
+                x + w - 14.0 - lw / 2.0,
+                ry + 9.0,
+                20.0,
+                11.0,
+                false,
+                color,
+            );
+        }
+        y + activity.len() as f32 * rh + 16.0
     }
 
     fn page_apropos(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {

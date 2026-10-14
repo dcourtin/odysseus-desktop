@@ -6,7 +6,9 @@
 //! Messages pris en charge : RUN_COMMAND (« workspace N », « workspace number N »,
 //! « workspace next_on_output|prev_on_output », et propres à odysseus :
 //! « nightlight on|off|auto|toggle », « output scale X », « output mode WxH[@Hz] »),
-//! GET_WORKSPACES, SUBSCRIBE (événements « workspace »), GET_OUTPUTS.
+//! GET_WORKSPACES, SUBSCRIBE (événements « workspace »), GET_OUTPUTS ; propres
+//! à odysseus, pour les agents : GET_WINDOWS (100), « focus <id> »,
+//! « agent-capture <fichier.png> [<id>] ».
 
 use std::{
     ffi::OsStr,
@@ -24,6 +26,8 @@ const RUN_COMMAND: u32 = 0;
 const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
 const GET_OUTPUTS: u32 = 3;
+/// Propre à odysseus : fenêtres de tous les bureaux (pour les agents)
+const GET_WINDOWS: u32 = 100;
 /// Bit des événements ; l'événement « workspace » a le type 0
 const EVENT_WORKSPACE: u32 = 0x8000_0000;
 
@@ -126,6 +130,7 @@ fn handle_message(state: &mut Odysseus, kind: u32, payload: &str, stream: &UnixS
         }
         GET_WORKSPACES => workspaces_json(state),
         GET_OUTPUTS => outputs_json(state),
+        GET_WINDOWS => state.windows_json(),
         SUBSCRIBE => {
             if payload.contains("\"workspace\"")
                 && let Ok(clone) = stream.try_clone()
@@ -154,6 +159,22 @@ pub fn parse_mode(v: &str) -> Option<(i32, i32, Option<i32>)> {
 
 fn run_command(state: &mut Odysseus, command: &str) -> bool {
     let command = command.trim();
+    // « focus <id> » : fenêtre au premier plan (identifiant de GET_WINDOWS)
+    if let Some(id) = command.strip_prefix("focus ") {
+        return id.trim().parse().is_ok_and(|id| state.focus_by_id(id));
+    }
+    // « agent-capture <fichier.png> [<id de fenêtre>] »
+    if let Some(arg) = command.strip_prefix("agent-capture ") {
+        let mut words = arg.split_whitespace();
+        let Some(path) = words.next().filter(|p| p.starts_with('/')) else {
+            return false;
+        };
+        state.agent_capture = Some(crate::agent::AgentCapture {
+            path: path.into(),
+            window: words.next().and_then(|w| w.parse().ok()),
+        });
+        return true;
+    }
     if let Some(arg) = command.strip_prefix("nightlight") {
         use crate::night::Mode;
         let mode = match arg.trim() {

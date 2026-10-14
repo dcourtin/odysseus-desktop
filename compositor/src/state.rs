@@ -100,6 +100,8 @@ pub struct Odysseus {
     /// Capture d'écran : sélection en cours, capture à faire, éclair de confirmation
     pub selection: Option<crate::screenshot::Selection>,
     pub capture_request: Option<crate::screenshot::Request>,
+    /// Capture demandée par un agent (IPC « agent-capture »)
+    pub agent_capture: Option<crate::agent::AgentCapture>,
     pub flash: Option<Instant>,
     pub workspaces: crate::workspaces::Workspaces,
     /// IPC compatible sway : chemin du socket et abonnés aux événements
@@ -263,6 +265,7 @@ impl Odysseus {
             session: None,
             selection: None,
             capture_request: None,
+            agent_capture: None,
             flash: None,
             workspaces: Default::default(),
             ipc_path: None,

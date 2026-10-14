@@ -18,6 +18,13 @@ pub struct Workspaces {
     last_published: Vec<bool>,
 }
 
+impl Workspaces {
+    /// Fenêtres rangées d'un bureau non affiché, avec leur position
+    pub fn hidden(&self, ws: usize) -> &[(Window, Point<i32, Logical>)] {
+        self.hidden.get(ws).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
 impl Default for Workspaces {
     fn default() -> Self {
         Self {
