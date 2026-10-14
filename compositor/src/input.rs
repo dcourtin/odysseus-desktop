@@ -37,6 +37,9 @@ enum Action {
     ToggleMaximize,
     CycleWindows,
     Lock,
+    /// Super+← / → / ↑ : ranger la fenêtre active ; Super+↓ : la restaurer
+    Snap(crate::snap::Zone),
+    Unsnap,
     /// Touches multimédia : volume +/- (pas de 5 %), sourdine
     Volume(i32),
     Mute,
@@ -135,6 +138,10 @@ impl Odysseus {
                                 Keysym::f => Some(Action::ToggleMaximize),
                                 Keysym::Tab => Some(Action::CycleWindows),
                                 Keysym::l | Keysym::L => Some(Action::Lock),
+                                Keysym::Left => Some(Action::Snap(crate::snap::Zone::Left)),
+                                Keysym::Right => Some(Action::Snap(crate::snap::Zone::Right)),
+                                Keysym::Up => Some(Action::Snap(crate::snap::Zone::Top)),
+                                Keysym::Down => Some(Action::Unsnap),
                                 Keysym::q | Keysym::Q => Some(Action::CloseWindow),
                                 Keysym::E if mods.shift => Some(Action::Quit),
                                 Keysym::S if mods.shift => Some(Action::Capture),
@@ -347,6 +354,16 @@ impl Odysseus {
             }
             Action::CycleWindows => self.cycle_windows(),
             Action::Lock => self.lock_session(),
+            Action::Snap(zone) => {
+                if let Some(window) = self.focused_window() {
+                    self.snap_window(&window, zone);
+                }
+            }
+            Action::Unsnap => {
+                if let Some(window) = self.focused_window() {
+                    self.restore_window(&window);
+                }
+            }
             Action::Volume(step) => {
                 let change = if step >= 0 {
                     format!("{step}%+")

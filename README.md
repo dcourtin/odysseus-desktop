@@ -39,7 +39,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
-| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
+| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite icônes d'état, centre de contrôle, date et heure | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier, « Ne pas déranger », indicateur de volume | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
@@ -59,6 +59,8 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | Mod+clic droit glissé | redimensionner |
 | Mod+f | agrandir / restaurer |
 | Mod+Tab | fenêtre suivante |
+| glisser une fenêtre contre un bord | aimantation : moitié (gauche/droite), plein (haut), quart (coins) ; la décrocher lui rend sa taille |
+| Mod+← / Mod+→ / Mod+↑ / Mod+↓ | moitié gauche / droite / agrandir / restaurer |
 | Mod+1…9 / Mod+Maj+1…9 | aller au bureau / y envoyer la fenêtre |
 | Impr. écran ou Mod+Maj+s | capture dans ~/Images |
 | Mod+l | verrouiller |
@@ -76,6 +78,8 @@ Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Aperçu : ← → (image précédente / suivante),
 molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
 (recadrer), I (infos), F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / une copie).
+
+Animations : `ODYSSEUS_ANIM_SLOW=10` les ralentit toutes dix fois (pour les régler à l'œil).
 
 Inactivité : l'écran s'éteint et la session se verrouille au bout de 10 min
 (`ODYSSEUS_IDLE`, en secondes) ; une vidéo en lecture l'empêche.

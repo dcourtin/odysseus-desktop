@@ -187,30 +187,65 @@ impl Odysseus {
         if state == State::Fullscreen {
             self.fullscreen.insert(toplevel.wl_surface().id());
         }
+        let from = self.visual_rect(window, loc);
         toplevel.with_pending_state(|s| {
             s.states.set(state);
             s.size = Some(area.size);
         });
         toplevel.send_pending_configure();
         self.space.map_element(window.clone(), area.loc, true);
+        self.animate_to(window, from, area);
+    }
+
+    /// Lance le trajet animé d'une fenêtre vers `to`.
+    pub fn animate_to(
+        &mut self,
+        window: &Window,
+        from: Rectangle<f64, Logical>,
+        to: Rectangle<i32, Logical>,
+    ) {
+        if let Some(t) = window.toplevel() {
+            self.motions.insert(
+                t.wl_surface().id(),
+                crate::anim::Motion {
+                    from,
+                    to: to.to_f64(),
+                    start: std::time::Instant::now(),
+                },
+            );
+        }
     }
 
     /// Rend à la fenêtre sa taille et sa place d'avant ; faux si elle n'était ni agrandie ni en plein écran.
-    fn restore_window(&mut self, window: &Window) -> bool {
-        let Some(toplevel) = window.toplevel() else {
+    pub fn restore_window(&mut self, window: &Window) -> bool {
+        let Some(toplevel) = window.toplevel().cloned() else {
             return false;
         };
         let Some(rect) = self.restore.remove(&toplevel.wl_surface().id()) else {
             return false;
         };
         self.fullscreen.remove(&toplevel.wl_surface().id());
+        let from = self
+            .space
+            .element_location(window)
+            .map(|loc| self.visual_rect(window, loc))
+            .unwrap_or_else(|| rect.to_f64());
         toplevel.with_pending_state(|s| {
-            s.states.unset(State::Maximized);
-            s.states.unset(State::Fullscreen);
+            for state in [
+                State::Maximized,
+                State::Fullscreen,
+                State::TiledLeft,
+                State::TiledRight,
+                State::TiledTop,
+                State::TiledBottom,
+            ] {
+                s.states.unset(state);
+            }
             s.size = Some(rect.size);
         });
         toplevel.send_pending_configure();
         self.space.map_element(window.clone(), rect.loc, true);
+        self.animate_to(window, from, rect);
         true
     }
 

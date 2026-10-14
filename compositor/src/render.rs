@@ -128,10 +128,42 @@ void main() {
 }
 "#;
 
+/// Aperçu d'aimantation : rectangle arrondi translucide avec liseré
+const PREVIEW_FRAG: &str = r#"
+precision highp float;
+uniform float alpha;
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+uniform vec2 size;
+varying vec2 v_coords;
+
+uniform vec4 geo;
+uniform float radius;
+uniform float border_width;
+uniform vec4 fill;
+uniform vec4 border;
+
+float rounded_box(vec2 p, vec2 half_size, float r) {
+    vec2 q = abs(p) - half_size + r;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+void main() {
+    vec2 hs = geo.zw * 0.5;
+    float d = rounded_box(gl_FragCoord.xy - (geo.xy + hs), hs, radius);
+    float inside = clamp(0.5 - d, 0.0, 1.0);
+    float ring = inside - clamp(0.5 - (d + border_width), 0.0, 1.0);
+    vec4 color = fill * (inside - ring) + border * ring;
+    gl_FragColor = color * alpha;
+}
+"#;
+
 /// Programmes compilés une fois au démarrage
 pub struct Shaders {
     rounded: GlesTexProgram,
     shadow: GlesPixelProgram,
+    preview: GlesPixelProgram,
 }
 
 impl Shaders {
@@ -155,7 +187,21 @@ impl Shaders {
                 UniformName::new("shadow_color", UniformType::_4f),
             ],
         )?;
-        Ok(Self { rounded, shadow })
+        let preview = renderer.compile_custom_pixel_shader(
+            PREVIEW_FRAG,
+            &[
+                UniformName::new("geo", UniformType::_4f),
+                UniformName::new("radius", UniformType::_1f),
+                UniformName::new("border_width", UniformType::_1f),
+                UniformName::new("fill", UniformType::_4f),
+                UniformName::new("border", UniformType::_4f),
+            ],
+        )?;
+        Ok(Self {
+            rounded,
+            shadow,
+            preview,
+        })
     }
 }
 
@@ -237,6 +283,79 @@ render_elements! {
     Closing=TextureShaderElement,
     Wallpaper=TextureRenderElement<GlesTexture>,
     CursorTheme=MemoryRenderBufferRenderElement<GlesRenderer>,
+}
+
+/// Contenu (coins arrondis) et ombre d'une fenêtre, à sa position animée :
+/// trajet en cours (aimantation, agrandissement…), ouverture, glissement de bureau.
+fn window_elements(
+    window: &Window,
+    loc: Point<i32, Logical>,
+    dx: f64,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    frame: &Frame,
+    scene: &Scene,
+) -> Vec<OdysseusElement> {
+    let mut out = Vec::new();
+    // Fenêtre démappée (sans tampon) : ni contenu ni ombre
+    let has_buffer = window.toplevel().is_some_and(|t| {
+        with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
+    });
+    if !has_buffer {
+        return out;
+    }
+    let geometry = window.geometry();
+    let id = window.toplevel().map(|t| t.wl_surface().id());
+    // Trajet en cours, sinon place réelle
+    let base = id
+        .as_ref()
+        .and_then(|id| scene.motions.get(id))
+        .filter(|m| !m.done())
+        .map(|m| m.current())
+        .unwrap_or_else(|| Rectangle::new(loc, geometry.size).to_f64());
+    // Ouverture : fondu et zoom de 94 % à 100 % autour du centre
+    let progress = open_progress(id.as_ref().and_then(|id| scene.opening.get(id)));
+    let zoom = 0.94 + 0.06 * progress;
+    let alpha = progress as f32;
+    let size = base.size;
+    let center = base.loc + Point::from((size.w / 2.0 + dx, size.h / 2.0));
+    let geo = Rectangle::new(
+        center - Point::from((size.w * zoom / 2.0, size.h * zoom / 2.0)),
+        (size.w * zoom, size.h * zoom).into(),
+    );
+    // Échelle du contenu : la taille affichée rapportée à celle du tampon
+    let sx = geo.size.w / geometry.size.w.max(1) as f64;
+    let sy = geo.size.h / geometry.size.h.max(1) as f64;
+    let is_focused = scene
+        .focused
+        .is_some_and(|f| window.toplevel().is_some_and(|t| t.wl_surface() == f));
+
+    let uniforms = frame.rounded_uniforms(geo);
+    let render_loc = (geo.loc
+        - Point::from((geometry.loc.x as f64 * sx, geometry.loc.y as f64 * sy)))
+    .to_physical(frame.scale)
+    .to_i32_round();
+    let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(
+        renderer,
+        render_loc,
+        Scale::from((frame.scale * sx, frame.scale * sy)),
+        alpha,
+    );
+    out.extend(surfaces.into_iter().map(|inner| {
+        OdysseusElement::Surface(RoundedSurface {
+            inner,
+            program: shaders.rounded.clone(),
+            uniforms: uniforms.clone(),
+        })
+    }));
+    // Ombre portée, plus marquée sur la fenêtre active
+    let shadow_alpha = if is_focused {
+        theme::SHADOW_ALPHA_FOCUSED
+    } else {
+        theme::SHADOW_ALPHA
+    };
+    out.push(frame.shadow(shaders, geo, alpha * shadow_alpha));
+    out
 }
 
 /// Surfaces d'une couche (barre, fond…), de la plus haute à la plus basse.
@@ -385,6 +504,18 @@ impl Frame {
     }
 }
 
+/// État animé de la scène, fourni par le compositeur à chaque image
+pub struct Scene<'a> {
+    pub focused: Option<&'a WlSurface>,
+    pub opening: &'a HashMap<ObjectId, Instant>,
+    pub closing: &'a [Closing],
+    /// Fenêtre plein écran au premier plan : la barre s'efface
+    pub hide_top_layer: bool,
+    pub motions: &'a HashMap<ObjectId, crate::anim::Motion>,
+    pub slide: Option<&'a crate::anim::WorkspaceSlide>,
+    pub snap_preview: Option<crate::anim::SnapPreview>,
+}
+
 /// Éléments à dessiner pour une sortie, du plus haut au plus bas.
 #[allow(clippy::too_many_arguments)]
 pub fn output_elements(
@@ -392,12 +523,9 @@ pub fn output_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
     shaders: &Shaders,
-    focused: Option<&WlSurface>,
     fb_size: Size<i32, Physical>,
     wallpaper: Option<&crate::wallpaper::Wallpaper>,
-    opening: &HashMap<ObjectId, Instant>,
-    closing: &[Closing],
-    hide_top_layer: bool,
+    scene: &Scene,
 ) -> Vec<OdysseusElement> {
     let scale = output.current_scale().fractional_scale();
     let b = theme::WINDOW_BORDER;
@@ -409,15 +537,18 @@ pub fn output_elements(
         border_color: [b.r * b.a, b.g * b.a, b.b * b.a, b.a],
     };
     let context = renderer.context_id();
+    let out_w = space
+        .output_geometry(output)
+        .map(|g| g.size.w as f64)
+        .unwrap_or(1920.0);
 
     let mut elements = layer_elements(output, renderer, scale, Layer::Overlay);
-    // Fenêtre plein écran au premier plan : la barre s'efface
-    if !hide_top_layer {
+    if !scene.hide_top_layer {
         elements.extend(layer_elements(output, renderer, scale, Layer::Top));
     }
 
     // Fenêtres en cours de fermeture : fondu et rétrécissement de 100 % à 94 %
-    for c in closing.iter().rev() {
+    for c in scene.closing.iter().rev() {
         let t = close_progress(&c.start);
         let zoom = 1.0 - 0.06 * t;
         let alpha = (1.0 - t) as f32;
@@ -445,51 +576,72 @@ pub fn output_elements(
         elements.push(frame.shadow(shaders, geo, alpha * theme::SHADOW_ALPHA));
     }
 
-    let windows: Vec<Window> = space.elements().cloned().collect();
-    for window in windows.iter().rev() {
-        let Some(loc) = space.element_location(window) else {
-            continue;
-        };
-        // Fenêtre démappée (sans tampon) : ni contenu ni ombre
-        let has_buffer = window.toplevel().is_some_and(|t| {
-            with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
-        });
-        if !has_buffer {
-            continue;
+    // Changement de bureau : décalage des fenêtres arrivantes et quittées
+    let (out_off, in_off) = scene.slide.map(|s| s.offsets()).unwrap_or((0.0, 0.0));
+    let windows: Vec<(Window, Point<i32, Logical>)> = space
+        .elements()
+        .filter_map(|w| space.element_location(w).map(|l| (w.clone(), l)))
+        .collect();
+    for (i, (window, loc)) in windows.iter().rev().enumerate() {
+        elements.extend(window_elements(
+            window,
+            *loc,
+            in_off * out_w,
+            renderer,
+            shaders,
+            &frame,
+            scene,
+        ));
+        // L'aperçu d'aimantation se glisse juste sous la fenêtre déplacée (au-dessus)
+        if i == 0
+            && let Some(preview) = scene.snap_preview
+        {
+            let (rect, t) = preview.current();
+            let accent = theme::ACCENT;
+            elements.push(OdysseusElement::Shadow(PixelShaderElement::new(
+                shaders.preview.clone(),
+                rect.to_i32_round(),
+                None,
+                1.0,
+                vec![
+                    Uniform::new("geo", gl_rect(rect, scale, frame.transform, fb_size)),
+                    Uniform::new("radius", frame.radius),
+                    Uniform::new("border_width", (1.5 * scale) as f32),
+                    Uniform::new(
+                        "fill",
+                        [
+                            accent.r * 0.22 * t,
+                            accent.g * 0.22 * t,
+                            accent.b * 0.22 * t,
+                            0.22 * t,
+                        ],
+                    ),
+                    Uniform::new(
+                        "border",
+                        [
+                            accent.r * 0.7 * t,
+                            accent.g * 0.7 * t,
+                            accent.b * 0.7 * t,
+                            0.7 * t,
+                        ],
+                    ),
+                ],
+                Kind::Unspecified,
+            )));
         }
-        // Animation d'ouverture : fondu et zoom de 94 % à 100 % autour du centre
-        let progress = window
-            .toplevel()
-            .map(|t| open_progress(opening.get(&t.wl_surface().id())))
-            .unwrap_or(1.0);
-        let zoom = 0.94 + 0.06 * progress;
-        let alpha = progress as f32;
-        let geo = zoom_around_center(Rectangle::new(loc, window.geometry().size), zoom);
-        let is_focused =
-            focused.is_some_and(|f| window.toplevel().is_some_and(|t| t.wl_surface() == f));
-
-        // Contenu de la fenêtre, coins arrondis
-        let uniforms = frame.rounded_uniforms(geo);
-        let render_loc = (geo.loc - window.geometry().loc.to_f64().upscale(zoom))
-            .to_physical(scale)
-            .to_i32_round();
-        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            window.render_elements(renderer, render_loc, Scale::from(scale * zoom), alpha);
-        elements.extend(surfaces.into_iter().map(|inner| {
-            OdysseusElement::Surface(RoundedSurface {
-                inner,
-                program: shaders.rounded.clone(),
-                uniforms: uniforms.clone(),
-            })
-        }));
-
-        // Ombre portée, plus marquée sur la fenêtre active
-        let shadow_alpha = if is_focused {
-            theme::SHADOW_ALPHA_FOCUSED
-        } else {
-            theme::SHADOW_ALPHA
-        };
-        elements.push(frame.shadow(shaders, geo, alpha * shadow_alpha));
+    }
+    if let Some(slide) = scene.slide {
+        for (window, loc) in slide.outgoing.iter().rev() {
+            elements.extend(window_elements(
+                window,
+                *loc,
+                out_off * out_w,
+                renderer,
+                shaders,
+                &frame,
+                scene,
+            ));
+        }
     }
     elements.extend(layer_elements(output, renderer, scale, Layer::Bottom));
     elements.extend(layer_elements(output, renderer, scale, Layer::Background));

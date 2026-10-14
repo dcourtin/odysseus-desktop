@@ -119,6 +119,10 @@ pub struct Odysseus {
     pub pending_scale: Option<f64>,
     pub pending_mode: Option<(i32, i32, Option<i32>)>,
     pub night: crate::night::NightLight,
+    /// Animations : trajets de fenêtres, glissement de bureau, aperçu d'aimantation
+    pub motions: HashMap<ObjectId, crate::anim::Motion>,
+    pub slide: Option<crate::anim::WorkspaceSlide>,
+    pub snap_preview: Option<crate::anim::SnapPreview>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +237,9 @@ impl Odysseus {
             pending_scale: None,
             pending_mode: None,
             night: crate::night::NightLight::load(),
+            motions: HashMap::new(),
+            slide: None,
+            snap_preview: None,
         }
     }
 
@@ -252,10 +259,27 @@ impl Odysseus {
             .retain(|_, start| start.elapsed() < crate::render::open_duration());
         self.closing
             .retain(|c| c.start.elapsed() < crate::render::close_duration());
+        self.motions.retain(|_, m| !m.done());
+        if self.slide.as_ref().is_some_and(|s| s.done()) {
+            self.slide = None;
+        }
         self.space.refresh();
         self.refresh_workspaces();
         self.popups.cleanup();
         let _ = self.display_handle.flush_clients();
+    }
+
+    /// État animé de la scène pour le rendu d'une image
+    pub fn scene<'a>(&'a self, focused: Option<&'a WlSurface>) -> crate::render::Scene<'a> {
+        crate::render::Scene {
+            focused,
+            opening: &self.opening,
+            closing: &self.closing,
+            hide_top_layer: self.top_is_fullscreen(),
+            motions: &self.motions,
+            slide: self.slide.as_ref(),
+            snap_preview: self.snap_preview,
+        }
     }
 
     /// Lance une commande shell comme client de ce compositeur.

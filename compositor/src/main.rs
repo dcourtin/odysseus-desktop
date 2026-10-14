@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+mod anim;
 mod capture;
 mod closing;
 mod cursor;
@@ -11,6 +12,7 @@ mod ipc;
 mod lock;
 mod night;
 mod render;
+mod snap;
 mod state;
 mod udev;
 mod wallpaper;

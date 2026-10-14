@@ -569,18 +569,18 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     let focused = state.seat.get_keyboard().unwrap().current_focus();
     match crate::lock::lock_elements(state, &output, &mut udev.renderer) {
         Some(lock) => elements.extend(lock),
-        None => elements.extend(crate::render::output_elements(
-            &state.space,
-            &output,
-            &mut udev.renderer,
-            &udev.shaders,
-            focused.as_ref(),
-            mode.size,
-            udev.wallpaper.as_ref(),
-            &state.opening,
-            &state.closing,
-            state.top_is_fullscreen(),
-        )),
+        None => {
+            let scene = state.scene(focused.as_ref());
+            elements.extend(crate::render::output_elements(
+                &state.space,
+                &output,
+                &mut udev.renderer,
+                &udev.shaders,
+                mode.size,
+                udev.wallpaper.as_ref(),
+                &scene,
+            ))
+        }
     }
 
     if state.capture_pending || crate::capture::requested_by_file() {

@@ -73,6 +73,16 @@ impl Odysseus {
         for (window, _) in &visible {
             self.space.unmap_elem(window);
         }
+        // Glissement : le bureau quitté part d'un côté, le nouveau arrive de l'autre
+        self.slide = Some(crate::anim::WorkspaceSlide {
+            outgoing: visible.clone(),
+            direction: if target > self.workspaces.active {
+                1.0
+            } else {
+                -1.0
+            },
+            start: std::time::Instant::now(),
+        });
         self.workspaces.hidden[self.workspaces.active] = visible;
 
         let incoming = std::mem::take(&mut self.workspaces.hidden[target]);

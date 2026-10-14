@@ -123,12 +123,9 @@ pub fn init_winit(
                                 &output,
                                 renderer,
                                 &shaders,
-                                focused.as_ref(),
                                 size,
                                 wallpaper.as_ref(),
-                                &state.opening,
-                                &state.closing,
-                                state.top_is_fullscreen(),
+                                &state.scene(focused.as_ref()),
                             ),
                         };
                         damage_tracker

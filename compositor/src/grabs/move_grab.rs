@@ -17,6 +17,9 @@ pub struct MoveSurfaceGrab {
     pub initial_window_location: Point<i32, Logical>,
 }
 
+/// Mouvement minimal avant de décrocher une fenêtre rangée (un simple clic ne la bouge pas)
+const UNSNAP_DISTANCE: f64 = 6.0;
+
 impl PointerGrab<Odysseus> for MoveSurfaceGrab {
     fn motion(
         &mut self,
@@ -29,9 +32,16 @@ impl PointerGrab<Odysseus> for MoveSurfaceGrab {
         handle.motion(data, None, event);
 
         let delta = event.location - self.start_data.location;
+        // Fenêtre rangée (moitié, quart, agrandie) : elle reprend sa taille d'avant
+        if (delta.x.abs() > UNSNAP_DISTANCE || delta.y.abs() > UNSNAP_DISTANCE)
+            && let Some(loc) = data.unsnap_for_move(&self.window, event.location)
+        {
+            self.initial_window_location = (loc.to_f64() - delta).to_i32_round();
+        }
         let new_location = self.initial_window_location.to_f64() + delta;
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
+        data.update_snap_preview(&self.window, event.location);
     }
 
     fn relative_motion(
@@ -57,7 +67,9 @@ impl PointerGrab<Odysseus> for MoveSurfaceGrab {
         const BTN_LEFT: u32 = 0x110;
 
         if !handle.current_pressed().contains(&BTN_LEFT) {
-            // No more buttons are pressed, release the grab.
+            // Relâché contre un bord : la fenêtre se range dans la zone proposée
+            let pos = handle.current_location();
+            data.finish_snap(&self.window, pos);
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
@@ -151,5 +163,7 @@ impl PointerGrab<Odysseus> for MoveSurfaceGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut Odysseus) {}
+    fn unset(&mut self, data: &mut Odysseus) {
+        data.snap_preview = None;
+    }
 }
