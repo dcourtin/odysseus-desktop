@@ -12,7 +12,7 @@ use smithay::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode,
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
             compositor::FrameFlags,
             exporter::gbm::GbmFramebufferExporter,
             output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements},
@@ -36,6 +36,7 @@ use smithay::{
         rustix::fs::OFlags,
     },
     utils::{DeviceFd, Transform},
+    wayland::dmabuf::DmabufFeedbackBuilder,
 };
 
 use crate::{
@@ -63,6 +64,8 @@ struct OutputSurface {
     drm_output: Surface,
     /// Une image est en attente d'affichage : ne pas en rendre une autre avant le vblank
     pending: bool,
+    /// Écran éteint (veille)
+    blanked: bool,
 }
 
 pub struct UdevData {
@@ -113,6 +116,25 @@ pub fn init_udev(
     );
     let exporter = GbmFramebufferExporter::new(gbm.clone(), Some(node));
     let render_formats = renderer.dmabuf_formats();
+
+    // linux-dmabuf : les clients GL (Firefox, mpv…) partagent leurs tampons GPU
+    let render_node = node
+        .node_with_type(NodeType::Render)
+        .and_then(Result::ok)
+        .unwrap_or(node);
+    match DmabufFeedbackBuilder::new(render_node.dev_id(), render_formats.clone()).build() {
+        Ok(feedback) => {
+            let global = data
+                .state
+                .dmabuf_state
+                .create_global_with_default_feedback::<crate::Odysseus>(
+                    &data.display_handle,
+                    &feedback,
+                );
+            data.state.dmabuf_global = Some(global);
+        }
+        Err(e) => tracing::warn!("linux-dmabuf indisponible : {e}"),
+    }
     let mut manager = OutputManager::new(
         drm,
         allocator,
@@ -214,6 +236,7 @@ pub fn init_udev(
                 output,
                 drm_output,
                 pending: false,
+                blanked: false,
             },
         );
     }
@@ -314,7 +337,35 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     let Some(surface) = udev.surfaces.get_mut(&crtc) else {
         return;
     };
-    if surface.pending || udev.paused {
+    if udev.paused {
+        return;
+    }
+    // Veille : écran éteint (DPMS), on vérifie régulièrement s'il faut le rallumer
+    if state.screen_off {
+        if !surface.blanked {
+            if let Err(e) = surface.drm_output.with_compositor(|c| c.clear()) {
+                tracing::warn!("extinction de l'écran : {e}");
+            }
+            surface.blanked = true;
+            surface.pending = false;
+        }
+        // Rien n'est affiché : le verrouillage peut être confirmé
+        state.confirm_lock();
+        let _ = udev.handle.insert_source(
+            Timer::from_duration(Duration::from_millis(100)),
+            move |_, _, data| {
+                render(data, crtc);
+                TimeoutAction::Drop
+            },
+        );
+        return;
+    }
+    if surface.blanked {
+        // Le prochain queue_frame rallume l'écran
+        surface.blanked = false;
+        surface.pending = false;
+    }
+    if surface.pending {
         return;
     }
     let output = surface.output.clone();
@@ -341,18 +392,21 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         }
     }
     let focused = state.seat.get_keyboard().unwrap().current_focus();
-    elements.extend(crate::render::output_elements(
-        &state.space,
-        &output,
-        &mut udev.renderer,
-        &udev.shaders,
-        focused.as_ref(),
-        mode.size,
-        udev.wallpaper.as_ref(),
-        &state.opening,
-        &state.closing,
-        state.top_is_fullscreen(),
-    ));
+    match crate::lock::lock_elements(state, &output, &mut udev.renderer) {
+        Some(lock) => elements.extend(lock),
+        None => elements.extend(crate::render::output_elements(
+            &state.space,
+            &output,
+            &mut udev.renderer,
+            &udev.shaders,
+            focused.as_ref(),
+            mode.size,
+            udev.wallpaper.as_ref(),
+            &state.opening,
+            &state.closing,
+            state.top_is_fullscreen(),
+        )),
+    }
 
     if state.capture_pending || crate::capture::requested_by_file() {
         state.capture_pending = false;
@@ -362,7 +416,11 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         }
     }
 
-    let bg = theme::BACKGROUND;
+    let bg = if state.is_locked() {
+        theme::Rgba::hex(0x000000, 1.0)
+    } else {
+        theme::BACKGROUND
+    };
     let rendered = match surface.drm_output.render_frame(
         &mut udev.renderer,
         &elements,

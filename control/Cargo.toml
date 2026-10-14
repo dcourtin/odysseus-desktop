@@ -1,0 +1,15 @@
+[package]
+name = "control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Centre de contrôle d'odysseus-desktop : Wi-Fi, Bluetooth, réseau, son, alimentation"
+
+[[bin]]
+name = "odysseus-control"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+dbus.workspace = true

@@ -116,6 +116,10 @@ impl Odysseus {
     /// Passe la fenêtre au premier plan et lui donne le clavier.
     pub fn focus_window(&mut self, window: &Window) {
         self.space.raise_element(window, true);
+        // Écran verrouillé : le clavier reste au verrou
+        if self.is_locked() {
+            return;
+        }
         let surface = window.toplevel().map(|t| t.wl_surface().clone());
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());

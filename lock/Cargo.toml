@@ -1,0 +1,16 @@
+[package]
+name = "lock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Écran de verrouillage d'odysseus-desktop (ext-session-lock, PAM)"
+
+[[bin]]
+name = "odysseus-lock"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+chrono.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

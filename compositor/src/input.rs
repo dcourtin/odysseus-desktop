@@ -36,6 +36,10 @@ enum Action {
     Launcher,
     ToggleMaximize,
     CycleWindows,
+    Lock,
+    /// Touches multimédia : volume +/- (pas de 5 %), sourdine
+    Volume(i32),
+    Mute,
 }
 
 impl ModKey {
@@ -49,6 +53,27 @@ impl ModKey {
 
 impl Odysseus {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        let was_off = self.screen_off;
+        if matches!(
+            event,
+            InputEvent::Keyboard { .. }
+                | InputEvent::PointerMotion { .. }
+                | InputEvent::PointerMotionAbsolute { .. }
+                | InputEvent::PointerButton { .. }
+                | InputEvent::PointerAxis { .. }
+        ) {
+            self.note_activity();
+        }
+        // La touche qui rallume l'écran ne fait rien d'autre
+        if was_off
+            && matches!(
+                event,
+                InputEvent::Keyboard { .. } | InputEvent::PointerButton { .. }
+            )
+        {
+            return;
+        }
+        let locked = self.is_locked();
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -70,8 +95,27 @@ impl Odysseus {
                                 (raw - 0x1008_FE00) as i32,
                             ));
                         }
-                        if pressed && handle.modified_sym() == Keysym::Print {
-                            return FilterResult::Intercept(Action::Capture);
+                        // Verrouillé : seuls le changement de tty et Super+L (relancer le verrou)
+                        if locked {
+                            if pressed
+                                && mod_key.held(mods)
+                                && handle.raw_latin_sym_or_raw_current_sym() == Some(Keysym::l)
+                            {
+                                return FilterResult::Intercept(Action::Lock);
+                            }
+                            return FilterResult::Forward;
+                        }
+                        if pressed {
+                            let media = match handle.modified_sym() {
+                                Keysym::Print => Some(Action::Capture),
+                                Keysym::XF86_AudioRaiseVolume => Some(Action::Volume(5)),
+                                Keysym::XF86_AudioLowerVolume => Some(Action::Volume(-5)),
+                                Keysym::XF86_AudioMute => Some(Action::Mute),
+                                _ => None,
+                            };
+                            if let Some(action) = media {
+                                return FilterResult::Intercept(action);
+                            }
                         }
                         if pressed && mod_key.held(mods) {
                             // Rangée des chiffres par code physique (evdev KEY_1…KEY_9 + 8) :
@@ -90,6 +134,7 @@ impl Odysseus {
                                 Keysym::space => Some(Action::Launcher),
                                 Keysym::f => Some(Action::ToggleMaximize),
                                 Keysym::Tab => Some(Action::CycleWindows),
+                                Keysym::l | Keysym::L => Some(Action::Lock),
                                 Keysym::q | Keysym::Q => Some(Action::CloseWindow),
                                 Keysym::E if mods.shift => Some(Action::Quit),
                                 Keysym::S if mods.shift => Some(Action::Capture),
@@ -138,6 +183,20 @@ impl Odysseus {
                 let button = event.button_code();
 
                 let button_state = event.state();
+
+                if locked {
+                    pointer.button(
+                        self,
+                        &ButtonEvent {
+                            button,
+                            state: button_state,
+                            serial,
+                            time: event.time_msec(),
+                        },
+                    );
+                    pointer.frame(self);
+                    return;
+                }
 
                 // Clic sur une couche (barre, lanceur) : pas de changement de fenêtre active
                 let on_layer = self.focusable_layer_at(pointer.current_location());
@@ -287,6 +346,22 @@ impl Odysseus {
                 }
             }
             Action::CycleWindows => self.cycle_windows(),
+            Action::Lock => self.lock_session(),
+            Action::Volume(step) => {
+                let change = if step >= 0 {
+                    format!("{step}%+")
+                } else {
+                    format!("{}%-", -step)
+                };
+                self.spawn(&format!(
+                    "wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ {change}; {}",
+                    self.sibling_command("odysseus-notify --volume")
+                ));
+            }
+            Action::Mute => self.spawn(&format!(
+                "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; {}",
+                self.sibling_command("odysseus-notify --volume")
+            )),
             Action::Workspace(n) => self.switch_workspace(n),
             Action::MoveToWorkspace(n) => self.move_focused_to_workspace(n),
             Action::SwitchVt(vt) => {

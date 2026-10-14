@@ -61,8 +61,108 @@ impl Canvas<'_> {
         }
     }
 
+    /// Contour d'un rectangle arrondi, d'épaisseur `width`, à l'intérieur du rectangle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        width: f32,
+        c: Rgba,
+    ) {
+        let r = radius.min(w / 2.0).min(h / 2.0);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
+        for py in y.floor() as i32..(y + h).ceil() as i32 {
+            for px in x.floor() as i32..(x + w).ceil() as i32 {
+                let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
+                let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
+                let dist = (dx * dx + dy * dy).sqrt() - r;
+                // dans la bande [-width, 0] de la distance signée
+                let outer = (0.5 - dist).clamp(0.0, 1.0);
+                let inner = (0.5 - (dist + width)).clamp(0.0, 1.0);
+                self.blend(px, py, c, outer - inner);
+            }
+        }
+    }
+
+    /// Disque plein centré en (cx, cy).
+    pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, c: Rgba) {
+        self.fill_rounded(
+            cx - radius,
+            cy - radius,
+            2.0 * radius,
+            2.0 * radius,
+            radius,
+            c,
+        );
+    }
+
+    /// Image (pixels prémultipliés B, G, R, A) mise à l'échelle dans le
+    /// rectangle donné, chaque pixel étant la moyenne des pixels source qu'il couvre.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(&mut self, img: &Image, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        if img.width == 0 || img.height == 0 || w < 1.0 || h < 1.0 {
+            return;
+        }
+        let r = radius.min(w / 2.0).min(h / 2.0);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
+        let (sx, sy) = (img.width as f32 / w, img.height as f32 / h);
+        for py in y.floor() as i32..(y + h).ceil() as i32 {
+            if py < 0 || py as u32 >= self.height {
+                continue;
+            }
+            for px in x.floor() as i32..(x + w).ceil() as i32 {
+                if px < 0 || px as u32 >= self.width {
+                    continue;
+                }
+                let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
+                let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
+                let coverage = (0.5 - ((dx * dx + dy * dy).sqrt() - r)).clamp(0.0, 1.0);
+                if coverage <= 0.0 {
+                    continue;
+                }
+                let u0 = (((px as f32 - x) * sx).max(0.0) as u32).min(img.width - 1);
+                let v0 = (((py as f32 - y) * sy).max(0.0) as u32).min(img.height - 1);
+                let u1 = (((px as f32 + 1.0 - x) * sx).ceil() as u32).clamp(u0 + 1, img.width);
+                let v1 = (((py as f32 + 1.0 - y) * sy).ceil() as u32).clamp(v0 + 1, img.height);
+                let (mut acc, mut n) = ([0u32; 4], 0u32);
+                for v in v0..v1 {
+                    for u in u0..u1 {
+                        let i = ((v * img.width + u) * 4) as usize;
+                        for (a, d) in acc.iter_mut().zip(&img.data[i..i + 4]) {
+                            *a += *d as u32;
+                        }
+                        n += 1;
+                    }
+                }
+                let src: [f32; 4] = acc.map(|a| a as f32 / n as f32 * coverage);
+                let i = ((py as u32 * self.width + px as u32) * 4) as usize;
+                let inv = 1.0 - src[3] / 255.0;
+                for (dst, s) in self.buf[i..i + 4].iter_mut().zip(src) {
+                    *dst = (s + *dst as f32 * inv).round() as u8;
+                }
+            }
+        }
+    }
+
+    /// Recouvre tout le canevas d'une couleur translucide (voile sur un fond).
+    pub fn tint(&mut self, c: Rgba) {
+        let src = premultiply(c, 1.0);
+        let inv = 1.0 - src[3] as f32 / 255.0;
+        for px in self.buf.as_chunks_mut::<4>().0 {
+            for (dst, s) in px.iter_mut().zip(src) {
+                *dst = (s as f32 + *dst as f32 * inv).round() as u8;
+            }
+        }
+    }
+
     /// Mélange « source par-dessus » d'un pixel avec une couverture 0.0–1.0.
-    fn blend(&mut self, x: i32, y: i32, c: Rgba, coverage: f32) {
+    pub fn blend(&mut self, x: i32, y: i32, c: Rgba, coverage: f32) {
         if x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height || coverage <= 0.0 {
             return;
         }
@@ -83,6 +183,14 @@ fn premultiply(c: Rgba, coverage: f32) -> [u8; 4] {
         (c.r * a * 255.0).round() as u8,
         (a * 255.0).round() as u8,
     ]
+}
+
+/// Image en mémoire, pixels prémultipliés (B, G, R, A).
+#[derive(Clone)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
 }
 
 pub struct Text {
@@ -121,6 +229,72 @@ impl Text {
         }
         out.push('…');
         out
+    }
+
+    /// Découpe `s` en lignes d'au plus `max_w` pixels (au mot près), au plus
+    /// `max_lines` lignes, la dernière raccourcie avec « … » si besoin.
+    pub fn wrap(&self, s: &str, px: f32, max_w: f32, max_lines: usize) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for paragraph in s.lines() {
+            let mut line = String::new();
+            for word in paragraph.split_whitespace() {
+                let candidate = if line.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{line} {word}")
+                };
+                if self.measure(&candidate, px) <= max_w || line.is_empty() {
+                    line = candidate;
+                } else {
+                    lines.push(std::mem::replace(&mut line, word.to_string()));
+                }
+            }
+            lines.push(line);
+        }
+        lines.retain(|l| !l.is_empty());
+        if lines.len() > max_lines.max(1) {
+            let rest = lines[max_lines.max(1) - 1..].join(" ");
+            lines.truncate(max_lines.max(1) - 1);
+            let last = self.truncate(&rest, px, max_w);
+            lines.push(if last.ends_with('…') {
+                last
+            } else {
+                format!("{last}…")
+            });
+        }
+        lines
+            .into_iter()
+            .map(|l| self.truncate(&l, px, max_w))
+            .collect()
+    }
+
+    /// Dessine `s` centré horizontalement sur `cx`, dans la bande [y, y + h].
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_centered(
+        &self,
+        canvas: &mut Canvas,
+        s: &str,
+        cx: f32,
+        y: f32,
+        h: f32,
+        px: f32,
+        color: Rgba,
+    ) {
+        let w = self.measure(s, px);
+        self.draw_in(canvas, s, cx - w / 2.0, y, h, px, color);
+    }
+
+    /// Dessine une icône (un glyphe de la police d'icônes) centrée en (cx, cy).
+    pub fn icon(&self, canvas: &mut Canvas, glyph: char, cx: f32, cy: f32, px: f32, color: Rgba) {
+        let (m, coverage) = self.font.rasterize(glyph, px);
+        let left = (cx - m.width as f32 / 2.0).round() as i32;
+        let top = (cy - m.height as f32 / 2.0).round() as i32;
+        for row in 0..m.height {
+            for col in 0..m.width {
+                let a = coverage[row * m.width + col] as f32 / 255.0;
+                canvas.blend(left + col as i32, top + row as i32, color, a);
+            }
+        }
     }
 
     /// Dessine `s` à partir de `x`, centré verticalement dans le canevas.

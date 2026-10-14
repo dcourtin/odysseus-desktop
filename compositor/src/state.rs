@@ -21,14 +21,22 @@ use smithay::{
     utils::{Logical, Point},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        dmabuf::{DmabufGlobal, DmabufState},
+        fractional_scale::FractionalScaleManagerState,
+        idle_inhibit::IdleInhibitManagerState,
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
+        selection::primary_selection::PrimarySelectionState,
+        session_lock::{LockSurface, SessionLockManagerState},
         shell::{
             wlr_layer::{Layer as WlrLayer, WlrLayerShellState},
             xdg::{XdgShellState, decoration::XdgDecorationState},
         },
         shm::ShmState,
+        single_pixel_buffer::SinglePixelBufferState,
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
+        xdg_activation::XdgActivationState,
     },
 };
 
@@ -52,6 +60,16 @@ pub struct Odysseus {
     pub popups: PopupManager,
     pub xdg_decoration_state: XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
+    pub dmabuf_state: DmabufState,
+    /// Global linux-dmabuf, créé par le backend une fois le GPU connu
+    pub dmabuf_global: Option<DmabufGlobal>,
+    pub primary_selection_state: PrimarySelectionState,
+    pub activation_state: XdgActivationState,
+    pub session_lock_state: SessionLockManagerState,
+    pub fractional_scale_state: FractionalScaleManagerState,
+    pub viewporter_state: ViewporterState,
+    pub single_pixel_state: SinglePixelBufferState,
+    pub idle_inhibit_state: IdleInhibitManagerState,
 
     pub seat: Seat<Self>,
 
@@ -83,6 +101,18 @@ pub struct Odysseus {
     pub renderer_context: Option<
         smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
     >,
+    /// Verrouillage de session et surface(s) du verrou
+    pub lock_state: crate::lock::LockState,
+    pub lock_surfaces: Vec<LockSurface>,
+    /// Dernière entrée clavier / souris (mise en veille)
+    pub last_activity: Instant,
+    /// Surfaces qui empêchent la mise en veille (vidéo)
+    pub idle_inhibitors: Vec<WlSurface>,
+    /// Écran éteint (veille) ; `screen_power_changed` : le backend doit appliquer
+    pub screen_off: bool,
+    pub screen_power_changed: bool,
+    /// Couches « à la demande » qui ont déjà reçu le clavier à leur apparition
+    pub layers_focused_once: HashSet<ObjectId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +136,15 @@ impl Odysseus {
         let popups = PopupManager::default();
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let dmabuf_state = DmabufState::new();
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let activation_state = XdgActivationState::new::<Self>(&dh);
+        // Seul le verrou d'odysseus en a besoin, mais un client tiers (swaylock) marche aussi
+        let session_lock_state = SessionLockManagerState::new::<Self, _>(&dh, |_| true);
+        let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let single_pixel_state = SinglePixelBufferState::new::<Self>(&dh);
+        let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&dh);
 
         // A seat is a group of keyboards, pointer and touch devices.
         // A seat typically has a pointer and maintains a keyboard focus and a pointer focus.
@@ -153,6 +192,15 @@ impl Odysseus {
             popups,
             xdg_decoration_state,
             layer_shell_state,
+            dmabuf_state,
+            dmabuf_global: None,
+            primary_selection_state,
+            activation_state,
+            session_lock_state,
+            fractional_scale_state,
+            viewporter_state,
+            single_pixel_state,
+            idle_inhibit_state,
             seat,
             unplaced: HashSet::new(),
             opening: HashMap::new(),
@@ -169,6 +217,13 @@ impl Odysseus {
             ipc_subscribers: Vec::new(),
             closing: Vec::new(),
             renderer_context: None,
+            lock_state: Default::default(),
+            lock_surfaces: Vec::new(),
+            last_activity: Instant::now(),
+            idle_inhibitors: Vec::new(),
+            screen_off: false,
+            screen_power_changed: false,
+            layers_focused_once: HashSet::new(),
         }
     }
 
@@ -182,6 +237,8 @@ impl Odysseus {
         for layer in layer_map_for_output(output).layers() {
             layer.send_frame(output, time, zero, |_, _| Some(output.clone()));
         }
+        crate::lock::send_lock_frame(self, output);
+        self.confirm_lock();
         self.opening
             .retain(|_, start| start.elapsed() < crate::render::open_duration());
         self.closing
@@ -206,6 +263,37 @@ impl Odysseus {
         let result = cmd.spawn();
         if let Err(e) = result {
             tracing::warn!("impossible de lancer « {command} » : {e}");
+        }
+    }
+
+    /// Lance un programme d'odysseus installé à côté du compositeur.
+    pub fn spawn_sibling(&self, name: &str, args: &[&str]) {
+        let path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(name)))
+            .filter(|p| p.exists());
+        match path {
+            Some(path) => {
+                let mut command = path.to_string_lossy().into_owned();
+                for arg in args {
+                    command.push_str(" '");
+                    command.push_str(&arg.replace('\'', "'\\''"));
+                    command.push('\'');
+                }
+                self.spawn(&command)
+            }
+            None => tracing::warn!("{name} introuvable à côté du compositeur"),
+        }
+    }
+
+    /// Commande shell pour un programme d'odysseus voisin du compositeur.
+    pub fn sibling_command(&self, command: &str) -> String {
+        match std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            Some(dir) => format!("'{}'/{command}", dir.display()),
+            None => command.to_string(),
         }
     }
 
@@ -259,6 +347,10 @@ impl Odysseus {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if self.is_locked() {
+            let surface = self.lock_surface()?.wl_surface().clone();
+            return Some((surface, (0.0, 0.0).into()));
+        }
         let output = self.space.outputs().find(|o| {
             self.space
                 .output_geometry(o)

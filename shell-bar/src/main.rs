@@ -1,14 +1,17 @@
 //! Barre du haut : surface layer-shell ancrée en haut de l'écran. À gauche le
-//! nom de la machine et les bureaux sway (clic pour y aller, molette pour
-//! passer au suivant), au centre l'heure, à droite la date.
+//! nom de la machine et les bureaux (clic pour y aller, molette pour passer au
+//! suivant). À droite, comme sur macOS : icônes d'état (réseau, Bluetooth,
+//! volume, « Ne pas déranger »), le centre de contrôle, puis la date et l'heure
+//! (clic : centre de notifications).
 
+mod status;
 mod sway;
 
 use std::time::Duration;
 
 use chrono::{Datelike, Local, Timelike};
 use common::draw::{Canvas, Text};
-use common::theme;
+use common::theme::{self, icon};
 use smithay_client_toolkit::reexports::client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
@@ -63,8 +66,12 @@ struct Bar {
     layer_shell: LayerShell,
     qh: QueueHandle<Bar>,
     pointer: Option<wl_pointer::WlPointer>,
-    regular: Text,
     bold: Text,
+    icons: Text,
+    status: status::Status,
+    /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
+    status_zone: (f64, f64),
+    clock_zone: (f64, f64),
     /// Connexion IPC pour les requêtes et commandes (None hors de sway)
     ipc: Option<sway::Ipc>,
     workspaces: Vec<sway::Workspace>,
@@ -116,8 +123,11 @@ fn main() {
         layer_shell,
         qh: qh.clone(),
         pointer: None,
-        regular: Text::load(theme::FONT_REGULAR).expect("police"),
         bold: Text::load(theme::FONT_BOLD).expect("police"),
+        icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
+        status: status::Status::read(),
+        status_zone: (0.0, 0.0),
+        clock_zone: (0.0, 0.0),
         ipc,
         workspaces,
         pills: Vec::new(),
@@ -133,6 +143,18 @@ fn main() {
     WaylandSource::new(conn, event_queue)
         .insert(handle.clone())
         .expect("source Wayland");
+
+    // État du système (réseau, volume…) toutes les 2 s
+    handle
+        .insert_source(Timer::from_duration(Duration::from_secs(2)), |_, _, bar| {
+            let status = status::Status::read();
+            if status != bar.status {
+                bar.status = status;
+                bar.draw();
+            }
+            TimeoutAction::ToDuration(Duration::from_secs(2))
+        })
+        .expect("minuterie d'état");
 
     // Réveil aligné sur le début de chaque seconde pour l'horloge
     handle
@@ -166,6 +188,21 @@ fn main() {
             eprintln!("shell-bar : connexion au compositeur perdue ({e})");
             break;
         }
+    }
+}
+
+/// Lance un programme d'odysseus installé à côté de la barre.
+fn spawn_sibling(name: &str, args: &[&str]) {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(name)));
+    match path {
+        Some(path) if path.exists() => {
+            if let Err(e) = std::process::Command::new(path).args(args).spawn() {
+                eprintln!("shell-bar : {name} ({e})");
+            }
+        }
+        _ => eprintln!("shell-bar : {name} introuvable"),
     }
 }
 
@@ -205,6 +242,14 @@ impl Bar {
     }
 
     fn click(&mut self, x: f64) {
+        if x >= self.clock_zone.0 && x < self.clock_zone.1 {
+            spawn_sibling("odysseus-notify", &["--center"]);
+            return;
+        }
+        if x >= self.status_zone.0 && x < self.status_zone.1 {
+            spawn_sibling("odysseus-control", &[]);
+            return;
+        }
         let target = self
             .pills
             .iter()
@@ -265,21 +310,43 @@ impl Bar {
             x += pill_w + theme::PILL_GAP as f32 * sf;
         }
 
-        // Centre : heure
-        let heure = format!("{:02}:{:02}", now.hour(), now.minute());
-        let x = (w as f32 - self.bold.measure(&heure, px)) / 2.0;
-        self.bold.draw(&mut canvas, &heure, x, px, theme::TEXT);
-
-        // Droite : date
-        let date = format!(
-            "{} {} {}",
+        // Droite : date et heure (« mer. 14 oct. 16:52 »), cliquables
+        let clock = format!(
+            "{} {} {}  {:02}:{:02}",
             JOURS[now.weekday().num_days_from_monday() as usize],
             now.day(),
-            MOIS[now.month0() as usize]
+            MOIS[now.month0() as usize],
+            now.hour(),
+            now.minute()
         );
-        let x = w as f32 - pad - self.regular.measure(&date, px);
-        self.regular
-            .draw(&mut canvas, &date, x, px, theme::TEXT_DIM);
+        let clock_w = self.bold.measure(&clock, px);
+        let clock_x = w as f32 - pad - clock_w;
+        self.bold
+            .draw(&mut canvas, &clock, clock_x, px, theme::TEXT);
+        self.clock_zone = (((clock_x - 6.0 * sf) / sf) as f64, self.width as f64);
+
+        // Icônes d'état puis centre de contrôle, de droite à gauche
+        let icon_px = 15.0 * sf;
+        let step = 26.0 * sf;
+        let cy = h as f32 / 2.0;
+        let mut ix = clock_x - 18.0 * sf - step / 2.0;
+        let right = ix + step / 2.0;
+        let mut glyphs = vec![(icon::CONTROLS, theme::TEXT)];
+        if self.status.dnd {
+            glyphs.push((icon::MOON, theme::ACCENT));
+        }
+        if let Some(volume) = self.status.volume {
+            glyphs.push((volume, theme::TEXT));
+        }
+        if self.status.bluetooth {
+            glyphs.push((icon::BLUETOOTH, theme::TEXT));
+        }
+        glyphs.push((self.status.network, theme::TEXT));
+        for (glyph, color) in glyphs {
+            self.icons.icon(&mut canvas, glyph, ix, cy, icon_px, color);
+            ix -= step;
+        }
+        self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);

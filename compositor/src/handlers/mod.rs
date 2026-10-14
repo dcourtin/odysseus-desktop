@@ -1,6 +1,7 @@
 mod compositor;
 mod decoration;
 pub mod layer_shell;
+mod protocols;
 mod xdg_shell;
 
 use crate::Odysseus;

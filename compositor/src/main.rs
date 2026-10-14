@@ -8,6 +8,7 @@ mod handlers;
 mod grabs;
 mod input;
 mod ipc;
+mod lock;
 mod render;
 mod state;
 mod udev;
@@ -52,6 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(path) => data.state.ipc_path = Some(path),
         Err(e) => tracing::warn!("IPC indisponible : {e}"),
     }
+
+    lock::init_idle_timer(&event_loop.handle());
 
     // Dans une session graphique (sway…) : fenêtre winit ; sur un tty : DRM
     let nested =

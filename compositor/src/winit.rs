@@ -36,6 +36,29 @@ pub fn init_winit(
             }
         });
 
+    // linux-dmabuf pour les clients GL
+    {
+        use smithay::backend::{egl::EGLDevice, renderer::ImportDma};
+        let formats = backend.renderer().dmabuf_formats();
+        let node = EGLDevice::device_for_display(backend.renderer().egl_context().display())
+            .ok()
+            .and_then(|device| device.try_get_render_node().ok().flatten());
+        let feedback = node.and_then(|node| {
+            smithay::wayland::dmabuf::DmabufFeedbackBuilder::new(node.dev_id(), formats.clone())
+                .build()
+                .ok()
+        });
+        let global = match feedback {
+            Some(feedback) => state
+                .dmabuf_state
+                .create_global_with_default_feedback::<Odysseus>(display_handle, &feedback),
+            None => state
+                .dmabuf_state
+                .create_global::<Odysseus>(display_handle, formats),
+        };
+        state.dmabuf_global = Some(global);
+    }
+
     let mode = Mode {
         size: backend.window_size(),
         refresh: 60_000,
@@ -93,18 +116,21 @@ pub fn init_winit(
                     {
                         let focused = state.seat.get_keyboard().unwrap().current_focus();
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
-                        let elements = crate::render::output_elements(
-                            &state.space,
-                            &output,
-                            renderer,
-                            &shaders,
-                            focused.as_ref(),
-                            size,
-                            wallpaper.as_ref(),
-                            &state.opening,
-                            &state.closing,
-                            state.top_is_fullscreen(),
-                        );
+                        let elements = match crate::lock::lock_elements(state, &output, renderer) {
+                            Some(lock) => lock,
+                            None => crate::render::output_elements(
+                                &state.space,
+                                &output,
+                                renderer,
+                                &shaders,
+                                focused.as_ref(),
+                                size,
+                                wallpaper.as_ref(),
+                                &state.opening,
+                                &state.closing,
+                                state.top_is_fullscreen(),
+                            ),
+                        };
                         damage_tracker
                             .render_output(
                                 renderer,

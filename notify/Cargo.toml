@@ -1,0 +1,17 @@
+[package]
+name = "notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Notifications d'odysseus-desktop : bannières et centre de notifications"
+
+[[bin]]
+name = "odysseus-notify"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+chrono.workspace = true
+dbus.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

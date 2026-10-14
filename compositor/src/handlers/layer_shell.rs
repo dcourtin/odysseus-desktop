@@ -17,6 +17,8 @@ use smithay::{
     },
 };
 
+use smithay::reexports::wayland_server::Resource;
+
 use crate::Odysseus;
 
 impl WlrLayerShellHandler for Odysseus {
@@ -45,6 +47,7 @@ impl WlrLayerShellHandler for Odysseus {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        self.layers_focused_once.remove(&surface.wl_surface().id());
         for output in self.space.outputs() {
             let mut map = layer_map_for_output(output);
             let layer = map
@@ -97,12 +100,23 @@ impl Odysseus {
             if !initial_configure_sent {
                 layer.layer_surface().send_configure();
             }
+            let interactivity = layer.cached_state().keyboard_interactivity;
+            let mapped =
+                smithay::backend::renderer::utils::with_renderer_surface_state(surface, |s| {
+                    s.buffer().is_some()
+                })
+                .unwrap_or(false);
             initial_configure_sent
                 && matches!(layer.layer(), Layer::Top | Layer::Overlay)
-                && layer.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
+                && (interactivity == KeyboardInteractivity::Exclusive
+                    // Panneau « à la demande » (centre de contrôle…) : le clavier à son apparition
+                    || (interactivity == KeyboardInteractivity::OnDemand
+                        && mapped
+                        && self.layers_focused_once.insert(surface.id())))
         };
         let keyboard = self.seat.get_keyboard().unwrap();
-        if wants_keyboard && keyboard.current_focus().as_ref() != Some(surface) {
+        if wants_keyboard && !self.is_locked() && keyboard.current_focus().as_ref() != Some(surface)
+        {
             keyboard.set_focus(self, Some(surface.clone()), SERIAL_COUNTER.next_serial());
         }
     }
@@ -131,6 +145,9 @@ impl Odysseus {
 
     /// Rend le clavier à la fenêtre du dessus (après la fermeture d'une couche).
     pub fn focus_top_window(&mut self) {
+        if self.is_locked() {
+            return;
+        }
         let top = self
             .space
             .elements()

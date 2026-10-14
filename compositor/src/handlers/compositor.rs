@@ -45,6 +45,7 @@ impl CompositorHandler for Odysseus {
                 window.on_commit();
             }
             self.place_if_new(&root);
+            self.send_scale(&root);
         };
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);

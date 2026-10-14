@@ -15,7 +15,12 @@ export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 export ODYSSEUS_OUTPUT="${ODYSSEUS_OUTPUT:-HDMI-A-1}"
 export ODYSSEUS_SCALE="${ODYSSEUS_SCALE:-1.5}"
 export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=odysseus
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+# Firefox : Wayland natif
+export MOZ_ENABLE_WAYLAND=1
 export RUST_LOG="${RUST_LOG:-info}"
 unset WAYLAND_DISPLAY DISPLAY
 
-exec "$ROOT/compositor" -c "$ROOT/shell-bar" > "$LOGDIR/compositor.log" 2>&1
+# Au démarrage : démon de notifications, puis la barre
+exec "$ROOT/compositor" -c "'$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
