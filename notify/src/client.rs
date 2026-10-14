@@ -63,7 +63,7 @@ fn call(
     let channel = Channel::get_private(BusType::Session).map_err(|e| e.to_string())?;
     let msg = build(Message::new_method_call(NAME, PATH, iface, method)?);
     channel
-        .send_with_reply_and_block(msg, Duration::from_secs(2))
+        .send_with_reply_and_block(msg, Duration::from_secs(10))
         .map_err(|e| e.to_string())
 }
 

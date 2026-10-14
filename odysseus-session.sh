@@ -22,5 +22,7 @@ export MOZ_ENABLE_WAYLAND=1
 export RUST_LOG="${RUST_LOG:-info}"
 unset WAYLAND_DISPLAY DISPLAY
 
-# Au démarrage : démon de notifications, puis la barre
-exec "$ROOT/compositor" -c "'$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
+# Au démarrage : l'affichage est transmis au bus de session (le démon de notifications
+# peut y être relancé à la demande, voir ~/.local/share/dbus-1/services), puis
+# démon de notifications et barre
+exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1

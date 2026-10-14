@@ -307,6 +307,40 @@ impl App {
             .map(|h| h.id)
     }
 
+    /// Élément survolé (bannière, carte ou bouton du centre) : un redessin
+    /// n'est utile que s'il change.
+    fn hover_key(&self) -> Option<String> {
+        if let Some(id) = self.hovered_banner() {
+            return Some(format!("b{id}"));
+        }
+        let (surface, x, y) = self.pointer_at.as_ref()?;
+        let center = self.center.as_ref()?;
+        if surface != center.panel.surface() {
+            return None;
+        }
+        let (x, y) = (*x, *y);
+        if let Some((bx, by, bw, bh)) = center.clear_all
+            && x >= bx
+            && x < bx + bw
+            && y >= by
+            && y < by + bh
+        {
+            return Some("tout".into());
+        }
+        if let Some((app, ..)) = center
+            .clear_groups
+            .iter()
+            .find(|(_, gx, gy, gw, gh)| x >= *gx && x < gx + gw && y >= *gy && y < gy + gh)
+        {
+            return Some(format!("g{app}"));
+        }
+        center
+            .hits
+            .iter()
+            .find(|h| h.contains(x, y + 4.0) || h.on_close(x, y))
+            .map(|h| format!("c{}", h.id))
+    }
+
     /// Après tout changement : crée, redessine ou détruit la surface des bannières.
     fn refresh(&mut self) {
         for id in self.store.reap(LEAVE) {
@@ -872,19 +906,17 @@ impl PointerHandler for App {
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        // Une souris rapide envoie des centaines de positions par seconde : on ne
+        // redessine qu'une fois par lot, et seulement si l'élément survolé change.
+        let before = self.hover_key();
+        let mut scrolled = false;
         for event in events {
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.pointer_at = Some((event.surface.clone(), x, y));
-                    self.draw_banners();
-                    self.redraw_center();
                 }
-                PointerEventKind::Leave { .. } => {
-                    self.pointer_at = None;
-                    self.draw_banners();
-                    self.redraw_center();
-                }
+                PointerEventKind::Leave { .. } => self.pointer_at = None,
                 PointerEventKind::Press {
                     button: BTN_LEFT, ..
                 } => self.click(&event.surface.clone(), x, y),
@@ -894,11 +926,15 @@ impl PointerHandler for App {
                     {
                         let max = (center.content_h - center.panel.height as f32).max(0.0);
                         center.scroll = (center.scroll + vertical.absolute as f32).clamp(0.0, max);
-                        self.draw_center();
+                        scrolled = true;
                     }
                 }
                 _ => {}
             }
+        }
+        if scrolled || self.hover_key() != before {
+            self.draw_banners();
+            self.redraw_center();
         }
     }
 }
