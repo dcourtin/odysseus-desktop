@@ -45,7 +45,7 @@ l'image ouverte dans Aperçu est une fractale de Mandelbrot générée par FFmpe
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, apparence (thèmes Odyssée bleue, sombre et claire, appliqués à chaud à tout le bureau), son via PipeWire, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) | fonctionne |
-| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, nom · taille · date) | fonctionne |
+| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions rapides, glisser-déposer vers d'autres fenêtres ou dans un dossier) | fonctionne |
 | `preview/` | `apercu` : visionneuse d'images (dossier parcouru aux flèches, zoom vers le pointeur, rotation, recadrage, infos EXIF, corbeille) | fonctionne |
 
 ## Raccourcis (Mod = Super sur tty, Alt dans une fenêtre sway)
@@ -77,9 +77,16 @@ connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@6
 `nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
 
 Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
-format freedesktop), Ctrl+Z (annuler). Aperçu : ← → (image précédente / suivante),
+format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
+second clic pour inverser), clic sur un élément (panneau d'informations : copier
+le chemin, copier l'image, ouvrir, corbeille), Ctrl+C (copier le chemin), Ctrl+I
+(panneau), glisser un élément vers une autre fenêtre (un terminal reçoit son
+chemin) ou sur un dossier (déplacement). Aperçu : ← → (image précédente / suivante),
 molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée
 (recadrer), I (infos), F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / une copie).
+
+Presse-papiers : `wl-copy` / `wl-paste` (protocole data-control) ; une capture
+copiée se colle telle quelle, par exemple dans Claude Code avec Ctrl+V.
 
 Captures d'écran : enregistrées dans `~/Images` (« Capture d’écran AAAA-MM-JJ à HH.MM.SS.png »),
 copiées dans le presse-papiers et annoncées par une notification avec vignette (clic : Aperçu).

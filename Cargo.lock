@@ -544,6 +544,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
+ "image",
  "smithay-client-toolkit",
 ]
 

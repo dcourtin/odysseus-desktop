@@ -609,6 +609,26 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
             None => {}
         }
     }
+    // Glisser-déposer : l'image du client, sous la pointe du curseur
+    if let Some(icon) = state
+        .dnd_icon
+        .as_ref()
+        .filter(|i| smithay::utils::IsAlive::alive(*i))
+    {
+        let pos = state.seat.get_pointer().unwrap().current_location() - output_loc.to_f64();
+        elements.extend(
+            smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                &mut udev.renderer,
+                icon,
+                pos.to_physical(scale).to_i32_round(),
+                smithay::utils::Scale::from(scale),
+                1.0,
+                smithay::backend::renderer::element::Kind::Unspecified,
+            )
+            .into_iter()
+            .map(OdysseusElement::Layer),
+        );
+    }
     let focused = state.seat.get_keyboard().unwrap().current_focus();
     // Couche de capture d'écran (voile, sélection, éclair), sous le curseur
     if !state.is_locked() {

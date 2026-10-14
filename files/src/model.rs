@@ -13,6 +13,70 @@ pub struct Entry {
     pub modified: Option<SystemTime>,
 }
 
+/// Colonne de tri
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortKey {
+    Name,
+    Size,
+    Modified,
+}
+
+/// Tri de la liste : colonne et sens, mémorisés d'une fois sur l'autre
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub key: SortKey,
+    pub descending: bool,
+}
+
+impl Default for Sort {
+    fn default() -> Self {
+        Self {
+            key: SortKey::Name,
+            descending: false,
+        }
+    }
+}
+
+impl Sort {
+    fn file() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        Some(PathBuf::from(home).join(".config/odysseus/fichiers-tri"))
+    }
+
+    /// Réglage enregistré : « nom », « taille » ou « date », suivi de « desc »
+    pub fn load() -> Self {
+        let text = Self::file()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .unwrap_or_default();
+        let mut words = text.split_whitespace();
+        let key = match words.next() {
+            Some("taille") => SortKey::Size,
+            Some("date") => SortKey::Modified,
+            _ => SortKey::Name,
+        };
+        Self {
+            key,
+            descending: words.next() == Some("desc"),
+        }
+    }
+
+    fn save(&self) {
+        let Some(file) = Self::file() else {
+            return;
+        };
+        let key = match self.key {
+            SortKey::Name => "nom",
+            SortKey::Size => "taille",
+            SortKey::Modified => "date",
+        };
+        let dir = if self.descending { " desc" } else { "" };
+        if let Some(parent) = file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(file, format!("{key}{dir}\n"));
+    }
+}
+
 pub struct Browser {
     pub cwd: PathBuf,
     pub entries: Vec<Entry>,
@@ -20,6 +84,7 @@ pub struct Browser {
     /// Première ligne affichée
     pub scroll: usize,
     pub show_hidden: bool,
+    pub sort: Sort,
     /// Message d'erreur ou d'information pour la barre d'état
     pub message: Option<String>,
     back: Vec<PathBuf>,
@@ -34,6 +99,7 @@ impl Browser {
             selected: 0,
             scroll: 0,
             show_hidden: false,
+            sort: Sort::load(),
             message: None,
             back: Vec::new(),
             forward: Vec::new(),
@@ -42,9 +108,10 @@ impl Browser {
         b
     }
 
-    /// Relit le dossier courant ; dossiers d'abord, puis ordre alphabétique sans casse.
+    /// Relit le dossier courant ; la sélection reste sur le même élément.
     pub fn reload(&mut self) {
         self.message = None;
+        let selected = self.entries.get(self.selected).map(|e| e.path.clone());
         self.entries.clear();
         match std::fs::read_dir(&self.cwd) {
             Ok(list) => {
@@ -73,12 +140,53 @@ impl Browser {
                 self.message = Some(format!("Impossible de lire {} : {e}", self.cwd.display()))
             }
         }
-        self.entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        self.sort_entries();
+        if let Some(i) = selected.and_then(|p| self.entries.iter().position(|e| e.path == p)) {
+            self.selected = i;
+        }
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+    }
+
+    /// Dossiers d'abord (comme le Finder), puis la colonne choisie ; à égalité,
+    /// ordre alphabétique sans casse. Les dossiers n'ont pas de taille : par nom.
+    fn sort_entries(&mut self) {
+        let sort = self.sort;
+        self.entries.sort_by(|a, b| {
+            let by_name = || a.name.to_lowercase().cmp(&b.name.to_lowercase());
+            let order = match sort.key {
+                SortKey::Size if !a.is_dir => a.size.cmp(&b.size).then_with(by_name),
+                SortKey::Modified => a.modified.cmp(&b.modified).then_with(by_name),
+                _ => by_name(),
+            };
+            let order = if sort.descending {
+                order.reverse()
+            } else {
+                order
+            };
+            b.is_dir.cmp(&a.is_dir).then(order)
+        });
+    }
+
+    /// Clic sur un en-tête : trie par cette colonne, ou inverse le sens si elle
+    /// l'est déjà. Taille et date commencent par les plus grands / récents.
+    pub fn sort_by(&mut self, key: SortKey) {
+        self.sort = if self.sort.key == key {
+            Sort {
+                key,
+                descending: !self.sort.descending,
+            }
+        } else {
+            Sort {
+                key,
+                descending: key != SortKey::Name,
+            }
+        };
+        self.sort.save();
+        let selected = self.entries.get(self.selected).map(|e| e.path.clone());
+        self.sort_entries();
+        if let Some(i) = selected.and_then(|p| self.entries.iter().position(|e| e.path == p)) {
+            self.selected = i;
+        }
     }
 
     fn go(&mut self, path: PathBuf) {

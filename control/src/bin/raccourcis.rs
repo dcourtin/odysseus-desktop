@@ -111,6 +111,8 @@ const RIGHT: &[Section] = &[
             (&["Espace"], "Aperçu rapide d'une image"),
             (&["Suppr"], "Mettre à la corbeille"),
             (&["Ctrl", "Z"], "Annuler la mise à la corbeille"),
+            (&["Ctrl", "C"], "Copier le chemin (Fichiers)"),
+            (&["Ctrl", "I"], "Panneau d'informations"),
             (&["←", "→"], "Image précédente / suivante"),
             (&["R"], "Pivoter"),
             (&["C", "Entrée"], "Recadrer"),

@@ -292,6 +292,11 @@ pub mod icon {
     pub const CLOSE: char = '\u{e1b2}';
     pub const CHEVRON_RIGHT: char = '\u{e06f}';
     pub const CHEVRON_LEFT: char = '\u{e06e}';
+    pub const CHEVRON_UP: char = '\u{e070}';
+    pub const CHEVRON_DOWN: char = '\u{e06d}';
+    pub const COPY: char = '\u{e09e}';
+    pub const EXTERNAL_LINK: char = '\u{e0b9}';
+    pub const LINK: char = '\u{e102}';
     pub const CHECK: char = '\u{e06c}';
     pub const HEADPHONES: char = '\u{e0f1}';
     pub const SPEAKER: char = '\u{e166}';

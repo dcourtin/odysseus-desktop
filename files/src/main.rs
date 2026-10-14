@@ -7,9 +7,14 @@
 //! Espace (aperçu d'une image), Suppr (corbeille), Ctrl+Z (annuler la mise à la
 //! corbeille). Dans la corbeille : bouton « Remettre » ou Ctrl+Retour arrière
 //! pour remettre l'élément à sa place ; double-clic l'ouvre comme ailleurs.
-//! Souris : clic, double-clic pour ouvrir, molette, glisser la barre d'outils
-//! pour déplacer la fenêtre.
+//! Souris : clic (sélection et panneau d'informations à droite), double-clic
+//! pour ouvrir, clic sur un en-tête de colonne pour trier, molette, glisser un
+//! élément vers une autre fenêtre ou sur un dossier, glisser la barre d'outils
+//! pour déplacer la fenêtre. Ctrl+C copie le chemin, Ctrl+I montre ou masque
+//! le panneau, Échap le ferme.
 
+mod dnd;
+mod info;
 mod model;
 
 use std::os::fd::AsFd;
@@ -20,18 +25,21 @@ use std::{
 };
 
 use common::{
-    draw::{Canvas, Text},
+    draw::{Canvas, Image, Text},
     theme::{self, Rgba, icon},
 };
-use model::{Browser, format_date, format_size, is_text};
+use info::Details;
+use model::{Browser, SortKey, format_date, format_size, is_text};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
+    data_device_manager::{DataDeviceManagerState, data_device::DataDevice},
     delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, Mode, PostAction,
+            channel::{self, Event as ChannelEvent},
             generic::Generic,
             timer::{TimeoutAction, Timer},
         },
@@ -67,6 +75,11 @@ const ROW_H: f32 = 30.0;
 const STATUS_H: f32 = 28.0;
 const SIZE_COL_W: f32 = 96.0;
 const DATE_COL_W: f32 = 168.0;
+/// Panneau d'informations, et largeur de fenêtre en dessous de laquelle il se cache
+const INFO_W: f32 = 280.0;
+const INFO_MIN_WINDOW: u32 = 860;
+/// Distance au-delà de laquelle un appui sur une ligne devient un glisser
+const DRAG_START: f64 = 6.0;
 const BTN_LEFT: u32 = 0x110;
 
 /// Zones cliquables, en coordonnées logiques de la fenêtre
@@ -83,15 +96,44 @@ enum Hit {
     Crumb(PathBuf),
     Back,
     Forward,
+    SortBy(SortKey),
+    /// Panneau d'informations : fermer, et ses actions sur l'élément sélectionné
+    CloseInfo,
+    Open,
+    CopyPath,
+    CopyImage,
+    Trash,
+}
+
+/// Glisser-déposer en cours depuis Fichiers
+pub struct Drag {
+    source: smithay_client_toolkit::data_device_manager::data_source::DragSource,
+    path: PathBuf,
+    /// Image qui suit le pointeur (gardée vivante pendant le glisser)
+    _icon: wl_surface::WlSurface,
 }
 
 struct Files {
     registry_state: RegistryState,
     output_state: OutputState,
     seat_state: SeatState,
+    compositor: CompositorState,
+    qh: QueueHandle<Files>,
     shm: Shm,
     pool: SlotPool,
     window: Window,
+    /// Glisser-déposer : gestionnaire, périphérique de données du siège
+    data_manager: Option<DataDeviceManagerState>,
+    data_device: Option<DataDevice>,
+    /// Appui sur une ligne (position, ligne, numéro d'événement) : un glisser possible
+    press: Option<(f64, f64, usize, u32)>,
+    drag: Option<Drag>,
+    /// Dossier survolé pendant un glisser (surligné, destination du dépôt)
+    drop_target: Option<PathBuf>,
+    /// Panneau d'informations ouvert, et détails de l'élément affiché
+    info: bool,
+    details: Option<Details>,
+    thumbs: channel::Sender<(PathBuf, Option<Image>)>,
     loop_handle: LoopHandle<'static, Files>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -216,6 +258,21 @@ fn main() {
         .insert(event_loop.handle())
         .expect("source Wayland");
 
+    // Vignettes du panneau d'informations, décodées dans un fil
+    let (thumbs, thumb_rx) = channel::channel::<(PathBuf, Option<Image>)>();
+    event_loop
+        .handle()
+        .insert_source(thumb_rx, |event, _, files| {
+            if let ChannelEvent::Msg((path, image)) = event
+                && let Some(d) = files.details.as_mut()
+                && d.path == path
+            {
+                d.thumbnail = image;
+                files.draw();
+            }
+        })
+        .expect("canal des vignettes");
+
     // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
     if let Some(fd) = theme::watch() {
         let _ = event_loop.handle().insert_source(
@@ -251,9 +308,19 @@ fn main() {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
+        data_manager: DataDeviceManagerState::bind(&globals, &qh).ok(),
+        compositor,
+        qh: qh.clone(),
         pool: SlotPool::new(2048 * 1024 * 4, &shm).expect("pool shm"),
         shm,
         window,
+        data_device: None,
+        press: None,
+        drag: None,
+        drop_target: None,
+        info: false,
+        details: None,
+        thumbs,
         loop_handle: event_loop.handle(),
         keyboard: None,
         pointer: None,
@@ -392,6 +459,9 @@ impl Files {
                 return;
             }
             Keysym::h if ctrl => self.browser.toggle_hidden(),
+            Keysym::c if ctrl => return self.copy_path(),
+            Keysym::i if ctrl => self.info = !self.info,
+            Keysym::Escape if self.info => self.info = false,
             Keysym::q if ctrl => {
                 self.exit = true;
                 return;
@@ -433,6 +503,7 @@ impl Files {
                     .last_click
                     .is_some_and(|(t, row)| row == i && t.elapsed() < Duration::from_millis(400));
                 self.browser.selected = i;
+                self.info = true;
                 self.last_click = Some((Instant::now(), i));
                 if double {
                     self.last_click = None;
@@ -456,6 +527,19 @@ impl Files {
                 self.browser.forward();
                 self.navigated();
             }
+            Some(Hit::SortBy(key)) => {
+                self.browser.sort_by(key);
+                self.navigated();
+            }
+            Some(Hit::CloseInfo) => {
+                self.info = false;
+                self.draw();
+            }
+            Some(Hit::Open) => self.open_selected(),
+            Some(Hit::CopyPath) => self.copy_path(),
+            Some(Hit::CopyImage) => self.copy_image(),
+            Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
+            Some(Hit::Trash) => self.trash_selected(),
             None => {
                 // Barre d'outils vide : déplacer la fenêtre (pas de barre de titre)
                 if y < TOOLBAR_H as f64
@@ -466,6 +550,40 @@ impl Files {
                 }
             }
         }
+    }
+
+    fn selected_path(&self) -> Option<PathBuf> {
+        self.browser
+            .entries
+            .get(self.browser.selected)
+            .map(|e| e.path.clone())
+    }
+
+    /// Chemin complet dans le presse-papiers (wl-copy le garde après la fermeture)
+    fn copy_path(&mut self) {
+        let Some(path) = self.selected_path() else {
+            return;
+        };
+        let text = path.to_string_lossy().into_owned();
+        self.browser.message = Some(match wl_copy(&["--", &text], None) {
+            Ok(()) => format!("Chemin copié : {text}"),
+            Err(e) => e,
+        });
+        self.draw();
+    }
+
+    /// L'image elle-même dans le presse-papiers, prête à coller (Ctrl+V)
+    fn copy_image(&mut self) {
+        let Some(path) = self.selected_path() else {
+            return;
+        };
+        self.browser.message = Some(
+            match wl_copy(&["--type", info::image_mime(&path)], Some(&path)) {
+                Ok(()) => "Image copiée — Ctrl+V pour la coller".into(),
+                Err(e) => e,
+            },
+        );
+        self.draw();
     }
 
     fn in_trash(&self) -> bool {
@@ -583,12 +701,41 @@ impl Files {
         self.navigated();
     }
 
+    /// Panneau visible : ouvert, une sélection, et la place de l'afficher
+    fn info_visible(&self) -> bool {
+        self.info && self.width >= INFO_MIN_WINDOW && !self.browser.entries.is_empty()
+    }
+
+    /// Détails de l'élément sélectionné, relus quand la sélection change ;
+    /// la vignette d'une image est décodée dans un fil.
+    fn refresh_details(&mut self) {
+        let Some(path) = self.selected_path().filter(|_| self.info_visible()) else {
+            return;
+        };
+        if self.details.as_ref().is_some_and(|d| d.path == path) {
+            return;
+        }
+        self.details = Some(Details::read(&path));
+        if info::is_image(&path) {
+            let tx = self.thumbs.clone();
+            let side = (INFO_W * 2.0) as u32;
+            std::thread::spawn(move || {
+                let image = info::thumbnail(&path, side, side);
+                let _ = tx.send((path, image));
+            });
+        }
+    }
+
     fn draw(&mut self) {
         if !self.configured {
             return;
         }
+        self.refresh_details();
         let s = self.scale.max(1) as f32;
         let (w, h) = (self.width * s as u32, self.height * s as u32);
+        let info_px = if self.info_visible() { INFO_W * s } else { 0.0 };
+        // Bord droit de la liste (le panneau d'informations prend la suite)
+        let right = w as f32 - info_px;
         let rows = self.visible_rows();
         let Ok((buffer, data)) =
             self.pool
@@ -646,7 +793,17 @@ impl Files {
             }
             let row_h = 32.0 * s;
             let active = *path == self.browser.cwd;
-            if active {
+            if self.drop_target.as_ref() == Some(path) {
+                let a = theme::palette().accent;
+                c.fill_rounded(
+                    10.0 * s,
+                    y,
+                    sw - 20.0 * s,
+                    row_h,
+                    8.0 * s,
+                    a.with_alpha(0.35),
+                );
+            } else if active {
                 let mut sel = theme::palette().accent;
                 sel.a = 0.18;
                 c.fill_rounded(10.0 * s, y, sw - 20.0 * s, row_h, 8.0 * s, sel);
@@ -775,7 +932,7 @@ impl Files {
             crumbs.push((label, acc.clone()));
         }
         let crumb_x0 = x0 + 100.0 * s;
-        let avail = w as f32 - crumb_x0 - 120.0 * s;
+        let avail = right - crumb_x0 - 120.0 * s;
         let sep_w = self.regular.measure("  ›  ", 14.0 * s);
         let widths: Vec<f32> = crumbs
             .iter()
@@ -844,7 +1001,7 @@ impl Files {
                 "Vider la corbeille"
             };
             let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
-            let bx = w as f32 - lw - 16.0 * s;
+            let bx = right - lw - 16.0 * s;
             let bh = 28.0 * s;
             let bg = if armed {
                 theme::palette().danger
@@ -886,7 +1043,7 @@ impl Files {
         c.fill_rounded(
             x0,
             TOOLBAR_H * s - s,
-            w as f32 - x0,
+            right - x0,
             s,
             0.0,
             theme::palette().ink(0.06),
@@ -894,24 +1051,45 @@ impl Files {
 
         // En-têtes de colonnes
         let list_x = x0 + 16.0 * s;
-        let list_w = w as f32 - list_x - 16.0 * s;
+        let list_w = right - list_x - 16.0 * s;
         let date_x = list_x + list_w - DATE_COL_W * s;
         let size_x = date_x - SIZE_COL_W * s - 16.0 * s;
         let header_y = TOOLBAR_H * s;
-        for (label, x) in [
-            ("Nom", list_x + 36.0 * s),
-            ("Taille", size_x),
-            ("Modifié", date_x),
+        let sort = self.browser.sort;
+        for (label, x, key, col_w) in [
+            (
+                "Nom",
+                list_x + 36.0 * s,
+                SortKey::Name,
+                size_x - list_x - 52.0 * s,
+            ),
+            ("Taille", size_x, SortKey::Size, SIZE_COL_W * s),
+            ("Modifié", date_x, SortKey::Modified, DATE_COL_W * s),
         ] {
-            self.regular.draw_in(
-                &mut c,
-                label,
-                x,
-                header_y,
-                HEADER_H * s,
-                12.0 * s,
-                theme::palette().text_dim,
-            );
+            let active = sort.key == key;
+            let (font, color) = if active {
+                (&self.bold, theme::palette().text)
+            } else {
+                (&self.regular, theme::palette().text_dim)
+            };
+            font.draw_in(&mut c, label, x, header_y, HEADER_H * s, 12.0 * s, color);
+            if active {
+                let lw = font.measure(label, 12.0 * s);
+                let glyph = if sort.descending {
+                    icon::CHEVRON_DOWN
+                } else {
+                    icon::CHEVRON_UP
+                };
+                self.icons.icon(
+                    &mut c,
+                    glyph,
+                    x + lw + 10.0 * s,
+                    header_y + HEADER_H * s / 2.0,
+                    12.0 * s,
+                    color,
+                );
+            }
+            hit(x - 6.0 * s, header_y, col_w, HEADER_H * s, Hit::SortBy(key));
         }
 
         // Liste
@@ -924,7 +1102,7 @@ impl Files {
             self.regular.draw_in(
                 &mut c,
                 msg,
-                x0 + (w as f32 - x0 - mw) / 2.0,
+                x0 + (right - x0 - mw) / 2.0,
                 top,
                 list_h,
                 15.0 * s,
@@ -935,10 +1113,13 @@ impl Files {
             let e = &b.entries[idx];
             let ry = top + row as f32 * ROW_H * s;
             let rh = ROW_H * s;
-            if idx == b.selected {
+            if e.is_dir && self.drop_target.as_ref() == Some(&e.path) {
+                let a = theme::palette().accent.with_alpha(0.45);
+                c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, a);
+            } else if idx == b.selected {
                 let mut sel = theme::palette().accent;
                 sel.a = 0.25;
-                c.fill_rounded(x0 + 8.0 * s, ry, w as f32 - x0 - 16.0 * s, rh, 8.0 * s, sel);
+                c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, sel);
             }
             if e.is_dir {
                 draw_folder_icon(
@@ -991,18 +1172,12 @@ impl Files {
                 13.0 * s,
                 theme::palette().text_dim,
             );
-            hit(
-                x0 + 8.0 * s,
-                ry,
-                w as f32 - x0 - 16.0 * s,
-                rh,
-                Hit::Row(idx),
-            );
+            hit(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, Hit::Row(idx));
         }
 
         // Barre d'état
         let sy = h as f32 - STATUS_H * s;
-        c.fill_rounded(x0, sy, w as f32 - x0, s, 0.0, theme::palette().ink(0.06));
+        c.fill_rounded(x0, sy, right - x0, s, 0.0, theme::palette().ink(0.06));
         let status = match &b.message {
             Some(m) => m.clone(),
             None => {
@@ -1028,6 +1203,16 @@ impl Files {
         self.regular
             .draw_in(&mut c, &status, list_x, sy, STATUS_H * s, 12.0 * s, color);
 
+        if let Some(d) = self.details.as_ref().filter(|_| info_px > 0.0) {
+            let fonts = Fonts {
+                regular: &self.regular,
+                bold: &self.bold,
+                icons: &self.icons,
+            };
+            let in_trash = common::trash::files_dir().is_some_and(|t| self.browser.cwd == t);
+            draw_info(&fonts, d, in_trash, &mut c, right, h as f32, s, &mut hit);
+        }
+
         self.hits = hits;
         let surface = self.window.wl_surface();
         surface.set_buffer_scale(self.scale);
@@ -1038,12 +1223,223 @@ impl Files {
     }
 }
 
+/// Polices du panneau d'informations
+struct Fonts<'a> {
+    regular: &'a Text,
+    bold: &'a Text,
+    icons: &'a Text,
+}
+
+/// Panneau d'informations : aperçu, détails, actions rapides.
+#[allow(clippy::too_many_arguments)]
+fn draw_info(
+    fonts: &Fonts,
+    d: &Details,
+    in_trash: bool,
+    c: &mut Canvas,
+    x0: f32,
+    h: f32,
+    s: f32,
+    hit: &mut impl FnMut(f32, f32, f32, f32, Hit),
+) {
+    let p = theme::palette();
+    let w = INFO_W * s;
+    let pad = 16.0 * s;
+    let inner = w - 2.0 * pad;
+    let x = x0 + pad;
+    c.fill_rounded(x0, 0.0, w, h, 0.0, p.sidebar);
+    c.fill_rounded(x0, 0.0, s, h, 0.0, p.ink(0.06));
+
+    // En-tête : titre et fermeture
+    let mid = TOOLBAR_H * s / 2.0;
+    fonts
+        .bold
+        .draw_in(c, "Informations", x, 0.0, TOOLBAR_H * s, 14.0 * s, p.text);
+    let cx = x0 + w - pad - 10.0 * s;
+    fonts
+        .icons
+        .icon(c, icon::CLOSE, cx, mid, 16.0 * s, p.text_dim);
+    hit(
+        cx - 16.0 * s,
+        mid - 16.0 * s,
+        32.0 * s,
+        32.0 * s,
+        Hit::CloseInfo,
+    );
+    c.fill_rounded(x0, TOOLBAR_H * s - s, w, s, 0.0, p.ink(0.06));
+
+    // Aperçu : la vignette d'une image, sinon une grande icône
+    let mut y = TOOLBAR_H * s + pad;
+    let box_h = 168.0 * s;
+    c.fill_rounded(x, y, inner, box_h, 10.0 * s, p.ink(0.04));
+    match d.thumbnail.as_ref() {
+        Some(img) => {
+            let k = (inner / img.width as f32).min(box_h / img.height as f32);
+            let (iw, ih) = (img.width as f32 * k, img.height as f32 * k);
+            c.image(
+                img,
+                x + (inner - iw) / 2.0,
+                y + (box_h - ih) / 2.0,
+                iw,
+                ih,
+                6.0 * s,
+            );
+        }
+        None => {
+            let size = 56.0 * s;
+            let (ix, iy) = (x + (inner - size) / 2.0, y + (box_h - size * 1.2) / 2.0);
+            if d.is_dir {
+                draw_folder_icon(c, ix, iy, size, p.accent);
+            } else {
+                draw_file_icon(c, ix + size * 0.12, iy, size * 0.76, p.text_dim);
+            }
+        }
+    }
+    y += box_h + 14.0 * s;
+
+    // Nom (sur plusieurs lignes) et nature
+    for line in wrap_chars(fonts.bold, &d.name, 15.0 * s, inner, 3) {
+        fonts
+            .bold
+            .draw_in(c, &line, x, y, 20.0 * s, 15.0 * s, p.text);
+        y += 20.0 * s;
+    }
+    let summary = format!("{} · {}", d.kind, d.size);
+    fonts
+        .regular
+        .draw_in(c, &summary, x, y + 2.0 * s, 18.0 * s, 12.5 * s, p.text_dim);
+    y += 30.0 * s;
+    c.fill_rounded(x, y, inner, s, 0.0, p.ink(0.06));
+    y += 10.0 * s;
+
+    // Détails : étiquette à gauche, valeur à droite (sur plusieurs lignes)
+    let label_w = 92.0 * s;
+    // Dates coupées entre les mots, chemins au caractère près
+    let mut row = |label: &str, value: &str, lines: usize, y: &mut f32| {
+        fonts
+            .regular
+            .draw_in(c, label, x, *y, 20.0 * s, 12.0 * s, p.text_dim);
+        let value_w = inner - label_w;
+        let wrapped = if value.contains(' ') {
+            fonts.regular.wrap(value, 12.5 * s, value_w, lines)
+        } else {
+            wrap_chars(fonts.regular, value, 12.5 * s, value_w, lines)
+        };
+        for line in wrapped {
+            fonts
+                .regular
+                .draw_in(c, &line, x + label_w, *y, 20.0 * s, 12.5 * s, p.text);
+            *y += 18.0 * s;
+        }
+        *y += 6.0 * s;
+    };
+    if let Some((iw, ih)) = d.dimensions {
+        row("Dimensions", &format!("{iw} × {ih} pixels"), 1, &mut y);
+    }
+    row("Modifié", &d.modified, 2, &mut y);
+    if let Some(created) = d.created.as_ref() {
+        row("Créé", created, 2, &mut y);
+    }
+    let place = d
+        .path
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".into());
+    row("Emplacement", &place, 3, &mut y);
+    y += 6.0 * s;
+
+    // Actions rapides
+    let mut actions = vec![
+        (icon::EXTERNAL_LINK, "Ouvrir", Hit::Open, p.text),
+        (icon::COPY, "Copier le chemin", Hit::CopyPath, p.text),
+    ];
+    if info::is_image(&d.path) {
+        actions.push((icon::IMAGE, "Copier l'image", Hit::CopyImage, p.text));
+    }
+    actions.push(if in_trash {
+        (icon::UNDO, "Remettre à sa place", Hit::Trash, p.text)
+    } else {
+        (icon::TRASH, "Mettre à la corbeille", Hit::Trash, p.danger)
+    });
+    let bh = 32.0 * s;
+    for (glyph, label, what, color) in actions {
+        if y + bh > h - 48.0 * s {
+            break;
+        }
+        c.fill_rounded(x, y, inner, bh, 8.0 * s, p.tile());
+        fonts
+            .icons
+            .icon(c, glyph, x + 18.0 * s, y + bh / 2.0, 14.0 * s, color);
+        fonts
+            .regular
+            .draw_in(c, label, x + 36.0 * s, y, bh, 13.0 * s, color);
+        hit(x, y, inner, bh, what);
+        y += bh + 6.0 * s;
+    }
+
+    // Astuce, en bas
+    let tip = "Glissez l'élément vers une autre fenêtre, ou sur un dossier pour l'y ranger.";
+    let lines = fonts.regular.wrap(tip, 11.5 * s, inner, 3);
+    let mut ty = h - pad - lines.len() as f32 * 16.0 * s;
+    if ty > y {
+        for line in lines {
+            fonts
+                .regular
+                .draw_in(c, &line, x, ty, 16.0 * s, 11.5 * s, p.text_dim);
+            ty += 16.0 * s;
+        }
+    }
+}
+
+/// Met du texte (arguments) ou un fichier (entrée) dans le presse-papiers.
+fn wl_copy(args: &[&str], input: Option<&Path>) -> Result<(), String> {
+    let stdin = match input {
+        Some(path) => std::fs::File::open(path)
+            .map(std::process::Stdio::from)
+            .map_err(|e| format!("Lecture impossible : {e}"))?,
+        None => std::process::Stdio::null(),
+    };
+    let mut child = std::process::Command::new("wl-copy")
+        .args(args)
+        .stdin(stdin)
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("Presse-papiers indisponible (wl-copy) : {e}"))?;
+    // wl-copy rend la main une fois les données prises : attente dans un fil
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
+/// Coupe un texte sans espaces (chemin, nom de fichier) au caractère près ;
+/// la dernière ligne se termine par « … » si tout ne tient pas.
+fn wrap_chars(font: &Text, text: &str, px: f32, max_w: f32, max_lines: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if lines.len() + 1 == max_lines {
+            let rest: String = chars[start..].iter().collect();
+            lines.push(font.truncate(&rest, px, max_w));
+            break;
+        }
+        let mut end = start + 1;
+        while end < chars.len()
+            && font.measure(&chars[start..=end].iter().collect::<String>(), px) <= max_w
+        {
+            end += 1;
+        }
+        lines.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    lines
+}
+
 fn plural(n: usize) -> &'static str {
     if n > 1 { "s" } else { "" }
 }
 
 /// Dossier : onglet + corps arrondis.
-fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
+pub fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
     let mut tab = color;
     tab.a *= 0.75;
     c.fill_rounded(x, y, size * 0.5, size * 0.3, size * 0.1, tab);
@@ -1051,7 +1447,7 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
 }
 
 /// Fichier : feuille arrondie avec deux lignes de « texte ».
-fn draw_file_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
+pub fn draw_file_icon(c: &mut Canvas, x: f32, y: f32, size: f32, color: Rgba) {
     let h = size * 1.3;
     c.fill_rounded(x, y, size, h, size * 0.18, color);
     let line = theme::palette().content.with_alpha(0.6);
@@ -1143,6 +1539,11 @@ impl SeatHandler for Files {
         capability: Capability,
     ) {
         self.seat = Some(seat.clone());
+        if self.data_device.is_none()
+            && let Some(manager) = self.data_manager.as_ref()
+        {
+            self.data_device = Some(manager.get_data_device(qh, &seat));
+        }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             let keyboard = self.seat_state.get_keyboard_with_repeat(
                 qh,
@@ -1254,7 +1655,18 @@ impl PointerHandler for Files {
                     button: BTN_LEFT,
                     serial,
                     ..
-                } => self.click(x, y, serial),
+                } => {
+                    // Un appui sur une ligne peut devenir un glisser
+                    self.press = match self.hit_at(x, y) {
+                        Some(Hit::Row(i)) => Some((x, y, i, serial)),
+                        _ => None,
+                    };
+                    self.click(x, y, serial);
+                }
+                PointerEventKind::Motion { .. } => self.pointer_moved(x, y),
+                PointerEventKind::Release {
+                    button: BTN_LEFT, ..
+                } => self.press = None,
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
                     let max = self
                         .browser

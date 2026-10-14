@@ -1,12 +1,13 @@
 //! Protocoles d'appoint attendus par les navigateurs et les clients GL :
 //! tampons GPU (linux-dmabuf), échelle fractionnaire et viewporter, sélection
-//! primaire (clic du milieu), activation xdg, inhibition de veille, verrou.
+//! primaire (clic du milieu), accès au presse-papiers (wl-copy, wl-paste),
+//! activation xdg, inhibition de veille, verrou.
 
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
-    delegate_dmabuf, delegate_fractional_scale, delegate_idle_inhibit, delegate_primary_selection,
-    delegate_session_lock, delegate_single_pixel_buffer, delegate_viewporter,
-    delegate_xdg_activation,
+    delegate_data_control, delegate_dmabuf, delegate_ext_data_control, delegate_fractional_scale,
+    delegate_idle_inhibit, delegate_primary_selection, delegate_session_lock,
+    delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_activation,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
     utils::Transform,
     wayland::{
@@ -14,7 +15,11 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::{self, FractionalScaleHandler},
         idle_inhibit::IdleInhibitHandler,
-        selection::primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
+        selection::{
+            ext_data_control,
+            primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
+            wlr_data_control,
+        },
         session_lock::{LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker},
         xdg_activation::{
             XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
@@ -57,6 +62,22 @@ impl PrimarySelectionHandler for Odysseus {
     }
 }
 delegate_primary_selection!(Odysseus);
+
+// Presse-papiers en ligne de commande : wl-paste lit une capture pour la coller
+// ailleurs (Claude Code, Ctrl+V). Les deux variantes du protocole, selon le client.
+impl ext_data_control::DataControlHandler for Odysseus {
+    fn data_control_state(&self) -> &ext_data_control::DataControlState {
+        &self.ext_data_control_state
+    }
+}
+delegate_ext_data_control!(Odysseus);
+
+impl wlr_data_control::DataControlHandler for Odysseus {
+    fn data_control_state(&self) -> &wlr_data_control::DataControlState {
+        &self.wlr_data_control_state
+    }
+}
+delegate_data_control!(Odysseus);
 
 impl XdgActivationHandler for Odysseus {
     fn activation_state(&mut self) -> &mut XdgActivationState {

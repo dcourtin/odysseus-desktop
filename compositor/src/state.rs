@@ -66,6 +66,8 @@ pub struct Odysseus {
     /// Global linux-dmabuf, créé par le backend une fois le GPU connu
     pub dmabuf_global: Option<DmabufGlobal>,
     pub primary_selection_state: PrimarySelectionState,
+    pub ext_data_control_state: smithay::wayland::selection::ext_data_control::DataControlState,
+    pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
     pub activation_state: XdgActivationState,
     pub session_lock_state: SessionLockManagerState,
     pub fractional_scale_state: FractionalScaleManagerState,
@@ -89,6 +91,8 @@ pub struct Odysseus {
     pub mod_key: ModKey,
     /// Image du curseur demandée par le client sous le pointeur
     pub cursor_status: CursorImageStatus,
+    /// Glisser-déposer entre clients : image qui suit le pointeur
+    pub dnd_icon: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
     /// Session logind (mode tty) : changement de terminal virtuel
     pub session: Option<LibSeatSession>,
     /// Capture d'écran : sélection en cours, capture à faire, éclair de confirmation
@@ -152,6 +156,18 @@ impl Odysseus {
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let dmabuf_state = DmabufState::new();
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let ext_data_control_state =
+            smithay::wayland::selection::ext_data_control::DataControlState::new::<Self, _>(
+                &dh,
+                Some(&primary_selection_state),
+                |_| true,
+            );
+        let wlr_data_control_state =
+            smithay::wayland::selection::wlr_data_control::DataControlState::new::<Self, _>(
+                &dh,
+                Some(&primary_selection_state),
+                |_| true,
+            );
         let activation_state = XdgActivationState::new::<Self>(&dh);
         // Seul le verrou d'odysseus en a besoin, mais un client tiers (swaylock) marche aussi
         let session_lock_state = SessionLockManagerState::new::<Self, _>(&dh, |_| true);
@@ -211,6 +227,8 @@ impl Odysseus {
             dmabuf_state,
             dmabuf_global: None,
             primary_selection_state,
+            ext_data_control_state,
+            wlr_data_control_state,
             activation_state,
             session_lock_state,
             fractional_scale_state,
@@ -226,6 +244,7 @@ impl Odysseus {
             // Le backend winit tourne toujours dans un autre compositeur
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
+            dnd_icon: None,
             session: None,
             selection: None,
             capture_request: None,

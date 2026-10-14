@@ -78,7 +78,21 @@ impl DataDeviceHandler for Odysseus {
     }
 }
 
-impl ClientDndGrabHandler for Odysseus {}
+// Glisser-déposer : l'icône fournie par le client suit le pointeur jusqu'au dépôt
+impl ClientDndGrabHandler for Odysseus {
+    fn started(
+        &mut self,
+        _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        icon: Option<WlSurface>,
+        _seat: Seat<Self>,
+    ) {
+        self.dnd_icon = icon;
+    }
+
+    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+        self.dnd_icon = None;
+    }
+}
 impl ServerDndGrabHandler for Odysseus {}
 
 delegate_data_device!(Odysseus);
