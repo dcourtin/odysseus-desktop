@@ -14,6 +14,23 @@ Bureau Wayland personnel en Rust : rapide, sobre, inspiré de macOS sans le copi
 > *Exploratory work — not for production use. Personal experiment built for a
 > single machine; no security or stability guarantees.*
 
+## Aperçu
+
+![Bureau : Fichiers, barre et notifications](docs/captures/bureau.png)
+
+| Centre de contrôle | Centre de notifications |
+|---|---|
+| ![Centre de contrôle](docs/captures/centre-controle.png) | ![Centre de notifications](docs/captures/centre-notifications.png) |
+
+| Lanceur (Super+Espace) | Fichiers |
+|---|---|
+| ![Lanceur](docs/captures/lanceur.png) | ![Fichiers](docs/captures/fichiers.png) |
+
+![Écran de verrouillage](docs/captures/verrou.png)
+
+*Captures faites par le compositeur lui-même (Impr. écran), en 4K à l'échelle 1,5,
+avec le fond d'écran dégradé par défaut. Notifications et disque « Archives » de démonstration.*
+
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
