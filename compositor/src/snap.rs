@@ -23,6 +23,9 @@ use crate::{
 const EDGE: f64 = 14.0;
 /// Hauteur des zones de coin, le long des bords gauche et droit
 const CORNER: f64 = 140.0;
+/// Zones de coin, en fraction de l'écran : un bord touché dans ces zones donne un quart
+const CORNER_W: f64 = 0.15;
+const CORNER_H: f64 = 0.20;
 /// Écart entre les fenêtres rangées et autour d'elles
 const GAP: i32 = 8;
 
@@ -47,22 +50,37 @@ impl Odysseus {
             .and_then(|o| self.space.output_geometry(o))?
             .to_f64();
         let area = self.usable_area()?.to_f64();
-        let (left, right) = (
-            pos.x <= out.loc.x + EDGE,
-            pos.x >= out.loc.x + out.size.w - EDGE,
-        );
+        // Bords touchés (le bas ne sert qu'aux coins)
+        let left = pos.x <= out.loc.x + EDGE;
+        let right = pos.x >= out.loc.x + out.size.w - EDGE;
         let top = pos.y <= area.loc.y + EDGE;
-        let near_top = pos.y <= area.loc.y + CORNER;
-        let near_bottom = pos.y >= out.loc.y + out.size.h - CORNER;
-        Some(match (left, right) {
-            (true, _) if near_top => Zone::TopLeft,
-            (true, _) if near_bottom => Zone::BottomLeft,
-            (true, _) => Zone::Left,
-            (_, true) if near_top => Zone::TopRight,
-            (_, true) if near_bottom => Zone::BottomRight,
-            (_, true) => Zone::Right,
-            _ if top => Zone::Top,
-            _ => return None,
+        let bottom = pos.y >= out.loc.y + out.size.h - EDGE;
+        // Zones de coin, généreuses : un des deux bords du coin suffit
+        let corner_w = (out.size.w * CORNER_W).max(CORNER);
+        let corner_h = (area.size.h * CORNER_H).max(CORNER);
+        let near_left = pos.x <= out.loc.x + corner_w;
+        let near_right = pos.x >= out.loc.x + out.size.w - corner_w;
+        let near_top = pos.y <= area.loc.y + corner_h;
+        let near_bottom = pos.y >= out.loc.y + out.size.h - corner_h;
+        let corner = |side: bool, end: bool, near_side: bool, near_end: bool| {
+            (side || end) && near_side && near_end
+        };
+        Some(if corner(left, top, near_left, near_top) {
+            Zone::TopLeft
+        } else if corner(right, top, near_right, near_top) {
+            Zone::TopRight
+        } else if corner(left, bottom, near_left, near_bottom) {
+            Zone::BottomLeft
+        } else if corner(right, bottom, near_right, near_bottom) {
+            Zone::BottomRight
+        } else if left {
+            Zone::Left
+        } else if right {
+            Zone::Right
+        } else if top {
+            Zone::Top
+        } else {
+            return None;
         })
     }
 
