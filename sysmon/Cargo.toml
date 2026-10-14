@@ -1,0 +1,15 @@
+[package]
+name = "sysmon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Moniteur système d'odysseus-desktop : processeur, mémoire, disques, carte graphique, réseau, processus"
+
+[[bin]]
+name = "odysseus-moniteur"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+libc = "0.2"

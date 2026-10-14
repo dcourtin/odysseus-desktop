@@ -326,4 +326,14 @@ pub mod icon {
     pub const SAVE: char = '\u{e14d}';
     pub const IMAGE: char = '\u{e0f6}';
     pub const UNDO: char = '\u{e2a1}';
+    pub const ACTIVITY: char = '\u{e038}';
+    pub const GAUGE: char = '\u{e1bf}';
+    pub const CPU: char = '\u{e0a9}';
+    pub const MEMORY: char = '\u{e445}';
+    pub const GPU: char = '\u{e66a}';
+    pub const THERMOMETER: char = '\u{e186}';
+    pub const ZAP: char = '\u{e1b4}';
+    pub const FAN: char = '\u{e379}';
+    pub const ARROW_DOWN: char = '\u{e042}';
+    pub const ARROW_UP: char = '\u{e04a}';
 }

@@ -2,7 +2,12 @@
 //! octets B, G, R, A en mémoire), partagé par la barre et le lanceur.
 
 use crate::theme::Rgba;
-use fontdue::{Font, FontSettings};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use fontdue::{Font, FontSettings, Metrics};
 
 pub struct Canvas<'a> {
     pub buf: &'a mut [u8],
@@ -257,13 +262,39 @@ pub struct Image {
 
 pub struct Text {
     font: Font,
+    /// Glyphes déjà rendus, par caractère et taille : les panneaux qui se
+    /// redessinent souvent (moniteur, curseurs) ne refont pas le travail
+    glyphs: Mutex<HashMap<(char, u32), Arc<Glyph>>>,
 }
+
+/// Glyphe rendu : mesures et couverture de chaque pixel
+type Glyph = (Metrics, Vec<u8>);
+
+/// Au-delà, le cache repart de zéro (changement d'échelle, textes très variés)
+const GLYPH_CACHE: usize = 4096;
 
 impl Text {
     pub fn load(path: &str) -> Result<Self, String> {
         let data = std::fs::read(path).map_err(|e| format!("{path} : {e}"))?;
         let font = Font::from_bytes(data, FontSettings::default())?;
-        Ok(Self { font })
+        Ok(Self {
+            font,
+            glyphs: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn glyph(&self, ch: char, px: f32) -> Arc<Glyph> {
+        let key = (ch, px.to_bits());
+        let mut cache = self.glyphs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(g) = cache.get(&key) {
+            return g.clone();
+        }
+        let g = Arc::new(self.font.rasterize(ch, px));
+        if cache.len() >= GLYPH_CACHE {
+            cache.clear();
+        }
+        cache.insert(key, g.clone());
+        g
     }
 
     /// Largeur en pixels d'une ligne de texte à la taille `px`.
@@ -348,7 +379,8 @@ impl Text {
 
     /// Dessine une icône (un glyphe de la police d'icônes) centrée en (cx, cy).
     pub fn icon(&self, canvas: &mut Canvas, glyph: char, cx: f32, cy: f32, px: f32, color: Rgba) {
-        let (m, coverage) = self.font.rasterize(glyph, px);
+        let g = self.glyph(glyph, px);
+        let (m, coverage) = (&g.0, &g.1);
         let left = (cx - m.width as f32 / 2.0).round() as i32;
         let top = (cy - m.height as f32 / 2.0).round() as i32;
         for row in 0..m.height {
@@ -384,7 +416,8 @@ impl Text {
         let baseline = (y + (h + line.ascent + line.descent) / 2.0).round();
         let mut pen = x;
         for ch in s.chars() {
-            let (m, coverage) = self.font.rasterize(ch, px);
+            let g = self.glyph(ch, px);
+            let (m, coverage) = (&g.0, &g.1);
             let left = (pen + m.xmin as f32).round() as i32;
             let top = (baseline - m.height as f32 - m.ymin as f32) as i32;
             for row in 0..m.height {

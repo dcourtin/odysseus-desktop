@@ -72,6 +72,9 @@ struct Bar {
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
     keys_zone: (f64, f64),
+    monitor_zone: (f64, f64),
+    /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
+    cpu_prev: (u64, u64),
     bell_zone: (f64, f64),
     clock_zone: (f64, f64),
     /// Connexion IPC pour les requêtes et commandes (None hors de sway)
@@ -129,6 +132,8 @@ fn main() {
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
         keys_zone: (0.0, 0.0),
+        monitor_zone: (0.0, 0.0),
+        cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
         ipc,
@@ -276,6 +281,10 @@ impl Bar {
             spawn_sibling("odysseus-notify", &["--center"]);
             return;
         }
+        if x >= self.monitor_zone.0 && x < self.monitor_zone.1 {
+            spawn_sibling("odysseus-moniteur", &[]);
+            return;
+        }
         if x >= self.keys_zone.0 && x < self.keys_zone.1 {
             spawn_sibling("odysseus-raccourcis", &[]);
             return;
@@ -294,12 +303,46 @@ impl Bar {
         }
     }
 
+    /// Charge la plus forte entre processeur (depuis la mesure précédente) et
+    /// mémoire, de 0 à 1 ; relue à chaque dessin (une fois par seconde).
+    fn system_load(&mut self) -> f32 {
+        let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+        let v: Vec<u64> = stat
+            .lines()
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        let total: u64 = v.iter().take(8).sum();
+        let idle = v.get(3).copied().unwrap_or(0) + v.get(4).copied().unwrap_or(0);
+        let (t0, i0) = std::mem::replace(&mut self.cpu_prev, (total, idle));
+        let dt = total.saturating_sub(t0);
+        let cpu = if t0 == 0 || dt == 0 {
+            0.0
+        } else {
+            1.0 - idle.saturating_sub(i0) as f32 / dt as f32
+        };
+        let info = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let kb = |key: &str| {
+            info.lines()
+                .find_map(|l| l.strip_prefix(key))
+                .and_then(|r| r.trim_start_matches(':').split_whitespace().next())
+                .and_then(|x| x.parse::<f32>().ok())
+                .unwrap_or(0.0)
+        };
+        let mem = 1.0 - kb("MemAvailable") / kb("MemTotal").max(1.0);
+        cpu.max(mem).clamp(0.0, 1.0)
+    }
+
     fn draw(&mut self) {
         if !self.configured || self.width == 0 {
             return;
         }
         let s = self.scale.max(1) as u32;
         let sf = s as f32;
+        let load = self.system_load();
         let (w, h) = (self.width * s, self.height * s);
         let stride = w as i32 * 4;
         let (buffer, data) = self
@@ -409,6 +452,21 @@ impl Bar {
         self.keys_zone = (
             ((kx - step / 2.0) / sf) as f64,
             ((kx + step / 2.0) / sf) as f64,
+        );
+        // Moniteur système : jauge colorée selon la charge (processeur ou mémoire)
+        let mx = kx - step;
+        let color = if load >= 0.9 {
+            theme::palette().danger
+        } else if load >= 0.7 {
+            theme::palette().accent
+        } else {
+            theme::palette().text
+        };
+        self.icons
+            .icon(&mut canvas, icon::GAUGE, mx, cy, icon_px + sf, color);
+        self.monitor_zone = (
+            ((mx - step / 2.0) / sf) as f64,
+            ((mx + step / 2.0) / sf) as f64,
         );
         let ix = ix - step;
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
