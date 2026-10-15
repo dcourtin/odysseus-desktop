@@ -9,6 +9,7 @@
 #   tools/vm.sh sans-ecran    démarre l'essai sans fenêtre (piloté par ssh)
 #   tools/vm.sh ssh [cmd]     se connecte à l'essai (utilisateur odysseus)
 #   tools/vm.sh arreter       éteint l'essai proprement
+#   tools/vm.sh etat          dit si la VM tourne
 #
 # Utilisateur de la VM : odysseus / odysseus (sudo sans mot de passe) ; ssh
 # seulement depuis cette machine (127.0.0.1:2222), avec une clé dédiée.
@@ -50,7 +51,10 @@ preseed() {
     [ -f cle ] || ssh-keygen -q -t ed25519 -N '' -C odysseus-vm -f cle
     key=$(cat cle.pub)
     cat > preseed.cfg <<EOF
-d-i debian-installer/locale string fr_FR.UTF-8
+d-i debian-installer/language string en
+d-i debian-installer/country string FR
+d-i debian-installer/locale string en_US.UTF-8
+d-i localechooser/supported-locales multiselect fr_FR.UTF-8
 d-i keyboard-configuration/xkb-keymap select fr
 d-i netcfg/choose_interface select auto
 d-i netcfg/get_hostname string odysseus-vm
@@ -81,7 +85,7 @@ d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/bootdev string /dev/vda
-d-i preseed/late_command string mkdir -p /target/home/odysseus/.ssh; echo '$key' > /target/home/odysseus/.ssh/authorized_keys; in-target chown -R odysseus:odysseus /home/odysseus/.ssh; in-target chmod 700 /home/odysseus/.ssh; echo 'odysseus ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/odysseus; chmod 440 /target/etc/sudoers.d/odysseus
+d-i preseed/late_command string mkdir -p /target/home/odysseus/.ssh; echo '$key' > /target/home/odysseus/.ssh/authorized_keys; in-target chown -R odysseus:odysseus /home/odysseus/.ssh; in-target chmod 700 /home/odysseus/.ssh; echo 'odysseus ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/odysseus; chmod 440 /target/etc/sudoers.d/odysseus; in-target update-locale LANG=fr_FR.UTF-8
 d-i finish-install/reboot_in_progress note
 d-i debian-installer/exit/poweroff boolean true
 EOF
@@ -109,13 +113,16 @@ installer)
     preseed
     rm -f base.qcow2 essai.qcow2
     qemu-img create -q -f qcow2 base.qcow2 20G
+    # La console série n'affiche que l'anglais : installation en anglais, système
+    # en français (locale fr_FR, clavier fr). qemu se détache : l'installation
+    # continue sans ce terminal ; la VM s'éteint d'elle-même une fois finie.
     echo "Installation de Debian (sans écran) : suivi dans $DIR/installation.log"
     # shellcheck disable=SC2046
     qemu-system-x86_64 $(qemu_base) -drive file=base.qcow2,if=virtio \
         -kernel linux -initrd initrd-auto.gz \
-        -append "auto=true priority=critical language=fr country=FR locale=fr_FR.UTF-8 keymap=fr hostname=odysseus-vm domain= console=ttyS0,115200n8" \
-        -display none -serial file:installation.log -no-reboot
-    echo "Base installée : $DIR/base.qcow2"
+        -append "auto=true priority=critical language=en country=FR locale=en_US.UTF-8 keymap=fr hostname=odysseus-vm domain= console=ttyS0,115200n8" \
+        -display none -serial file:installation.log -no-reboot -daemonize
+    echo "Elle s'éteint d'elle-même une fois finie (vm.sh etat) ; la base : $DIR/base.qcow2"
     ;;
 neuf)
     running && { echo "vm.sh : éteignez d'abord l'essai (vm.sh arreter)" >&2; exit 1; }
@@ -142,11 +149,18 @@ ssh)
     exec ssh -i "$DIR/cle" -p $PORT -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR odysseus@127.0.0.1 "$@"
     ;;
+etat)
+    if running; then
+        echo "La VM tourne (pid $(cat qemu.pid))"
+    else
+        echo "La VM est éteinte"
+    fi
+    ;;
 arreter)
     "$0" ssh sudo poweroff || true
     ;;
 *)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac
