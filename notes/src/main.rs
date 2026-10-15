@@ -12,9 +12,6 @@
 //! (paragraphe), clic sur une case pour la cocher, double-clic sur un
 //! dossier pour le renommer.
 
-mod editor;
-mod store;
-
 use std::{
     io::Write,
     os::{fd::AsFd, unix::process::CommandExt},
@@ -28,6 +25,7 @@ use common::{
     theme::{self, icon},
 };
 use editor::{Block, Editor, Format, Layout, Metrics, Sizes, Style};
+use notes::{editor, store};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
@@ -163,6 +161,9 @@ struct Notes {
     fonts: Fonts,
 
     store: Store,
+    /// Version de la base vue au dernier passage : un écart signale une
+    /// écriture venue d'ailleurs (un agent par odysseus-mcp)
+    db_version: i64,
     folders: Vec<Folder>,
     /// Nombre de notes : toutes, dans la corbeille
     counts: (usize, usize),
@@ -274,6 +275,7 @@ fn main() {
             bold_italic: load("/usr/share/fonts/inter/Inter-SemiBoldItalic.ttf"),
             mono: load("/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf"),
         },
+        db_version: store.data_version(),
         store,
         folders: Vec::new(),
         counts: (0, 0),
@@ -726,6 +728,34 @@ impl Notes {
     }
 
     /// Le texte vient de changer
+    /// Une autre connexion a écrit : listes relues, et la note affichée
+    /// reprise si l'on n'y a rien tapé depuis le dernier enregistrement
+    fn external_change(&mut self) {
+        self.reload();
+        if let Some(id) = self.current
+            && !self.editor.changed
+        {
+            match self.store.note(id) {
+                Ok(Some(note)) if note.body != self.editor.text => {
+                    let mut pos = self.editor.cursor.min(note.body.len());
+                    while !note.body.is_char_boundary(pos) {
+                        pos -= 1;
+                    }
+                    self.editor = Editor::new(note.body);
+                    self.editor.move_to(pos, false);
+                    self.layout = None;
+                }
+                Ok(None) => {
+                    self.current = None;
+                    self.editor = Editor::new(String::new());
+                    self.layout = None;
+                }
+                _ => {}
+            }
+        }
+        self.draw();
+    }
+
     fn edited(&mut self) {
         self.edited_at = Instant::now();
         self.follow = true;
@@ -733,6 +763,11 @@ impl Notes {
     }
 
     fn tick(&mut self) {
+        let version = self.store.data_version();
+        if version != self.db_version {
+            self.db_version = version;
+            self.external_change();
+        }
         if self.editor.changed && self.edited_at.elapsed() >= SAVE_AFTER {
             self.save();
             self.draw();

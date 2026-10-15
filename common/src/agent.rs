@@ -16,7 +16,7 @@
 //!   ],
 //!   "autorisations": {
 //!     "lire_systeme": true, "lire_documentation": true, "lire_fichiers": false,
-//!     "voir_bureau": true, "voir_ecran": false, "agir": false,
+//!     "notes": false, "voir_bureau": true, "voir_ecran": false, "agir": false,
 //!     "presse_papiers": false, "executer": false
 //!   }
 //! }
@@ -35,6 +35,8 @@ pub struct AgentPerms {
     pub docs: bool,
     /// Fichiers de l'utilisateur et du système (jamais les secrets : clés, mots de passe)
     pub files: bool,
+    /// Notes de l'appli Notes : les lire, les écrire, les mettre à la corbeille
+    pub notes: bool,
     /// Fenêtres, bureaux, historique des notifications
     pub desktop: bool,
     /// Captures de l'écran ou d'une fenêtre (envoyées à l'agent)
@@ -53,6 +55,7 @@ impl Default for AgentPerms {
             read: true,
             docs: true,
             files: false,
+            notes: false,
             desktop: true,
             screen: false,
             act: false,
@@ -207,6 +210,7 @@ impl AgentConfig {
             read: flag("lire_systeme", d.read),
             docs: flag("lire_documentation", d.docs),
             files: flag("lire_fichiers", d.files),
+            notes: flag("notes", d.notes),
             desktop: flag("voir_bureau", d.desktop),
             screen: flag("voir_ecran", d.screen),
             act: flag("agir", d.act),
@@ -292,6 +296,7 @@ impl AgentConfig {
             "lire_systeme": p.read,
             "lire_documentation": p.docs,
             "lire_fichiers": p.files,
+            "notes": p.notes,
             "voir_bureau": p.desktop,
             "voir_ecran": p.screen,
             "agir": p.act,

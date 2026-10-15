@@ -119,7 +119,7 @@ const AGENTS: [(&str, &str, &str); 3] = [
     ),
 ];
 /// Autorisations d'odysseus-mcp : titre, explication
-const PERMS: [(&str, &str); 8] = [
+const PERMS: [(&str, &str); 9] = [
     (
         "Lire l'état du système",
         "Charge, températures, mémoire, disques, réseau, écran, réglages, journaux d'odysseus.",
@@ -131,6 +131,10 @@ const PERMS: [(&str, &str); 8] = [
     (
         "Lire les fichiers",
         "Vos fichiers et ceux du système, jamais les secrets (clés, mots de passe). Avec un agent en ligne, leur contenu quitte la machine.",
+    ),
+    (
+        "Notes",
+        "Lire, écrire et ranger vos notes ; une note supprimée va à la corbeille. Avec un agent en ligne, leur contenu quitte la machine.",
     ),
     (
         "Voir le bureau",
@@ -1102,10 +1106,11 @@ impl App {
                     0 => &mut p.read,
                     1 => &mut p.docs,
                     2 => &mut p.files,
-                    3 => &mut p.desktop,
-                    4 => &mut p.screen,
-                    5 => &mut p.act,
-                    6 => &mut p.clipboard,
+                    3 => &mut p.notes,
+                    4 => &mut p.desktop,
+                    5 => &mut p.screen,
+                    6 => &mut p.act,
+                    7 => &mut p.clipboard,
                     _ => &mut p.run,
                 };
                 *flag = !*flag;
@@ -2130,6 +2135,7 @@ impl App {
             perms.read,
             perms.docs,
             perms.files,
+            perms.notes,
             perms.desktop,
             perms.screen,
             perms.act,

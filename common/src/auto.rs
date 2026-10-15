@@ -36,13 +36,16 @@ use serde_json::{Map, Value, json};
 pub const CONTROL: [&str; 3] = ["attendre", "choisir", "agent"];
 
 /// Outils d'odysseus-mcp utilisables comme étapes
-pub const ACTIONS: [&str; 22] = [
+pub const ACTIONS: [&str; 25] = [
     "etat_systeme",
     "reglages",
     "manuel",
     "documentation",
     "lire_fichier",
     "lister_dossier",
+    "notes",
+    "lire_note",
+    "ecrire_note",
     "fenetres",
     "notifications",
     "notifier",
@@ -578,6 +581,9 @@ pub fn action_label(action: &str) -> &str {
         "lire_presse_papiers" => "Lire le presse-papiers",
         "lire_fichier" => "Lire un fichier",
         "lister_dossier" => "Lister un dossier",
+        "notes" => "Lister les notes",
+        "lire_note" => "Lire une note",
+        "ecrire_note" => "Écrire une note",
         "etat_systeme" => "Mesurer le système",
         "notifications" => "Lire les notifications",
         "fenetres" => "Lister les fenêtres",

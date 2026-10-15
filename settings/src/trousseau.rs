@@ -209,7 +209,11 @@ impl App {
                     14.0,
                     p.text,
                 );
-                let msg = ui.truncate(&format!("Le service du trousseau ne répond pas ({e})."), 12.0, w - 36.0);
+                let msg = ui.truncate(
+                    &format!("Le service du trousseau ne répond pas ({e})."),
+                    12.0,
+                    w - 36.0,
+                );
                 ui.text(&msg, x + 18.0, y + 40.0, 20.0, 12.0, p.text_dim);
                 return y + 76.0;
             }

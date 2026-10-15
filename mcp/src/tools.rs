@@ -25,6 +25,7 @@ enum Cat {
     Read,
     Docs,
     Files,
+    Notes,
     Desktop,
     Screen,
     Act,
@@ -39,6 +40,7 @@ impl Cat {
             Cat::Read => "Lire l'état du système",
             Cat::Docs => "Lire la documentation",
             Cat::Files => "Lire les fichiers",
+            Cat::Notes => "Notes",
             Cat::Desktop => "Voir le bureau",
             Cat::Screen => "Voir l'écran",
             Cat::Act => "Agir sur le bureau",
@@ -53,6 +55,7 @@ impl Cat {
             Cat::Read => p.read,
             Cat::Docs => p.docs,
             Cat::Files => p.files,
+            Cat::Notes => p.notes,
             Cat::Desktop => p.desktop,
             Cat::Screen => p.screen,
             Cat::Act => p.act,
@@ -326,6 +329,55 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "notes",
+        title: "Notes",
+        cat: Cat::Notes,
+        description: "Les notes de l'utilisateur (appli Notes) : ses dossiers, puis ses notes, les plus récentes d'abord, avec identifiant, titre, dossier, date et début du texte. « chercher » filtre sur le texte (tous les mots, sans tenir compte des accents ni de la casse), « dossier » sur un dossier, « corbeille » montre les notes supprimées.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "chercher": {"type": "string", "description": "Mots à trouver dans le texte"},
+                "dossier": {"type": "string", "description": "Nom d'un dossier"},
+                "corbeille": {"type": "boolean", "description": "Notes de la corbeille plutôt que les autres"}
+            }})
+        },
+    },
+    Tool {
+        name: "lire_note",
+        title: "Lire une note",
+        cat: Cat::Notes,
+        description: "Texte complet d'une note, en Markdown, d'après son identifiant (donné par l'outil notes).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer"}
+            }, "required": ["id"]})
+        },
+    },
+    Tool {
+        name: "ecrire_note",
+        title: "Écrire une note",
+        cat: Cat::Notes,
+        description: "Crée une note (sans « id ») ou modifie une note existante. Le texte est du Markdown léger, mis en forme dans l'appli : la première ligne est le titre ; « # », « ## », « ### » pour les intertitres, **gras**, *italique*, ~~barré~~, `code`, listes « - » ou « 1. » (deux espaces d'indentation par niveau), cases à cocher « - [ ] » et « - [x] », citations « > », blocs de code entre ```. « texte » remplace toute la note, ou s'ajoute à la fin avec « ajouter ». « dossier » range la note (créé s'il n'existe pas ; sinon le premier dossier). Pour changer une partie, lisez la note puis renvoyez-la entière.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer", "description": "Note à modifier ; absent : nouvelle note"},
+                "texte": {"type": "string"},
+                "ajouter": {"type": "boolean", "description": "Ajouter le texte à la fin plutôt que remplacer"},
+                "dossier": {"type": "string", "description": "Dossier où ranger la note"}
+            }})
+        },
+    },
+    Tool {
+        name: "supprimer_note",
+        title: "Supprimer une note",
+        cat: Cat::Notes,
+        description: "Met une note à la corbeille ; l'utilisateur peut l'en sortir pendant 30 jours depuis Notes.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer"}
+            }, "required": ["id"]})
+        },
+    },
+    Tool {
         name: "lire_presse_papiers",
         title: "Lire le presse-papiers",
         cat: Cat::Clipboard,
@@ -347,7 +399,7 @@ const TOOLS: &[Tool] = &[
         name: "creer_automatisme",
         title: "Créer un automatisme",
         cat: Cat::Act,
-        description: "Crée (ou remplace, même nom) un automatisme : une suite d'étapes lancée à la demande, à heure fixe ou à l'arrivée d'un fichier dans un dossier. Il reste inactif tant que l'utilisateur ne l'a pas validé dans Réglages > Automatismes : dites-le-lui. Définition JSON : {\"nom\", \"description\", \"declencheurs\": [{\"type\": \"manuel\"} | {\"type\": \"heure\", \"heure\": \"HH:MM\", \"jours\": [\"lun\"…\"dim\"] (tous si absent)} | {\"type\": \"dossier\", \"dossier\": \"~/Téléchargements\"}], \"etapes\": [...]}. Chaque étape : {\"action\": nom d'un outil odysseus (notifier, ouvrir, regler, son, ne_pas_deranger, lancer_application, fermer_fenetre, deplacer_fenetre, changer_bureau, executer, ecrire_presse_papiers, lire_presse_papiers, lire_fichier, lister_dossier, etat_systeme, notifications, fenetres, documentation, manuel…), suivi de ses paramètres, et \"garder\": \"nom\" (lettres sans accent, chiffres, _) pour réutiliser son résultat}. Étapes de contrôle : {\"action\": \"attendre\", \"secondes\": 5}, {\"action\": \"choisir\", \"question\", \"choix\": [1 à 3 réponses], \"garder\"} (boutons dans une notification), {\"action\": \"agent\", \"consigne\": \"Résume : {resultat}\", \"garder\"} (le modèle de l'utilisateur transforme un texte), {\"si\": {\"contient\": [texte, morceau]} | {\"egal\": [a, b]} | {\"vide\": texte} | {\"non_vide\": texte}, \"alors\": [étapes], \"sinon\": [étapes]}. Variables dans les textes : {resultat} (étape précédente), {nom gardé}, {fichier} (déclencheur dossier : chemin du nouveau fichier), {fichier_nom}, {date}, {heure}. Les commandes (executer) ne demandent pas d'accord à chaque fois : l'utilisateur les approuve en validant l'automatisme.",
+        description: "Crée (ou remplace, même nom) un automatisme : une suite d'étapes lancée à la demande, à heure fixe ou à l'arrivée d'un fichier dans un dossier. Il reste inactif tant que l'utilisateur ne l'a pas validé dans Réglages > Automatismes : dites-le-lui. Définition JSON : {\"nom\", \"description\", \"declencheurs\": [{\"type\": \"manuel\"} | {\"type\": \"heure\", \"heure\": \"HH:MM\", \"jours\": [\"lun\"…\"dim\"] (tous si absent)} | {\"type\": \"dossier\", \"dossier\": \"~/Téléchargements\"}], \"etapes\": [...]}. Chaque étape : {\"action\": nom d'un outil odysseus (notifier, ouvrir, regler, son, ne_pas_deranger, lancer_application, fermer_fenetre, deplacer_fenetre, changer_bureau, executer, ecrire_presse_papiers, lire_presse_papiers, notes, lire_note, ecrire_note, lire_fichier, lister_dossier, etat_systeme, notifications, fenetres, documentation, manuel…), suivi de ses paramètres, et \"garder\": \"nom\" (lettres sans accent, chiffres, _) pour réutiliser son résultat}. Étapes de contrôle : {\"action\": \"attendre\", \"secondes\": 5}, {\"action\": \"choisir\", \"question\", \"choix\": [1 à 3 réponses], \"garder\"} (boutons dans une notification), {\"action\": \"agent\", \"consigne\": \"Résume : {resultat}\", \"garder\"} (le modèle de l'utilisateur transforme un texte), {\"si\": {\"contient\": [texte, morceau]} | {\"egal\": [a, b]} | {\"vide\": texte} | {\"non_vide\": texte}, \"alors\": [étapes], \"sinon\": [étapes]}. Variables dans les textes : {resultat} (étape précédente), {nom gardé}, {fichier} (déclencheur dossier : chemin du nouveau fichier), {fichier_nom}, {date}, {heure}. Les commandes (executer) ne demandent pas d'accord à chaque fois : l'utilisateur les approuve en validant l'automatisme.",
         schema: || {
             json!({"type": "object", "properties": {
                 "definition": {"type": "object", "description": "L'automatisme, au format décrit"}
@@ -394,7 +446,7 @@ pub fn list() -> Vec<Value> {
             let read_only = matches!(
                 t.cat,
                 Cat::Always | Cat::Read | Cat::Docs | Cat::Files | Cat::Desktop | Cat::Screen
-            ) || t.name == "lire_presse_papiers";
+            ) || matches!(t.name, "lire_presse_papiers" | "notes" | "lire_note");
             json!({
                 "name": t.name,
                 "title": t.title,
@@ -561,6 +613,27 @@ fn run(name: &str, args: &Value, settings: &Settings, approved: bool) -> Outcome
                 "« Ne pas déranger » désactivé"
             }))
         }
+        "notes" => crate::notebook::list(
+            s("dossier"),
+            s("chercher").unwrap_or(""),
+            args.get("corbeille")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .map(text),
+        "lire_note" => crate::notebook::read(n("id").ok_or("« id » manquant")? as i64).map(text),
+        "ecrire_note" => crate::notebook::write(
+            n("id").map(|v| v as i64),
+            s("texte"),
+            s("dossier"),
+            args.get("ajouter")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .map(text),
+        "supprimer_note" => {
+            crate::notebook::trash(n("id").ok_or("« id » manquant")? as i64).map(text)
+        }
         "lire_presse_papiers" => clipboard_read(),
         "ecrire_presse_papiers" => {
             let t = s("texte").ok_or("Texte manquant")?;
@@ -659,6 +732,7 @@ fn permissions(p: &AgentPerms) -> String {
         Cat::Read,
         Cat::Docs,
         Cat::Files,
+        Cat::Notes,
         Cat::Desktop,
         Cat::Screen,
         Cat::Act,

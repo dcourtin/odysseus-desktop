@@ -33,6 +33,16 @@ pub struct Summary {
     pub modified: i64,
 }
 
+/// Une note entière, pour les agents
+pub struct Note {
+    pub id: i64,
+    pub folder: Option<i64>,
+    pub body: String,
+    pub created: i64,
+    pub modified: i64,
+    pub deleted: Option<i64>,
+}
+
 pub struct Store {
     db: Connection,
 }
@@ -196,6 +206,34 @@ impl Store {
         self.db
             .query_row("SELECT body FROM notes WHERE id = ?1", [id], |r| r.get(0))
             .map_err(err)
+    }
+
+    pub fn note(&self, id: i64) -> Result<Option<Note>, String> {
+        self.db
+            .query_row(
+                "SELECT id, folder, body, created, modified, deleted FROM notes WHERE id = ?1",
+                [id],
+                |r| {
+                    Ok(Note {
+                        id: r.get(0)?,
+                        folder: r.get(1)?,
+                        body: r.get(2)?,
+                        created: r.get(3)?,
+                        modified: r.get(4)?,
+                        deleted: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(err)
+    }
+
+    /// Change à chaque écriture faite par une autre connexion (un agent, une
+    /// autre fenêtre) : l'appli sait alors qu'elle doit relire
+    pub fn data_version(&self) -> i64 {
+        self.db
+            .query_row("PRAGMA data_version", [], |r| r.get(0))
+            .unwrap_or(0)
     }
 
     pub fn modified(&self, id: i64) -> Option<i64> {

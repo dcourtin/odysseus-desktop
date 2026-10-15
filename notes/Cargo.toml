@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Notes d'odysseus-desktop : dossiers, notes, texte mis en forme, dans une base SQLite"
 
+[lib]
+name = "notes"
+path = "src/lib.rs"
+
 [[bin]]
 name = "odysseus-notes"
 path = "src/main.rs"

@@ -1143,6 +1143,7 @@ dependencies = [
  "dbus",
  "image",
  "libc",
+ "notes",
  "serde_json",
 ]
 
