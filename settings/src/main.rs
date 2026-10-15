@@ -197,6 +197,20 @@ enum Page {
     APropos,
 }
 
+/// Accueil (premier lancement, `odysseus-reglages --accueil`) : bienvenue,
+/// quelques pages de Réglages, puis l'essentiel en quelques gestes
+const WIZARD: [Option<Page>; 7] = [
+    None,
+    Some(Page::Apparence),
+    Some(Page::Fond),
+    Some(Page::Ecran),
+    Some(Page::Clavier),
+    Some(Page::Agent),
+    None,
+];
+/// Pied de page de l'accueil (navigation)
+const FOOTER_H: f32 = 72.0;
+
 const PAGES: [Page; 12] = [
     Page::Apparence,
     Page::Fond,
@@ -290,6 +304,10 @@ enum Hit {
     Keep,
     Revert,
     CopyInfo,
+    /// Accueil : étape précédente, suivante (ou terminer), le relancer
+    WizardPrev,
+    WizardNext,
+    WizardStart,
     AgentKind(usize),
     InstallOllama,
     PullModel(String),
@@ -341,6 +359,8 @@ struct App {
     icons: Text,
     msgs: channel::Sender<Msg>,
     page: Page,
+    /// Accueil en cours : étape (index dans WIZARD)
+    wizard: Option<usize>,
     settings: Settings,
     /// Agent du bureau : ~/.config/odysseus/agent.json (modifiable à la main)
     agent: common::agent::AgentConfig,
@@ -381,6 +401,19 @@ struct App {
     scale: i32,
     configured: bool,
     exit: bool,
+}
+
+/// Accueil terminé : noté dans ~/.config/odysseus/accueil (la session ne le relance plus)
+fn finish_welcome() {
+    if let Some(path) = theme::config_path().map(|p| p.with_file_name("accueil")) {
+        let _ = std::fs::write(
+            path,
+            format!(
+                "Accueil terminé le {}\n",
+                chrono::Local::now().format("%d/%m/%Y")
+            ),
+        );
+    }
 }
 
 /// Une seule fenêtre de Réglages par bureau (affichage Wayland)
@@ -512,6 +545,7 @@ fn main() {
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         msgs,
         page,
+        wizard: std::env::args().any(|a| a == "--accueil").then_some(0),
         settings: Settings::load(),
         agent: common::agent::AgentConfig::load(),
         screen: system::screen(),
@@ -982,6 +1016,29 @@ impl App {
         }
     }
 
+    /// Ouvre une page (et relit ce qu'elle affiche)
+    fn open_page(&mut self, p: Page) {
+        self.page = p;
+        self.scroll = 0.0;
+        if p == Page::Agent {
+            self.agent_status = agents::status();
+        }
+        if p == Page::Automatismes {
+            self.refresh_autos();
+        }
+        if p == Page::Trousseau {
+            self.refresh_keyrings();
+        }
+        if p == Page::MisesAJour {
+            self.updates.refresh();
+        }
+        if p == Page::Ecran || p == Page::APropos {
+            self.screen = system::screen();
+            self.about = about(&self.screen);
+            self.night = system::night_mode();
+        }
+    }
+
     fn click(&mut self, x: f32, y: f32, serial: u32) {
         if let Some(b) = self.chrome.press(x, y, CHROME_Y) {
             return self.chrome_action(b);
@@ -1003,25 +1060,28 @@ impl App {
             return;
         };
         match hit {
-            Hit::Page(p) => {
-                self.page = p;
+            Hit::Page(p) => self.open_page(p),
+            Hit::WizardStart => {
+                self.wizard = Some(0);
                 self.scroll = 0.0;
-                if p == Page::Agent {
-                    self.agent_status = agents::status();
-                }
-                if p == Page::Automatismes {
-                    self.refresh_autos();
-                }
-                if p == Page::Trousseau {
-                    self.refresh_keyrings();
-                }
-                if p == Page::MisesAJour {
-                    self.updates.refresh();
-                }
-                if p == Page::Ecran || p == Page::APropos {
-                    self.screen = system::screen();
-                    self.about = about(&self.screen);
-                    self.night = system::night_mode();
+            }
+            Hit::WizardPrev | Hit::WizardNext => {
+                let step = self.wizard.unwrap_or(0);
+                let next = if hit == Hit::WizardPrev {
+                    step.saturating_sub(1)
+                } else {
+                    step + 1
+                };
+                if next >= WIZARD.len() {
+                    finish_welcome();
+                    self.wizard = None;
+                    self.exit = std::env::args().any(|a| a == "--accueil");
+                } else {
+                    self.wizard = Some(next);
+                    self.scroll = 0.0;
+                    if let Some(page) = WIZARD[next] {
+                        self.open_page(page);
+                    }
                 }
             }
             Hit::Theme(i) => {
@@ -1327,36 +1387,44 @@ impl App {
             hover: self.hover.clone(),
         };
 
-        // Contenu de la page, qui défile sous l'en-tête
-        let avail = self.width as f32 - SIDEBAR_W;
-        let cw = CONTENT_MAX.min(avail - 64.0);
-        let cx = SIDEBAR_W + ((avail - cw) / 2.0).max(32.0);
-        let top = HEADER_H + 20.0 - self.scroll;
-        let bottom = match self.page {
-            Page::Apparence => self.page_apparence(&mut ui, cx, top, cw),
-            Page::Fond => self.page_fond(&mut ui, cx, top, cw),
-            Page::Ecran => self.page_ecran(&mut ui, cx, top, cw),
-            Page::Clavier => self.page_clavier(&mut ui, cx, top, cw),
-            Page::Energie => self.page_energie(&mut ui, cx, top, cw),
-            Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
-            Page::Dock => self.page_dock(&mut ui, cx, top, cw),
-            Page::Automatismes => self.page_automatismes(&mut ui, cx, top, cw),
-            Page::Trousseau => self.page_trousseau(&mut ui, cx, top, cw),
-            Page::MisesAJour => self.page_maj(&mut ui, cx, top, cw),
-            Page::Agent => self.page_agent(&mut ui, cx, top, cw),
-            Page::APropos => self.page_apropos(&mut ui, cx, top, cw),
+        // Contenu de la page, qui défile sous l'en-tête ; l'accueil n'a pas de barre latérale
+        let side = if self.wizard.is_some() {
+            0.0
+        } else {
+            SIDEBAR_W
         };
-        let content_h = bottom + self.scroll + 32.0;
+        let avail = self.width as f32 - side;
+        let cw = CONTENT_MAX.min(avail - 64.0);
+        let cx = side + ((avail - cw) / 2.0).max(32.0);
+        let top = HEADER_H + 20.0 - self.scroll;
+        let step = self.wizard;
+        let bottom = match (step, self.page) {
+            (Some(0), _) => self.page_bienvenue(&mut ui, cx, top, cw),
+            (Some(i), _) if i + 1 == WIZARD.len() => self.page_fin(&mut ui, cx, top, cw),
+            (_, page) => self.page_content(page, &mut ui, cx, top, cw),
+        };
+        let content_h =
+            bottom + self.scroll + 32.0 + if self.wizard.is_some() { FOOTER_H } else { 0.0 };
 
-        // En-tête : titre de la page, par-dessus le contenu qui défile
-        let (title, _) = self.page.info();
-        ui.rect(SIDEBAR_W, 0.0, avail, HEADER_H, p.content);
+        // En-tête : titre de la page (de l'étape), par-dessus le contenu qui défile
+        let title = match step {
+            Some(0) => "Bienvenue",
+            Some(i) if i + 1 == WIZARD.len() => "C'est prêt",
+            _ => self.page.info().0,
+        };
+        ui.rect(side, 0.0, avail, HEADER_H, p.content);
         ui.bold_text(title, cx, 12.0, 44.0, 22.0, p.text);
-        ui.rect(SIDEBAR_W, HEADER_H - 1.0, avail, 1.0, p.ink(0.06));
+        ui.rect(side, HEADER_H - 1.0, avail, 1.0, p.ink(0.06));
         // Les zones cliquables cachées sous l'en-tête ne comptent pas
         ui.hits.retain(|((_, y, _, h), _)| y + h > HEADER_H);
 
-        self.sidebar(&mut ui);
+        match step {
+            Some(i) => {
+                self.chrome.draw(ui.c, ui.icons, CHROME_Y, s);
+                self.wizard_footer(&mut ui, i, cx, cw);
+            }
+            None => self.sidebar(&mut ui),
+        }
         self.overlays(&mut ui, cx, cw);
 
         self.hits = ui.hits;
@@ -1368,6 +1436,24 @@ impl App {
             self.window.commit();
         }
         self.pool = Some(pool);
+    }
+
+    /// Contenu d'une page de Réglages
+    fn page_content(&self, page: Page, ui: &mut Ui, cx: f32, top: f32, cw: f32) -> f32 {
+        match page {
+            Page::Apparence => self.page_apparence(ui, cx, top, cw),
+            Page::Fond => self.page_fond(ui, cx, top, cw),
+            Page::Ecran => self.page_ecran(ui, cx, top, cw),
+            Page::Clavier => self.page_clavier(ui, cx, top, cw),
+            Page::Energie => self.page_energie(ui, cx, top, cw),
+            Page::Raccourcis => self.page_raccourcis(ui, cx, top, cw),
+            Page::Dock => self.page_dock(ui, cx, top, cw),
+            Page::Automatismes => self.page_automatismes(ui, cx, top, cw),
+            Page::Trousseau => self.page_trousseau(ui, cx, top, cw),
+            Page::MisesAJour => self.page_maj(ui, cx, top, cw),
+            Page::Agent => self.page_agent(ui, cx, top, cw),
+            Page::APropos => self.page_apropos(ui, cx, top, cw),
+        }
     }
 
     fn sidebar(&self, ui: &mut Ui) {
@@ -2408,6 +2494,146 @@ impl App {
         y + activity.len() as f32 * rh + 16.0
     }
 
+    /// Accueil, première étape
+    fn page_bienvenue(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let p = theme::palette();
+        let mut y = y + 24.0;
+        ui.circle(x + w / 2.0, y + 40.0, 40.0, p.accent.with_alpha(0.16));
+        ui.icon(icon::SPARKLES, x + w / 2.0, y + 40.0, 36.0, p.accent);
+        y += 100.0;
+        ui.centered(
+            "Bienvenue sur odysseus",
+            x + w / 2.0,
+            y,
+            36.0,
+            24.0,
+            true,
+            p.text,
+        );
+        y += 44.0;
+        y = ui.note(
+            x,
+            y,
+            w,
+            "Un poste de pilotage sobre. Quelques réglages pour qu'il vous ressemble : \
+             apparence, fond d'écran, écran, clavier et agent. Tout se retrouve ensuite \
+             dans Réglages, et cet accueil reste accessible depuis Réglages > À propos.",
+        ) + 20.0;
+        let steps = [
+            (icon::PALETTE, "Apparence", "le thème du bureau"),
+            (
+                icon::IMAGE,
+                "Fond d'écran",
+                "un dégradé d'odysseus ou votre image",
+            ),
+            (icon::MONITOR, "Écran", "la taille de ce qui s'affiche"),
+            (icon::KEYBOARD, "Clavier", "la disposition des touches"),
+            (
+                icon::BOT,
+                "Agent",
+                "l'assistant qui peut piloter le bureau, si vous le voulez",
+            ),
+        ];
+        let rh = 52.0;
+        ui.card(x, y, w, steps.len() as f32 * rh);
+        for (i, (glyph, title, detail)) in steps.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            ui.icon(*glyph, x + 30.0, ry + rh / 2.0, 16.0, p.accent);
+            ui.bold_text(title, x + 54.0, ry + 7.0, 20.0, 13.5, p.text);
+            ui.text(detail, x + 54.0, ry + 27.0, 18.0, 12.0, p.text_dim);
+        }
+        y + steps.len() as f32 * rh
+    }
+
+    /// Accueil, dernière étape : l'essentiel en quelques gestes
+    fn page_fin(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let p = theme::palette();
+        let mut y = ui.note(
+            x,
+            y,
+            w,
+            "Le bureau est prêt. L'essentiel en quelques gestes :",
+        ) + 10.0;
+        let gestures = [
+            (
+                "Super + Espace",
+                "lancer une appli, ou poser une question avec « ? »",
+            ),
+            (
+                "Le Dock, en bas",
+                "vos applis ; une fenêtre réduite rentre dans son icône",
+            ),
+            ("Super + A", "l'Assistant"),
+            (
+                "Super + Q / M / F",
+                "fermer, réduire, agrandir la fenêtre (ou ses boutons)",
+            ),
+            ("Super + 1 … 9", "changer de bureau"),
+            ("Impr. écran", "capture d'une zone ; Espace : une fenêtre"),
+            ("Super + K", "tous les raccourcis"),
+        ];
+        let rh = 44.0;
+        ui.card(x, y, w, gestures.len() as f32 * rh);
+        for (i, (keys, what)) in gestures.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            ui.bold_text(keys, x + 18.0, ry, rh, 13.0, p.text);
+            let what = ui.truncate(what, 12.5, w - 200.0);
+            ui.text(&what, x + 190.0, ry, rh, 12.5, p.text_soft());
+        }
+        y += gestures.len() as f32 * rh + 16.0;
+        ui.note(
+            x,
+            y,
+            w,
+            "Tout se règle ensuite dans Réglages (icône d'engrenage du Dock, ou centre de contrôle).",
+        )
+    }
+
+    /// Pied de page de l'accueil : étapes, précédent, suivant
+    fn wizard_footer(&self, ui: &mut Ui, step: usize, cx: f32, cw: f32) {
+        let p = theme::palette();
+        let (w, h) = (self.width as f32, self.height as f32);
+        let y = h - FOOTER_H;
+        ui.rect(0.0, y, w, FOOTER_H, p.content);
+        ui.rect(0.0, y, w, 1.0, p.ink(0.06));
+        // Points des étapes
+        let n = WIZARD.len() as f32;
+        let x0 = cx + cw / 2.0 - (n - 1.0) * 9.0;
+        for i in 0..WIZARD.len() {
+            let color = if i == step { p.accent } else { p.ink(0.20) };
+            ui.circle(x0 + i as f32 * 18.0, y + FOOTER_H / 2.0, 4.0, color);
+        }
+        let by = y + (FOOTER_H - 34.0) / 2.0;
+        if step > 0 {
+            ui.button(cx, by, 130.0, "Précédent", false, Hit::WizardPrev);
+        }
+        let last = step + 1 == WIZARD.len();
+        ui.button(
+            cx + cw - 150.0,
+            by,
+            150.0,
+            if last {
+                "C'est parti"
+            } else if step == 0 {
+                "Commencer"
+            } else {
+                "Suivant"
+            },
+            true,
+            Hit::WizardNext,
+        );
+        // Les zones cliquables du contenu cachées sous le pied de page ne comptent pas
+        ui.hits.retain(|((_, hy, _, _), hit)| {
+            *hy < y || matches!(hit, Hit::WizardPrev | Hit::WizardNext)
+        });
+    }
+
     fn page_apropos(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
         let p = theme::palette();
         // Emblème : carré arrondi en dégradé d'accent, initiale d'odysseus
@@ -2454,6 +2680,14 @@ impl App {
         }
         y += rows * 44.0 + 16.0;
         ui.button(x, y, 220.0, "Copier ces informations", false, Hit::CopyInfo);
+        ui.button(
+            x + 232.0,
+            y,
+            180.0,
+            "Revoir l'accueil",
+            false,
+            Hit::WizardStart,
+        );
         y += 56.0;
         ui.note(
             x,

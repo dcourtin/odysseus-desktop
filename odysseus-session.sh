@@ -47,7 +47,13 @@ mkdir -p "$XDPW"
 printf '# Écrit par odysseus-session.sh à chaque connexion\n[screencast]\nchooser_type=dmenu\nchooser_cmd=%s\nmax_fps=30\n' \
   "$ROOT/odysseus-partage" > "$XDPW/odysseus"
 
+# Premier démarrage : l'accueil (Réglages en mode pas à pas), tant qu'il n'a pas été terminé
+WELCOME=""
+if [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/odysseus/accueil" ]; then
+    WELCOME="(sleep 2; '$ROOT/odysseus-reglages' --accueil) 2>>'$LOGDIR/accueil.log' &"
+fi
+
 # Au démarrage : l'affichage est transmis au bus de session (le démon de notifications
 # peut y être relancé à la demande, voir ~/.local/share/dbus-1/services), puis
 # démons de notifications et des automatismes, Dock et barre
-exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
+exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & $WELCOME exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
