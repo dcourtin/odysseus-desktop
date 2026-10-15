@@ -365,4 +365,17 @@ pub mod icon {
     pub const TERMINAL: char = '\u{e181}';
     pub const PACKAGE_OPEN: char = '\u{e2cc}';
     pub const SCREEN_SHARE: char = '\u{e14f}';
+    pub const BOLD: char = '\u{e05d}';
+    pub const ITALIC: char = '\u{e0fb}';
+    pub const HEADING: char = '\u{e384}';
+    pub const STRIKETHROUGH: char = '\u{e177}';
+    pub const CODE: char = '\u{e093}';
+    pub const LIST: char = '\u{e106}';
+    pub const LIST_CHECKS: char = '\u{e1d0}';
+    pub const FOLDER: char = '\u{e0d7}';
+    pub const FOLDER_PLUS: char = '\u{e0d9}';
+    pub const FOLDER_INPUT: char = '\u{e334}';
+    pub const NOTEBOOK: char = '\u{e595}';
+    pub const NOTEBOOK_PEN: char = '\u{e596}';
+    pub const SEARCH: char = '\u{e151}';
 }

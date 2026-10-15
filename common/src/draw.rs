@@ -397,6 +397,20 @@ impl Text {
         self.draw_in(canvas, s, x, 0.0, h, px, color);
     }
 
+    /// Avance d'un caractère à la taille `px`.
+    pub fn advance(&self, ch: char, px: f32) -> f32 {
+        self.font.metrics(ch, px).advance_width
+    }
+
+    /// Ligne de base d'un texte centré verticalement dans la bande [y, y + h].
+    pub fn baseline(&self, y: f32, h: f32, px: f32) -> f32 {
+        let line = self
+            .font
+            .horizontal_line_metrics(px)
+            .expect("police sans métriques horizontales");
+        (y + (h + line.ascent + line.descent) / 2.0).round()
+    }
+
     /// Dessine `s` à partir de `x`, centré verticalement dans la bande [y, y + h].
     #[allow(clippy::too_many_arguments)]
     pub fn draw_in(
@@ -409,11 +423,21 @@ impl Text {
         px: f32,
         color: Rgba,
     ) {
-        let line = self
-            .font
-            .horizontal_line_metrics(px)
-            .expect("police sans métriques horizontales");
-        let baseline = (y + (h + line.ascent + line.descent) / 2.0).round();
+        let baseline = self.baseline(y, h, px);
+        self.draw_baseline(canvas, s, x, baseline, px, color);
+    }
+
+    /// Dessine `s` à partir de `x`, posé sur la ligne de base `baseline` (textes
+    /// de polices différentes alignés sur une même ligne).
+    pub fn draw_baseline(
+        &self,
+        canvas: &mut Canvas,
+        s: &str,
+        x: f32,
+        baseline: f32,
+        px: f32,
+        color: Rgba,
+    ) {
         let mut pen = x;
         for ch in s.chars() {
             let g = self.glyph(ch, px);

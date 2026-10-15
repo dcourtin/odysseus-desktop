@@ -1,0 +1,16 @@
+[package]
+name = "notes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Notes d'odysseus-desktop : dossiers, notes, texte mis en forme, dans une base SQLite"
+
+[[bin]]
+name = "odysseus-notes"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+chrono.workspace = true
+rusqlite = "0.37"

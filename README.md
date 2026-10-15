@@ -41,9 +41,13 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|
 | ![Partage d'écran](docs/captures/partage.png) |
 
-| Trousseau : les mots de passe des applications (VS Code, git…), ouverts à la connexion ; demande à la manière d'odysseus quand il le faut |
+| Trousseau : les mots de passe des applications, ouverts à la connexion ; demande à la manière d'odysseus quand il le faut |
 |---|
 | ![Trousseau](docs/captures/trousseau.png) |
+
+| Notes : dossiers, recherche sans accents, texte mis en forme (titres, gras, listes, cases à cocher), corbeille de 30 jours |
+|---|
+| ![Notes](docs/captures/notes.png) |
 
 | Réglages : fond d'écran, et six autres pages |
 |---|
@@ -81,6 +85,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `auto/` | `odysseus-auto` : automatismes façon Raccourcis d'iOS — un fichier JSON par automatisme (~/.config/odysseus/automatismes), déclencheurs à la demande (lanceur, Réglages, Assistant), à heure fixe (jours au choix) ou à l'arrivée d'un fichier dans un dossier ; étapes = outils d'odysseus-mcp, plus attendre, choisir (boutons dans une notification), agent (le modèle transforme un texte), si / alors / sinon ; variables {resultat}, {fichier}, noms gardés, passées aux commandes par l'environnement (un nom de fichier piégé n'est jamais interprété). Écrits par l'agent (outil creer_automatisme) ou à la main, ils ne tournent qu'une fois validés dans Réglages > Automatismes ; toute modification demande une nouvelle validation | fonctionne |
 | `partage/` | `odysseus-partage` : sélecteur du partage d'écran, appelé par xdg-desktop-portal-wlr — vignettes de l'écran et des fenêtres (icône de l'application, bureau), Annuler / Partager, clavier et souris | fonctionne |
 | `trousseau/` | `odysseus-trousseau` : fenêtre de mot de passe du trousseau (ouvrir, créer, changer), lancée par odysseus-notify à la demande d'oo7-daemon ; le mot de passe est écrit directement à oo7, sans passer par notify | fonctionne |
+| `notes/` | `odysseus-notes` : Notes — dossiers (créer, renommer d'un double-clic, supprimer), liste des notes avec aperçu et recherche sans tenir compte des accents ni de la casse, éditeur de Markdown léger mis en forme à l'écran (titres, gras, italique, barré, code, listes, cases à cocher cliquables, citations, blocs de code), barre d'outils et raccourcis, annuler / rétablir, presse-papiers ; enregistrement automatique dans `~/.local/share/odysseus/notes.db` (SQLite), corbeille gardée 30 jours ; `--nouvelle` ouvre une note vierge | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) ; « ? question » ou dernière ligne : demander à l'Assistant | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
@@ -207,6 +212,7 @@ configuration de xdg-desktop-portal-wlr (`~/.config/xdg-desktop-portal-wlr/odyss
 Trousseau : oo7-daemon 0.7 (Secret Service, unité systemd utilisateur), libsecret pour les
 applications, `git-credential-oo7` ; le module `pam_oo7.so` ouvre le trousseau avec le mot de
 passe de connexion (lignes à ajouter dans `/etc/pam.d/login` et `/etc/pam.d/passwd`).
+Notes : SQLite (bibliothèque système, liée par rusqlite).
 Températures : `k10temp` (processeur AMD) et `amdgpu`.
 
 ## Licence

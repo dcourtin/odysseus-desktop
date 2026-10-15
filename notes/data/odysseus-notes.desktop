@@ -1,0 +1,17 @@
+[Desktop Entry]
+Icon=/home/david/odysseus-desktop/notes/data/odysseus-notes.svg
+Type=Application
+Name=Notes
+Name[fr]=Notes
+Comment=Notes in folders, with lists and checkboxes
+Comment[fr]=Notes rangées en dossiers, avec listes et cases à cocher
+Keywords=notes;memo;todo;checklist;mémo;carnet;liste;tâches;
+Exec=/home/david/odysseus-desktop/target/release/odysseus-notes
+Terminal=false
+Categories=Office;Utility;
+Actions=nouvelle;
+
+[Desktop Action nouvelle]
+Name=New note
+Name[fr]=Nouvelle note
+Exec=/home/david/odysseus-desktop/target/release/odysseus-notes --nouvelle
