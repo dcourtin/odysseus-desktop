@@ -23,10 +23,13 @@ enum Cat {
     /// Toujours permis : dire ce qui est permis
     Always,
     Read,
+    Docs,
+    Files,
     Desktop,
     Screen,
     Act,
     Clipboard,
+    Run,
 }
 
 impl Cat {
@@ -34,10 +37,13 @@ impl Cat {
         match self {
             Cat::Always => "toujours permis",
             Cat::Read => "Lire l'état du système",
+            Cat::Docs => "Lire la documentation",
+            Cat::Files => "Lire les fichiers",
             Cat::Desktop => "Voir le bureau",
             Cat::Screen => "Voir l'écran",
             Cat::Act => "Agir sur le bureau",
             Cat::Clipboard => "Presse-papiers",
+            Cat::Run => "Exécuter des commandes",
         }
     }
 
@@ -45,10 +51,13 @@ impl Cat {
         match self {
             Cat::Always => true,
             Cat::Read => p.read,
+            Cat::Docs => p.docs,
+            Cat::Files => p.files,
             Cat::Desktop => p.desktop,
             Cat::Screen => p.screen,
             Cat::Act => p.act,
             Cat::Clipboard => p.clipboard,
+            Cat::Run => p.run,
         }
     }
 }
@@ -104,6 +113,75 @@ const TOOLS: &[Tool] = &[
                 "source": {"type": "string", "enum": ["compositeur", "notifications"], "description": "Journal à lire (compositeur par défaut)"},
                 "lignes": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Nombre de lignes (60 par défaut)"}
             }})
+        },
+    },
+    Tool {
+        name: "manuel",
+        title: "Man page",
+        cat: Cat::Docs,
+        description: "Lit une man page de la machine (pages en français quand elles existent). Les pages longues sont découpées : demandez une « partie » (NAME, SYNOPSIS, DESCRIPTION, OPTIONS, EXAMPLES… ou leur titre français), cherchez un terme avec « chercher », ou lisez la suite avec « debut ». Sections : 1 commandes, 2 appels système, 3 bibliothèques, 4 périphériques, 5 fichiers de configuration, 7 concepts (signal, epoll, namespaces, cgroups…), 8 administration.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "page": {"type": "string", "description": "Nom de la page, par exemple « epoll », « systemd.unit », « ls »"},
+                "section": {"type": "string", "description": "Section (1 à 8), utile quand un nom existe dans plusieurs sections"},
+                "partie": {"type": "string", "description": "Titre d'une partie de la page"},
+                "chercher": {"type": "string", "description": "Terme à chercher : seuls les paragraphes qui le contiennent"},
+                "debut": {"type": "integer", "minimum": 0, "description": "Lire à partir de ce caractère (suite d'une page longue)"},
+                "anglais": {"type": "boolean", "description": "Version anglaise d'origine plutôt que la traduction"}
+            }, "required": ["page"]})
+        },
+    },
+    Tool {
+        name: "apropos",
+        title: "Chercher une man page",
+        cat: Cat::Docs,
+        description: "Trouve les man pages dont le nom ou la description contient tous les mots donnés (en anglais de préférence : « socket timeout », « mount namespace »).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "mots": {"type": "string"}
+            }, "required": ["mots"]})
+        },
+    },
+    Tool {
+        name: "documentation",
+        title: "Documentation",
+        cat: Cat::Docs,
+        description: "Cherche et lit la documentation de la machine. Sans argument : la liste des sources. Avec « recherche » : les documents qui contiennent tous les mots (source au choix). Avec « chemin » (donné par une recherche) : lit le document, découpé comme les man pages (partie, chercher, debut). Sources : machine (comment cet ordinateur Linux From Scratch a été construit, étape par étape : STATUS.md, PLAN.md, scripts), odysseus (le bureau), noyau (Documentation de Linux 7.1.8, en anglais), paquets (/usr/share/doc), info (manuels GNU), bibliotheque (livres et PDF déposés par l'utilisateur dans ~/Documents/Bibliothèque).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "recherche": {"type": "string", "description": "Mots à chercher"},
+                "source": {"type": "string", "enum": ["tout", "machine", "odysseus", "noyau", "paquets", "info", "bibliotheque"]},
+                "chemin": {"type": "string", "description": "Document à lire (chemin absolu)"},
+                "partie": {"type": "string"},
+                "chercher": {"type": "string"},
+                "debut": {"type": "integer", "minimum": 0}
+            }})
+        },
+    },
+    Tool {
+        name: "lire_fichier",
+        title: "Lire un fichier",
+        cat: Cat::Files,
+        description: "Lit un fichier texte (configuration, journal, code, notes) ou un PDF, avec les droits de l'utilisateur. Les longs fichiers sont découpés (partie, chercher, debut). Les secrets (clés SSH, mots de passe, jetons, cookies) sont toujours refusés.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "chemin": {"type": "string", "description": "Chemin absolu (« ~/ » permis)"},
+                "partie": {"type": "string"},
+                "chercher": {"type": "string"},
+                "debut": {"type": "integer", "minimum": 0}
+            }, "required": ["chemin"]})
+        },
+    },
+    Tool {
+        name: "lister_dossier",
+        title: "Lister un dossier",
+        cat: Cat::Files,
+        description: "Contenu d'un dossier : sous-dossiers, fichiers, tailles et dates de modification.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "chemin": {"type": "string", "description": "Chemin absolu (« ~/ » permis)"},
+                "caches": {"type": "boolean", "description": "Montrer aussi les fichiers cachés (.nom)"}
+            }, "required": ["chemin"]})
         },
     },
     Tool {
@@ -191,6 +269,63 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "lancer_application",
+        title: "Lancer une application",
+        cat: Cat::Act,
+        description: "Lance une application installée, d'après son nom (celui du lanceur : « Firefox », « Fichiers », « foot »…).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "nom": {"type": "string"}
+            }, "required": ["nom"]})
+        },
+    },
+    Tool {
+        name: "fermer_fenetre",
+        title: "Fermer une fenêtre",
+        cat: Cat::Act,
+        description: "Demande à une fenêtre de se fermer, comme Super+Q (l'application peut proposer d'enregistrer).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer", "description": "Identifiant donné par « fenetres »"}
+            }, "required": ["id"]})
+        },
+    },
+    Tool {
+        name: "deplacer_fenetre",
+        title: "Déplacer une fenêtre",
+        cat: Cat::Act,
+        description: "Envoie une fenêtre sur un autre bureau (1 à 9).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "integer"},
+                "bureau": {"type": "integer", "minimum": 1, "maximum": 9}
+            }, "required": ["id", "bureau"]})
+        },
+    },
+    Tool {
+        name: "son",
+        title: "Son",
+        cat: Cat::Act,
+        description: "Volume de la sortie son (0 à 100 %), ou couper / rétablir le son. Sans argument : l'état actuel.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "volume": {"type": "integer", "minimum": 0, "maximum": 100},
+                "muet": {"type": "boolean"}
+            }})
+        },
+    },
+    Tool {
+        name: "ne_pas_deranger",
+        title: "Ne pas déranger",
+        cat: Cat::Act,
+        description: "Active ou désactive « Ne pas déranger » (les notifications ne s'affichent plus, elles restent dans le centre).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "actif": {"type": "boolean"}
+            }, "required": ["actif"]})
+        },
+    },
+    Tool {
         name: "lire_presse_papiers",
         title: "Lire le presse-papiers",
         cat: Cat::Clipboard,
@@ -208,14 +343,29 @@ const TOOLS: &[Tool] = &[
             }, "required": ["texte"]})
         },
     },
+    Tool {
+        name: "executer",
+        title: "Exécuter une commande",
+        cat: Cat::Run,
+        description: "Lance une commande shell (sh -c) avec les droits de l'utilisateur, jamais root (pas de sudo). L'utilisateur la voit d'abord dans une notification et l'autorise ou la refuse : expliquez-lui pourquoi dans « raison ». Pas d'entrée clavier, 2 minutes au plus ; renvoie le code de sortie et la sortie (erreurs comprises). Préférez les outils de lecture quand ils suffisent ; une commande à la fois, courte et lisible.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "commande": {"type": "string"},
+                "raison": {"type": "string", "description": "Pourquoi cette commande, en une phrase pour l'utilisateur"},
+                "dossier": {"type": "string", "description": "Dossier de travail (dossier personnel par défaut)"}
+            }, "required": ["commande", "raison"]})
+        },
+    },
 ];
 
 pub fn list() -> Vec<Value> {
     TOOLS
         .iter()
         .map(|t| {
-            let read_only = matches!(t.cat, Cat::Always | Cat::Read | Cat::Desktop | Cat::Screen)
-                || t.name == "lire_presse_papiers";
+            let read_only = matches!(
+                t.cat,
+                Cat::Always | Cat::Read | Cat::Docs | Cat::Files | Cat::Desktop | Cat::Screen
+            ) || t.name == "lire_presse_papiers";
             json!({
                 "name": t.name,
                 "title": t.title,
@@ -224,8 +374,8 @@ pub fn list() -> Vec<Value> {
                 "annotations": {
                     "title": t.title,
                     "readOnlyHint": read_only,
-                    "destructiveHint": false,
-                    "openWorldHint": false
+                    "destructiveHint": t.cat == Cat::Run || t.name == "fermer_fenetre",
+                    "openWorldHint": t.cat == Cat::Run
                 }
             })
         })
@@ -255,7 +405,15 @@ pub fn call(name: &str, args: &Value) -> Value {
         ))});
     }
     let outcome = run(name, args, &settings);
-    log(name, true, &summary(args));
+    // Commande refusée dans la notification : consignée comme refusée
+    match &outcome {
+        Err(e) if tool.cat == Cat::Run && e.starts_with("Refusé") => log(
+            name,
+            false,
+            &format!("{} — refusée par l'utilisateur", summary(args)),
+        ),
+        _ => log(name, true, &summary(args)),
+    }
     match outcome {
         Ok(content) => json!({"content": content}),
         Err(e) => json!({"isError": true, "content": text(e)}),
@@ -274,6 +432,31 @@ fn run(name: &str, args: &Value, settings: &Settings) -> Outcome {
             s("source").unwrap_or("compositeur"),
             n("lignes").unwrap_or(60.0) as usize,
         ),
+        "manuel" => crate::docs::manual(
+            s("page").unwrap_or(""),
+            s("section"),
+            args.get("anglais")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            s("partie"),
+            s("chercher"),
+            n("debut").unwrap_or(0.0) as usize,
+        )
+        .map(text),
+        "apropos" => crate::docs::apropos(s("mots").unwrap_or("")).map(text),
+        "documentation" => documentation(args),
+        "lire_fichier" => crate::files::read(
+            s("chemin").unwrap_or(""),
+            s("partie"),
+            s("chercher"),
+            n("debut").unwrap_or(0.0) as usize,
+        )
+        .map(text),
+        "lister_dossier" => crate::files::list(
+            s("chemin").unwrap_or(""),
+            args.get("caches").and_then(Value::as_bool).unwrap_or(false),
+        )
+        .map(text),
         "fenetres" => windows(),
         "notifications" => notifications(),
         "capture_ecran" => capture(n("fenetre").map(|v| v as u64)),
@@ -294,12 +477,51 @@ fn run(name: &str, args: &Value, settings: &Settings) -> Outcome {
             Ok(text(format!("Fenêtre {id} au premier plan")))
         }
         "regler" => adjust(args),
+        "lancer_application" => launch(s("nom").unwrap_or("")),
+        "fermer_fenetre" => {
+            let id = n("id").ok_or("Identifiant de fenêtre manquant")? as u64;
+            ipc::command(&format!("close {id}"))
+                .map_err(|_| format!("Fenêtre {id} introuvable"))?;
+            Ok(text(format!("Fenêtre {id} invitée à se fermer")))
+        }
+        "deplacer_fenetre" => {
+            let id = n("id").ok_or("Identifiant de fenêtre manquant")? as u64;
+            let ws = n("bureau").unwrap_or(0.0) as u32;
+            if !(1..=9).contains(&ws) {
+                return Err("Bureau entre 1 et 9".into());
+            }
+            ipc::command(&format!("move {id} workspace {ws}"))
+                .map_err(|_| format!("Fenêtre {id} introuvable"))?;
+            Ok(text(format!("Fenêtre {id} envoyée sur le bureau {ws}")))
+        }
+        "son" => sound(n("volume"), args.get("muet").and_then(Value::as_bool)),
+        "ne_pas_deranger" => {
+            let on = args
+                .get("actif")
+                .and_then(Value::as_bool)
+                .ok_or("« actif » manquant")?;
+            spawn_wait(
+                &sibling("odysseus-notify").to_string_lossy(),
+                &["--dnd", if on { "on" } else { "off" }],
+            )?;
+            Ok(text(if on {
+                "« Ne pas déranger » activé"
+            } else {
+                "« Ne pas déranger » désactivé"
+            }))
+        }
         "lire_presse_papiers" => clipboard_read(),
         "ecrire_presse_papiers" => {
             let t = s("texte").ok_or("Texte manquant")?;
             spawn_wait("wl-copy", &["--", t])?;
             Ok(text(format!("{} caractères copiés", t.chars().count())))
         }
+        "executer" => crate::run::execute(
+            s("commande").unwrap_or(""),
+            s("dossier"),
+            s("raison").unwrap_or(""),
+        )
+        .map(text),
         _ => Err(format!("Outil inconnu : {name}")),
     }
 }
@@ -368,10 +590,13 @@ fn permissions(p: &AgentPerms) -> String {
     );
     for cat in [
         Cat::Read,
+        Cat::Docs,
+        Cat::Files,
         Cat::Desktop,
         Cat::Screen,
         Cat::Act,
         Cat::Clipboard,
+        Cat::Run,
     ] {
         let tools: Vec<&str> = TOOLS
             .iter()
@@ -913,6 +1138,99 @@ fn adjust(args: &Value) -> Outcome {
         return Err("Rien à régler : theme, fond, lumiere_nuit ou echelle".into());
     }
     Ok(text(format!("Réglé : {}", done.join(", "))))
+}
+
+fn documentation(args: &Value) -> Outcome {
+    let s = |k: &str| {
+        args.get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(path) = s("chemin") {
+        let p = crate::docs::in_sources(Path::new(path)).ok_or_else(|| {
+            format!(
+                "{path} n'est pas dans les sources de documentation \
+                 (l'outil « lire_fichier » lit les autres fichiers, s'il est permis)"
+            )
+        })?;
+        if p.is_dir() {
+            return crate::files::list(&p.to_string_lossy(), false).map(text);
+        }
+        let content = crate::docs::read_doc(&p).map_err(|e| format!("{path} : {e}"))?;
+        return Ok(text(crate::docs::excerpt(
+            &content,
+            crate::docs::Kind::Doc,
+            s("partie"),
+            s("chercher"),
+            args.get("debut").and_then(Value::as_u64).unwrap_or(0) as usize,
+        )));
+    }
+    match s("recherche") {
+        Some(q) => crate::docs::search(q, s("source")).map(text),
+        None => Ok(text(crate::docs::list_sources())),
+    }
+}
+
+/// Application d'après son nom, comme dans le lanceur
+fn launch(name: &str) -> Outcome {
+    if name.trim().is_empty() {
+        return Err("Nom d'application manquant".into());
+    }
+    let apps = common::apps::load();
+    let best = apps
+        .iter()
+        .filter_map(|a| common::apps::score(name.trim(), a).map(|s| (s, a)))
+        .filter(|(s, _)| *s >= 300)
+        .max_by_key(|(s, _)| *s)
+        .map(|(_, a)| a)
+        .ok_or_else(|| format!("Aucune application ne correspond à « {name} »"))?;
+    let command = if best.terminal {
+        let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+        format!("{term} -e {}", best.exec)
+    } else {
+        best.exec.clone()
+    };
+    spawn("/bin/sh", &["-c", &command])?;
+    Ok(text(format!("{} lancé", best.name)))
+}
+
+fn sound(volume: Option<f64>, mute: Option<bool>) -> Outcome {
+    const SINK: &str = "@DEFAULT_AUDIO_SINK@";
+    let mut done = Vec::new();
+    if let Some(v) = volume {
+        let v = v.clamp(0.0, 100.0).round() as u32;
+        spawn_wait("wpctl", &["set-volume", SINK, &format!("{v}%")])?;
+        done.push(format!("volume {v} %"));
+    }
+    if let Some(m) = mute {
+        spawn_wait("wpctl", &["set-mute", SINK, if m { "1" } else { "0" }])?;
+        done.push(if m { "son coupé" } else { "son rétabli" }.to_string());
+    }
+    // État actuel : « Volume: 0.45 [MUTED] »
+    let out = Command::new("wpctl")
+        .args(["get-volume", SINK])
+        .output()
+        .map_err(|e| format!("wpctl : {e}"))?;
+    let state = String::from_utf8_lossy(&out.stdout);
+    let level = state
+        .split_whitespace()
+        .nth(1)
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| format!("{:.0} %", v * 100.0))
+        .unwrap_or_else(|| "inconnu".into());
+    let now = format!(
+        "Volume actuel : {level}{}",
+        if state.contains("MUTED") {
+            ", son coupé"
+        } else {
+            ""
+        }
+    );
+    Ok(text(if done.is_empty() {
+        now
+    } else {
+        format!("Réglé : {}. {now}", done.join(", "))
+    }))
 }
 
 fn clipboard_read() -> Outcome {

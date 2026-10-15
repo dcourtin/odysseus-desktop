@@ -14,6 +14,9 @@
 //! Déclaration dans Claude Code :
 //!     claude mcp add odysseus -- ~/odysseus-desktop/target/release/odysseus-mcp
 
+mod docs;
+mod files;
+mod run;
 mod tools;
 
 use std::io::{BufRead, Write};
@@ -25,10 +28,15 @@ const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const INSTRUCTIONS: &str = "Serveur du bureau odysseus-desktop (Wayland, Linux From Scratch). \
 Il donne l'état de la machine (processeur, mémoire, carte graphique, disques, réseau, \
 processus), la liste des fenêtres et des notifications, des captures d'écran, et permet \
-d'agir sur le bureau (notifier, ouvrir un fichier, changer de bureau, régler le thème, le \
-fond d'écran, la lumière de nuit, l'échelle) et sur le presse-papiers. Chaque catégorie est \
-autorisée ou non par l'utilisateur dans Réglages > Agent : un refus n'est pas une panne, \
-l'outil « autorisations » dit ce qui est permis. Répondez à l'utilisateur en français.";
+d'agir sur le bureau (notifier, ouvrir un fichier, lancer une application, fermer ou déplacer \
+une fenêtre, changer de bureau, son, Ne pas déranger, thème, fond d'écran, lumière de nuit, \
+échelle) et sur le presse-papiers. Il donne aussi la documentation de la machine (man pages, \
+documentation du noyau, notes de construction de cet ordinateur, bibliothèque de \
+l'utilisateur), la lecture des fichiers, et l'exécution de commandes que l'utilisateur \
+approuve une à une. Pour expliquer le système, appuyez-vous sur ces sources plutôt que sur \
+votre mémoire, et citez-les. Chaque catégorie est autorisée ou non par l'utilisateur dans \
+Réglages > Agent : un refus n'est pas une panne, l'outil « autorisations » dit ce qui est \
+permis. Répondez à l'utilisateur en français.";
 
 fn main() {
     drop_privileges();

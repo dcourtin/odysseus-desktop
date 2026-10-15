@@ -163,6 +163,19 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
     if let Some(id) = command.strip_prefix("focus ") {
         return id.trim().parse().is_ok_and(|id| state.focus_by_id(id));
     }
+    // « close <id> » : fermer une fenêtre ; « move <id> workspace <n> » : l'envoyer sur un bureau
+    if let Some(id) = command.strip_prefix("close ") {
+        return id.trim().parse().is_ok_and(|id| state.close_by_id(id));
+    }
+    if let Some(arg) = command.strip_prefix("move ") {
+        let words: Vec<&str> = arg.split_whitespace().collect();
+        if let [id, "workspace", n] = words.as_slice()
+            && let (Ok(id), Ok(n)) = (id.parse::<u64>(), n.parse::<usize>())
+        {
+            return n >= 1 && state.move_window_to_workspace(id, n - 1);
+        }
+        return false;
+    }
     // « agent-capture <fichier.png> [<id de fenêtre>] »
     if let Some(arg) = command.strip_prefix("agent-capture ") {
         let mut words = arg.split_whitespace();

@@ -1,4 +1,5 @@
-//! Applications installées (fichiers .desktop) et recherche approximative.
+//! Applications installées (fichiers .desktop) et recherche approximative :
+//! lanceur, et agent du bureau (odysseus-mcp, « lancer une application »).
 
 use std::{collections::HashSet, path::PathBuf};
 

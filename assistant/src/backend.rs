@@ -23,11 +23,19 @@ use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use crate::mcp::Mcp;
 
 const SYSTEM: &str = "Tu es l'Assistant du bureau odysseus-desktop, sur la machine de l'utilisateur \
-(Linux From Scratch, bureau Wayland en Rust). Tu disposes des outils du bureau (serveur odysseus) : \
-état du système, écran, fenêtres, notifications, réglages, captures, actions. Utilise-les quand la \
-question porte sur la machine ou le bureau. Si un outil est refusé, explique que l'utilisateur peut \
-l'autoriser dans Réglages > Agent. Réponds en français, de façon brève et claire, en texte simple \
-(listes à puces permises, pas de tableaux).";
+(Linux From Scratch construit à la main, noyau 7.1.8, systemd, bureau Wayland en Rust). Il n'y a \
+aucun gestionnaire de paquets (ni apt, ni pacman, ni dnf) : les logiciels sont compilés depuis leurs \
+sources (scripts et journal dans /sources/blfs-desktop) ; ceux de l'utilisateur sont dans ~/.local/bin, \
+~/.cargo/bin (Rust par rustup) et ~/Applications (AppImage). Tu disposes \
+des outils du bureau (serveur odysseus) : état du système, écran, fenêtres, notifications, réglages, \
+captures, actions sur le bureau, documentation, fichiers, commandes. Utilise-les quand la question \
+porte sur la machine, le bureau ou le fonctionnement de Linux. Pour expliquer le système ou résumer \
+une man page, lis les sources (manuel, apropos, documentation : man pages, documentation du noyau, \
+notes de construction de cette machine, bibliothèque de l'utilisateur) plutôt que de répondre de \
+mémoire, et dis d'où vient l'information. Avant une commande (outil executer), préfère les outils de \
+lecture s'ils suffisent ; l'utilisateur approuve chaque commande. Si un outil est refusé, explique \
+que l'utilisateur peut l'autoriser dans Réglages > Agent. Réponds en français, de façon claire, en \
+texte simple (listes à puces permises, pas de tableaux).";
 
 pub enum Event {
     /// Morceau de réponse
@@ -83,6 +91,17 @@ pub fn tool_label(name: &str) -> String {
         "lire_presse_papiers" => "Lecture du presse-papiers",
         "ecrire_presse_papiers" => "Écriture du presse-papiers",
         "autorisations" => "Autorisations",
+        "manuel" => "Lecture d'une man page",
+        "apropos" => "Recherche de man pages",
+        "documentation" => "Documentation",
+        "lire_fichier" => "Lecture d'un fichier",
+        "lister_dossier" => "Contenu d'un dossier",
+        "lancer_application" => "Lancement d'une application",
+        "fermer_fenetre" => "Fermeture d'une fenêtre",
+        "deplacer_fenetre" => "Déplacement d'une fenêtre",
+        "son" => "Son",
+        "ne_pas_deranger" => "Ne pas déranger",
+        "executer" => "Commande soumise à votre accord",
         "Read" => "Lecture d'un fichier",
         "WebSearch" => "Recherche sur le web",
         "WebFetch" => "Lecture d'une page web",
@@ -340,6 +359,7 @@ fn ollama(
             "messages": messages,
             "tools": tools,
             "stream": true,
+            "options": {"num_ctx": agent.ollama_ctx},
         });
         // Pas de réflexion affichée : réponses plus rapides (les modèles
         // gpt-oss n'acceptent pas ce réglage)

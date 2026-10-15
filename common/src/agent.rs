@@ -9,14 +9,15 @@
 //! {
 //!   "agent": "claude",
 //!   "claude": { "commande": "~/.local/bin/claude" },
-//!   "ollama": { "adresse": "http://127.0.0.1:11434", "modele": "qwen3:14b" },
+//!   "ollama": { "adresse": "http://127.0.0.1:11434", "modele": "qwen3:14b", "contexte": 16384 },
 //!   "commande": { "commande": "mon-agent --question" },
 //!   "modeles_conseilles": [
 //!     { "modele": "qwen3:14b", "nom": "Qwen3 14B", "taille": "9,3 Go", "atouts": "…" }
 //!   ],
 //!   "autorisations": {
-//!     "lire_systeme": true, "voir_bureau": true, "voir_ecran": false,
-//!     "agir": false, "presse_papiers": false
+//!     "lire_systeme": true, "lire_documentation": true, "lire_fichiers": false,
+//!     "voir_bureau": true, "voir_ecran": false, "agir": false,
+//!     "presse_papiers": false, "executer": false
 //!   }
 //! }
 //! ```
@@ -30,6 +31,10 @@ use serde_json::{Value, json};
 pub struct AgentPerms {
     /// État du système : charge, températures, mémoire, disques, réseau, écran, réglages, journaux
     pub read: bool,
+    /// Documentation : man pages, doc du noyau, info, notes de construction, bibliothèque
+    pub docs: bool,
+    /// Fichiers de l'utilisateur et du système (jamais les secrets : clés, mots de passe)
+    pub files: bool,
     /// Fenêtres, bureaux, historique des notifications
     pub desktop: bool,
     /// Captures de l'écran ou d'une fenêtre (envoyées à l'agent)
@@ -38,16 +43,21 @@ pub struct AgentPerms {
     pub act: bool,
     /// Lire et écrire le presse-papiers
     pub clipboard: bool,
+    /// Lancer des commandes, chacune confirmée par l'utilisateur
+    pub run: bool,
 }
 
 impl Default for AgentPerms {
     fn default() -> Self {
         Self {
             read: true,
+            docs: true,
+            files: false,
             desktop: true,
             screen: false,
             act: false,
             clipboard: false,
+            run: false,
         }
     }
 }
@@ -69,6 +79,8 @@ pub struct AgentConfig {
     pub claude_command: Option<String>,
     pub ollama_url: String,
     pub ollama_model: String,
+    /// Fenêtre de contexte demandée à Ollama, en jetons (documentation longue)
+    pub ollama_ctx: u32,
     /// Commande personnalisée : reçoit la question en argument
     pub custom_command: String,
     pub models: Vec<ModelCard>,
@@ -122,6 +134,7 @@ impl Default for AgentConfig {
             claude_command: None,
             ollama_url: "http://127.0.0.1:11434".into(),
             ollama_model: "qwen3:14b".into(),
+            ollama_ctx: 16384,
             custom_command: String::new(),
             models: default_models(),
             perms: AgentPerms::default(),
@@ -164,6 +177,12 @@ impl AgentConfig {
         if let Some(v) = s(&raw["ollama"]["modele"]).filter(|v| !v.is_empty()) {
             c.ollama_model = v;
         }
+        if let Some(n) = raw["ollama"]["contexte"]
+            .as_u64()
+            .filter(|n| (2048..=262_144).contains(n))
+        {
+            c.ollama_ctx = n as u32;
+        }
         c.custom_command = s(&raw["commande"]["commande"]).unwrap_or_default();
         if let Some(list) = raw["modeles_conseilles"].as_array() {
             let models: Vec<ModelCard> = list
@@ -186,10 +205,13 @@ impl AgentConfig {
         let d = AgentPerms::default();
         c.perms = AgentPerms {
             read: flag("lire_systeme", d.read),
+            docs: flag("lire_documentation", d.docs),
+            files: flag("lire_fichiers", d.files),
             desktop: flag("voir_bureau", d.desktop),
             screen: flag("voir_ecran", d.screen),
             act: flag("agir", d.act),
             clipboard: flag("presse_papiers", d.clipboard),
+            run: flag("executer", d.run),
         };
         c.raw = raw;
         c
@@ -256,6 +278,7 @@ impl AgentConfig {
         obj(&mut raw, "ollama");
         raw["ollama"]["adresse"] = json!(self.ollama_url);
         raw["ollama"]["modele"] = json!(self.ollama_model);
+        raw["ollama"]["contexte"] = json!(self.ollama_ctx);
         obj(&mut raw, "commande");
         raw["commande"]["commande"] = json!(self.custom_command);
         raw["modeles_conseilles"] = Value::Array(
@@ -267,10 +290,13 @@ impl AgentConfig {
         let p = self.perms;
         raw["autorisations"] = json!({
             "lire_systeme": p.read,
+            "lire_documentation": p.docs,
+            "lire_fichiers": p.files,
             "voir_bureau": p.desktop,
             "voir_ecran": p.screen,
             "agir": p.act,
             "presse_papiers": p.clipboard,
+            "executer": p.run,
         });
         raw
     }
@@ -306,7 +332,7 @@ mod tests {
         assert_eq!(c.ollama_model, "mistral-small3.2:24b");
         assert_eq!(c.ollama_url, "http://127.0.0.1:11434");
         assert_eq!(c.models.len(), 1);
-        assert!(c.perms.screen && c.perms.read && !c.perms.act);
+        assert!(c.perms.screen && c.perms.read && c.perms.docs && !c.perms.act && !c.perms.run);
         let out = c.to_json();
         assert_eq!(out["ma_note"], "à garder");
         assert_eq!(out["ollama"]["options"]["num_ctx"], 16384);

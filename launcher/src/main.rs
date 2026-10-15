@@ -5,7 +5,7 @@
 //! Relancer le lanceur alors qu'il est ouvert le ferme (bascule).
 //! Arguments facultatifs : requête initiale (`launcher foot`).
 
-mod apps;
+use common::apps;
 
 use std::{os::unix::process::CommandExt, path::PathBuf};
 

@@ -130,6 +130,46 @@ impl Odysseus {
         self.publish_workspaces(true);
     }
 
+    /// Envoie une fenêtre (identifiant de GET_WINDOWS) sur un bureau, qu'elle
+    /// soit affichée ou rangée ; le bureau affiché ne change pas.
+    pub fn move_window_to_workspace(&mut self, id: u64, target: usize) -> bool {
+        if target >= COUNT {
+            return false;
+        }
+        let Some((window, ws)) = self.window_by_id(id) else {
+            return false;
+        };
+        if ws == target {
+            return true;
+        }
+        let loc = if ws == self.workspaces.active {
+            let loc = self.space.element_location(&window).unwrap_or_default();
+            self.space.unmap_elem(&window);
+            let keyboard = self.seat.get_keyboard().unwrap();
+            if keyboard
+                .current_focus()
+                .is_some_and(|f| window.toplevel().is_some_and(|t| t.wl_surface() == &f))
+            {
+                keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+            }
+            loc
+        } else {
+            let list = &mut self.workspaces.hidden[ws];
+            let Some(i) = list.iter().position(|(w, _)| w == &window) else {
+                return false;
+            };
+            list.remove(i).1
+        };
+        if target == self.workspaces.active {
+            self.space.map_element(window.clone(), loc, true);
+            self.focus_window(&window);
+        } else {
+            self.workspaces.hidden[target].push((window, loc));
+        }
+        self.publish_workspaces(true);
+        true
+    }
+
     /// Bureau existant suivant (+1) ou précédent (-1), en boucle.
     pub fn cycle_workspace(&mut self, step: isize) {
         let list: Vec<usize> = self.workspace_list().iter().map(|w| w.num - 1).collect();

@@ -117,10 +117,18 @@ const AGENTS: [(&str, &str, &str); 3] = [
     ),
 ];
 /// Autorisations d'odysseus-mcp : titre, explication
-const PERMS: [(&str, &str); 5] = [
+const PERMS: [(&str, &str); 8] = [
     (
         "Lire l'état du système",
         "Charge, températures, mémoire, disques, réseau, écran, réglages, journaux d'odysseus.",
+    ),
+    (
+        "Lire la documentation",
+        "Man pages, doc du noyau, manuels info, notes de construction de la machine, ~/Documents/Bibliothèque.",
+    ),
+    (
+        "Lire les fichiers",
+        "Vos fichiers et ceux du système, jamais les secrets (clés, mots de passe). Avec un agent en ligne, leur contenu quitte la machine.",
     ),
     (
         "Voir le bureau",
@@ -137,6 +145,10 @@ const PERMS: [(&str, &str); 5] = [
     (
         "Presse-papiers",
         "Lire ce que vous avez copié, y écrire du texte.",
+    ),
+    (
+        "Exécuter des commandes",
+        "Chaque commande vous est montrée dans une notification : rien ne se lance sans votre accord. Jamais en root.",
     ),
 ];
 const SUSPEND: [(u32, &str); 4] = [(0, "Jamais"), (30, "30 min"), (60, "1 h"), (120, "2 h")];
@@ -1025,10 +1037,13 @@ impl App {
                 let p = &mut self.agent.perms;
                 let flag = match i {
                     0 => &mut p.read,
-                    1 => &mut p.desktop,
-                    2 => &mut p.screen,
-                    3 => &mut p.act,
-                    _ => &mut p.clipboard,
+                    1 => &mut p.docs,
+                    2 => &mut p.files,
+                    3 => &mut p.desktop,
+                    4 => &mut p.screen,
+                    5 => &mut p.act,
+                    6 => &mut p.clipboard,
+                    _ => &mut p.run,
                 };
                 *flag = !*flag;
                 self.save_agent();
@@ -2027,7 +2042,7 @@ impl App {
             x,
             y,
             w,
-            "L'agent choisi répondra dans le panneau Assistant (Super+A, bientôt). Tout agent compatible MCP peut aussi se brancher sur odysseus-mcp.",
+            "L'agent choisi répond dans le panneau Assistant (icône de la barre ou Super+A). Tout agent compatible MCP peut aussi se brancher sur odysseus-mcp.",
         ) + 4.0;
         ui.button(
             x,
@@ -2048,10 +2063,13 @@ impl App {
         let perms = self.agent.perms;
         let values = [
             perms.read,
+            perms.docs,
+            perms.files,
             perms.desktop,
             perms.screen,
             perms.act,
             perms.clipboard,
+            perms.run,
         ];
         for (i, (title, detail)) in PERMS.iter().enumerate() {
             let ry = y + i as f32 * rh;

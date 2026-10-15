@@ -106,6 +106,21 @@ impl Odysseus {
         })
     }
 
+    /// Demande à une fenêtre de se fermer (comme Mod+q) : l'application peut
+    /// encore demander d'enregistrer
+    pub fn close_by_id(&mut self, id: u64) -> bool {
+        match self
+            .window_by_id(id)
+            .and_then(|(w, _)| w.toplevel().cloned())
+        {
+            Some(toplevel) => {
+                toplevel.send_close();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Met une fenêtre au premier plan, en allant sur son bureau si besoin
     pub fn focus_by_id(&mut self, id: u64) -> bool {
         let Some((window, ws)) = self.window_by_id(id) else {
