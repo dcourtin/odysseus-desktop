@@ -14,4 +14,5 @@ common.workspace = true
 smithay-client-toolkit.workspace = true
 dbus.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

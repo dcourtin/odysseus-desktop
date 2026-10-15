@@ -9,6 +9,7 @@
 mod agents;
 mod automatismes;
 mod fonds;
+mod maj;
 mod system;
 mod trousseau;
 
@@ -180,11 +181,12 @@ enum Page {
     Raccourcis,
     Automatismes,
     Trousseau,
+    MisesAJour,
     Agent,
     APropos,
 }
 
-const PAGES: [Page; 10] = [
+const PAGES: [Page; 11] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
@@ -193,6 +195,7 @@ const PAGES: [Page; 10] = [
     Page::Raccourcis,
     Page::Automatismes,
     Page::Trousseau,
+    Page::MisesAJour,
     Page::Agent,
     Page::APropos,
 ];
@@ -208,6 +211,7 @@ impl Page {
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
             Page::Automatismes => ("Automatismes", icon::ZAP),
             Page::Trousseau => ("Trousseau", icon::LOCK),
+            Page::MisesAJour => ("Mises à jour", icon::ARROW_DOWN_CIRCLE),
             Page::Agent => ("Agent", icon::BOT),
             Page::APropos => ("À propos", icon::INFO),
         }
@@ -223,6 +227,7 @@ impl Page {
             "raccourcis" => Page::Raccourcis,
             "automatismes" => Page::Automatismes,
             "trousseau" | "secrets" => Page::Trousseau,
+            "mises-a-jour" | "maj" => Page::MisesAJour,
             "agent" | "assistant" => Page::Agent,
             "apropos" | "a-propos" => Page::APropos,
             _ => return None,
@@ -242,6 +247,10 @@ enum Hit {
     KeyringLock(usize),
     KeyringUnlock(usize),
     SecretDelete(usize, usize),
+    UpdatesCheck,
+    UpdateOdysseus,
+    UpdatePrepare(usize),
+    UpdateIgnore(usize),
     Theme(usize),
     Fond(usize),
     FondUni,
@@ -284,6 +293,8 @@ enum Msg {
     Generated(usize),
     Dropped(Vec<PathBuf>),
     Locale(Result<String, String>),
+    /// Fin de la mise à jour d'odysseus (récupération, compilation)
+    Upgraded(Result<String, String>),
 }
 
 /// Nouvelle définition en attente de confirmation
@@ -340,6 +351,8 @@ struct App {
     /// Trousseaux (Secret Service) et noms des secrets rangés
     keyrings: trousseau::State,
     keyrings_read: Option<Instant>,
+    /// Mises à jour trouvées par odysseus-veille
+    updates: maj::State,
     autos_bad: Vec<(String, String)>,
     drop_hover: bool,
     width: u32,
@@ -501,6 +514,7 @@ fn main() {
         autos: Vec::new(),
         keyrings: trousseau::State::Unknown,
         keyrings_read: None,
+        updates: maj::State::default(),
         autos_bad: Vec::new(),
         drop_hover: false,
         width: 1060,
@@ -678,6 +692,7 @@ impl App {
 
     fn on_msg(&mut self, msg: Msg) {
         match msg {
+            Msg::Upgraded(result) => self.on_upgraded(result),
             Msg::Thumb(path, thumb) => {
                 if let Some(f) = self.fonds.iter_mut().find(|f| f.path == path) {
                     f.thumb = thumb;
@@ -808,6 +823,10 @@ impl App {
             self.refresh_keyrings();
             redraw = true;
         }
+        // Page Mises à jour : vérification en cours, rapport réécrit par la veille
+        if self.page == Page::MisesAJour && (self.updates.poll() | self.updates.refresh()) {
+            redraw = true;
+        }
         if let Some(c) = self.confirm.as_ref() {
             if c.since.elapsed() >= CONFIRM {
                 self.revert_mode();
@@ -918,6 +937,9 @@ impl App {
                 }
                 if p == Page::Trousseau {
                     self.refresh_keyrings();
+                }
+                if p == Page::MisesAJour {
+                    self.updates.refresh();
                 }
                 if p == Page::Ecran || p == Page::APropos {
                     self.screen = system::screen();
@@ -1087,6 +1109,10 @@ impl App {
             Hit::KeyringLock(_) | Hit::KeyringUnlock(_) | Hit::SecretDelete(_, _) => {
                 self.keyring_click(hit)
             }
+            Hit::UpdatesCheck
+            | Hit::UpdateOdysseus
+            | Hit::UpdatePrepare(_)
+            | Hit::UpdateIgnore(_) => self.updates_click(hit),
             Hit::EditAgentJson => {
                 // Fichier créé s'il n'existe pas encore, puis ouvert dans l'éditeur
                 if common::agent::path().is_none_or(|p| !p.exists()) {
@@ -1229,6 +1255,7 @@ impl App {
             Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(&mut ui, cx, top, cw),
             Page::Trousseau => self.page_trousseau(&mut ui, cx, top, cw),
+            Page::MisesAJour => self.page_maj(&mut ui, cx, top, cw),
             Page::Agent => self.page_agent(&mut ui, cx, top, cw),
             Page::APropos => self.page_apropos(&mut ui, cx, top, cw),
         };

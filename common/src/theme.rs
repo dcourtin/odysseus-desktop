@@ -364,6 +364,11 @@ pub mod icon {
     pub const SHIELD_CHECK: char = '\u{e1ff}';
     pub const TERMINAL: char = '\u{e181}';
     pub const PACKAGE_OPEN: char = '\u{e2cc}';
+    pub const PACKAGE: char = '\u{e129}';
+    pub const ARROW_DOWN_CIRCLE: char = '\u{e078}';
+    pub const SHIELD_ALERT: char = '\u{e1fe}';
+    pub const REFRESH: char = '\u{e145}';
+    pub const GIT_BRANCH: char = '\u{e0e2}';
     pub const SCREEN_SHARE: char = '\u{e14f}';
     pub const BOLD: char = '\u{e05d}';
     pub const ITALIC: char = '\u{e0fb}';

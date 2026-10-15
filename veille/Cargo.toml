@@ -1,0 +1,15 @@
+[package]
+name = "veille"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "odysseus-veille : cherche les mises à jour du système et d'odysseus, sans rien installer"
+
+[[bin]]
+name = "odysseus-veille"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+serde_json.workspace = true
+chrono.workspace = true

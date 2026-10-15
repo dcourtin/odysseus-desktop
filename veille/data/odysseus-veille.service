@@ -1,0 +1,9 @@
+[Unit]
+Description=odysseus : recherche des mises à jour (sans rien installer)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/odysseus-desktop/target/release/odysseus-veille verifier
+Nice=10

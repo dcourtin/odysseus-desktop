@@ -103,6 +103,9 @@ struct Bar {
     sharing: u64,
     share_zone: (f64, f64),
     assistant_zone: (f64, f64),
+    /// Mises à jour à décider (rapport d'odysseus-veille), et l'icône qui les annonce
+    updates: Updates,
+    update_zone: (f64, f64),
     /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
     cpu_prev: (u64, u64),
     bell_zone: (f64, f64),
@@ -174,6 +177,8 @@ fn main() {
         sharing: 0,
         share_zone: (0.0, 0.0),
         assistant_zone: (0.0, 0.0),
+        updates: Updates::default(),
+        update_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
@@ -286,6 +291,35 @@ fn agent_watching() -> bool {
 
 /// Panneau d'odysseus ouvert : son processus vit (fichier .pid), ou, pour le
 /// centre de notifications, son marqueur existe
+/// Mises à jour à décider, relues quand le rapport ou la liste des versions
+/// écartées change (un coup d'œil aux dates, à chaque seconde)
+#[derive(Default)]
+struct Updates {
+    stamps: (Option<std::time::SystemTime>, Option<std::time::SystemTime>),
+    pending: usize,
+    security: bool,
+}
+
+impl Updates {
+    fn refresh(&mut self) {
+        use common::updates;
+        let stamp = |p: std::path::PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let stamps = (
+            stamp(updates::report_path()),
+            stamp(updates::ignored_path()),
+        );
+        if stamps == self.stamps {
+            return;
+        }
+        self.stamps = stamps;
+        let list = updates::load()
+            .map(|r| updates::pending(&r))
+            .unwrap_or_default();
+        self.pending = list.len();
+        self.security = list.iter().any(|u| u.level == updates::Level::Security);
+    }
+}
+
 fn panel_open(name: &str) -> bool {
     let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else {
         return false;
@@ -441,6 +475,10 @@ impl Bar {
         }
         if x >= self.assistant_zone.0 && x < self.assistant_zone.1 {
             spawn_sibling("odysseus-assistant", &[]);
+            return;
+        }
+        if self.updates.pending > 0 && x >= self.update_zone.0 && x < self.update_zone.1 {
+            spawn_sibling("odysseus-reglages", &["mises-a-jour"]);
             return;
         }
         if self.sharing > 0 && x >= self.share_zone.0 && x < self.share_zone.1 {
@@ -677,8 +715,27 @@ impl Bar {
             left = x0 - step / 2.0;
         }
 
-        // Icônes des applications, à gauche des icônes du bureau
+        // Mises à jour à décider : l'icône n'apparaît qu'alors (rouge : sécurité)
+        self.updates.refresh();
         let mut tx = left - 6.0 * sf;
+        self.update_zone = (0.0, 0.0);
+        if self.updates.pending > 0 {
+            let color = if self.updates.security {
+                theme::palette().danger
+            } else {
+                theme::palette().accent
+            };
+
+            self.icons
+                .icon(&mut canvas, icon::ARROW_DOWN_CIRCLE, tx, cy, icon_px, color);
+            self.update_zone = (
+                ((tx - step / 2.0) / sf) as f64,
+                ((tx + step / 2.0) / sf) as f64,
+            );
+            tx -= step;
+        }
+
+        // Icônes des applications, à gauche des icônes du bureau
         let size = 16.0 * sf;
         self.tray_zones.clear();
         let menu_key = self.menu.as_ref().map(|m| m.key.clone());

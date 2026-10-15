@@ -32,6 +32,8 @@ puis à droite :
 - **l'Assistant** ;
 - **le moniteur système**, une jauge dont la couleur suit la charge ;
 - **le centre de contrôle** ;
+- **les mises à jour** : une flèche dans un cercle, quand il y en a à décider
+  (rouge : une faille de sécurité) ; un clic ouvre Réglages > Mises à jour ;
 - **la cloche** des notifications (un point : des notifications non vues) ;
 - **la date et l'heure** (un clic ouvre le centre de notifications et le calendrier).
 
@@ -208,12 +210,35 @@ les trousseaux et les noms des secrets (jamais leur valeur), et permet d'en supp
 Icône jauge de la barre : processeur, mémoire, disques, carte graphique, réseau,
 avec courbes sur 60 secondes, et les processus les plus actifs (arrêt en deux clics).
 
+## Mises à jour
+
+Chaque jour, la veille regarde ce qui a changé, sans rien installer :
+
+- **le système** : chaque logiciel construit depuis ses sources est comparé à sa
+  dernière version, le noyau à sa branche, le navigateur à sa version longue durée ;
+  un avis de sécurité LFS qui le concerne le fait passer en tête ;
+- **odysseus** : les nouveautés du dépôt ;
+- **les outils** installés à part (chaîne Rust).
+
+Quand il y a du nouveau, une notification le dit et une icône apparaît dans la
+barre. Réglages > Mises à jour range tout par importance (sécurité, correctifs,
+nouvelles versions, outils) ; pour chacun, au cas par cas :
+
+- **Préparer** : l'Assistant étudie la mise à jour (ce qui change, ce qui en
+  dépend, les risques) et propose les commandes, que vous approuvez une à une ;
+- **Écarter** : cette version ne sera plus proposée, la suivante le sera ;
+- pour odysseus, **Mettre à jour** récupère les nouveautés et les compile ; il
+  suffit ensuite de se reconnecter.
+
+« Vérifier maintenant » relance la veille sans attendre. En ligne de commande :
+`odysseus-veille etat`.
+
 ## Réglages
 
 Apparence (thèmes), Fond d'écran, Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
-Raccourcis, Automatismes, Trousseau, Agent, À propos.
+Raccourcis, Automatismes, Trousseau, Mises à jour, Agent, À propos.
 
 ## Verrouillage et énergie
 

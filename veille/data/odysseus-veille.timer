@@ -1,0 +1,11 @@
+[Unit]
+Description=odysseus : recherche quotidienne des mises à jour
+
+[Timer]
+OnStartupSec=10min
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

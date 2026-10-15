@@ -13,4 +13,5 @@ pub mod stats;
 pub mod sysinfo;
 pub mod theme;
 pub mod trash;
+pub mod updates;
 pub mod watch;
