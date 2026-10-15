@@ -1,6 +1,7 @@
 //! Contenu d'un dossier, tri, historique de navigation.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -81,6 +82,11 @@ pub struct Browser {
     pub cwd: PathBuf,
     pub entries: Vec<Entry>,
     pub selected: usize,
+    /// Sélection multiple (Ctrl+clic, Maj+clic, Ctrl+A) : chemins choisis ;
+    /// vide, la sélection se résume à `selected`
+    pub picked: HashSet<PathBuf>,
+    /// Point de départ d'une sélection par plage (Maj)
+    pub anchor: usize,
     /// Première ligne affichée
     pub scroll: usize,
     pub show_hidden: bool,
@@ -97,6 +103,8 @@ impl Browser {
             cwd: start,
             entries: Vec::new(),
             selected: 0,
+            picked: HashSet::new(),
+            anchor: 0,
             scroll: 0,
             show_hidden: false,
             sort: Sort::load(),
@@ -145,6 +153,7 @@ impl Browser {
             self.selected = i;
         }
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+        self.normalize();
     }
 
     /// Dossiers d'abord (comme le Finder), puis la colonne choisie ; à égalité,
@@ -192,6 +201,8 @@ impl Browser {
     fn go(&mut self, path: PathBuf) {
         self.cwd = path;
         self.selected = 0;
+        self.anchor = 0;
+        self.picked.clear();
         self.scroll = 0;
         self.reload();
     }
@@ -247,6 +258,89 @@ impl Browser {
         self.reload();
     }
 
+    /// L'élément `i` fait-il partie de la sélection ?
+    pub fn is_picked(&self, i: usize) -> bool {
+        if self.picked.is_empty() {
+            i == self.selected
+        } else {
+            self.entries
+                .get(i)
+                .is_some_and(|e| self.picked.contains(&e.path))
+        }
+    }
+
+    /// Éléments sélectionnés, dans l'ordre de la liste
+    pub fn selection(&self) -> Vec<&Entry> {
+        (0..self.entries.len())
+            .filter(|&i| self.is_picked(i))
+            .map(|i| &self.entries[i])
+            .collect()
+    }
+
+    pub fn multiple(&self) -> bool {
+        self.picked.len() > 1
+    }
+
+    /// Sélection simple
+    pub fn select(&mut self, i: usize) {
+        self.selected = i;
+        self.anchor = i;
+        self.picked.clear();
+    }
+
+    /// Ctrl+clic : ajoute ou retire un élément
+    pub fn toggle(&mut self, i: usize) {
+        let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
+            return;
+        };
+        if self.picked.is_empty()
+            && let Some(e) = self.entries.get(self.selected)
+        {
+            self.picked.insert(e.path.clone());
+        }
+        if !self.picked.remove(&path) {
+            self.picked.insert(path);
+        }
+        self.selected = i;
+        self.anchor = i;
+        self.normalize();
+    }
+
+    /// Maj+clic, Maj+flèches : de l'ancre jusqu'à `i`
+    pub fn extend_to(&mut self, i: usize) {
+        let i = i.min(self.entries.len().saturating_sub(1));
+        let (a, b) = (self.anchor.min(i), self.anchor.max(i));
+        self.picked = self.entries[a..=b.min(self.entries.len().saturating_sub(1))]
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        self.selected = i;
+        self.normalize();
+    }
+
+    pub fn select_all(&mut self) {
+        self.picked = self.entries.iter().map(|e| e.path.clone()).collect();
+        self.normalize();
+    }
+
+    /// Un seul élément choisi : sélection simple ; le curseur reste sur un
+    /// élément choisi
+    fn normalize(&mut self) {
+        self.picked
+            .retain(|p| self.entries.iter().any(|e| &e.path == p));
+        if self.picked.len() == 1 {
+            let only = self.picked.drain().next();
+            if let Some(i) = only.and_then(|p| self.entries.iter().position(|e| e.path == p)) {
+                self.selected = i;
+            }
+        } else if !self.picked.is_empty()
+            && !self.is_picked(self.selected)
+            && let Some(i) = (0..self.entries.len()).find(|&i| self.is_picked(i))
+        {
+            self.selected = i;
+        }
+    }
+
     /// Recherche à la frappe : première entrée qui commence par `prefix`.
     pub fn jump_to(&mut self, prefix: &str) {
         let p = prefix.to_lowercase();
@@ -255,7 +349,7 @@ impl Browser {
             .iter()
             .position(|e| e.name.to_lowercase().starts_with(&p))
         {
-            self.selected = i;
+            self.select(i);
         }
     }
 }

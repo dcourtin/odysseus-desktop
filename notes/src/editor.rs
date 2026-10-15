@@ -181,11 +181,15 @@ fn pair(
             i += 1;
             continue;
         };
+        // Le contenu d'un code est réservé ; celui d'une emphase reste libre
+        // pour une emphase imbriquée (***gras italique***, ~~*barré italique*~~)
+        let code = d[0] == '`';
         for k in i..j + n {
-            taken[k] = true;
             if k < i + n || k >= j {
+                taken[k] = true;
                 st[k].marker = true;
             } else {
+                taken[k] |= code;
                 apply(&mut st[k]);
             }
         }
@@ -325,8 +329,16 @@ impl Layout {
     }
 }
 
-/// Coupe le texte en lignes d'au plus `width` pixels
-pub fn layout(text: &str, m: &impl Metrics, sz: &Sizes, width: f32) -> Layout {
+/// Coupe le texte en lignes d'au plus `width` pixels. Les marqueurs Markdown
+/// (`**`, `#`, `` ` ``…) ne s'affichent que dans les paragraphes touchés par
+/// `reveal` (ceux du curseur et de la sélection) ; ailleurs ils sont masqués.
+pub fn layout(
+    text: &str,
+    m: &impl Metrics,
+    sz: &Sizes,
+    width: f32,
+    reveal: Option<(usize, usize)>,
+) -> Layout {
     let mut lines = Vec::new();
     let mut y = 0.0;
     let mut in_code = false;
@@ -336,7 +348,20 @@ pub fn layout(text: &str, m: &impl Metrics, sz: &Sizes, width: f32) -> Layout {
         if block == Block::Fence {
             in_code = !in_code;
         }
-        let styles = inline(line, block, prefix);
+        let mut styles = inline(line, block, prefix);
+        let shown = reveal.is_some_and(|(a, b)| start <= b && start + line.len() >= a);
+        if !shown {
+            // Le numéro d'une liste numérotée reste visible
+            let keep = if block == Block::Number {
+                prefix.map_or(0, |p| p.indent + p.len)
+            } else {
+                0
+            };
+            for s in styles.iter_mut().skip(keep).filter(|s| s.marker) {
+                s.marker = false;
+                s.hidden = true;
+            }
+        }
         let px = sz.px(block);
         let h = (px * 1.5).round();
         // Un peu d'air avant un intertitre
@@ -1096,7 +1121,7 @@ mod tests {
 
     #[test]
     fn wraps_and_maps() {
-        let lay = layout("titre\nun deux trois", &Mono, &SZ, 55.0);
+        let lay = layout("titre\nun deux trois", &Mono, &SZ, 55.0, None);
         assert_eq!(lay.lines.len(), 4);
         assert_eq!(lay.lines[1].start, 6);
         assert_eq!(lay.lines[2].start, 9);
@@ -1182,4 +1207,34 @@ mod tests {
         assert_eq!(title("\n# **Projet** odysseus\nsuite"), "Projet odysseus");
         assert_eq!(preview("Titre\n- [ ] pain\n- lait"), "pain lait");
     }
+
+    #[test]
+    fn markers_hidden_outside_reveal() {
+        let text = "titre\n**gras** et `code`\n## Partie";
+        let width =
+            |lay: &Layout, para: usize| -> f32 { lay.lines[para].glyphs.iter().map(|g| g.w).sum() };
+        let hidden = layout(text, &Mono, &SZ, 1000.0, None);
+        assert_eq!(width(&hidden, 1), 120.0);
+        assert_eq!(width(&hidden, 2), 60.0);
+        let line = 6;
+        let shown = layout(text, &Mono, &SZ, 1000.0, Some((line, line)));
+        assert_eq!(width(&shown, 1), 180.0);
+        assert_eq!(width(&shown, 2), 60.0);
+    }
+
+    #[test]
+    fn nested_emphasis() {
+        let line = "***tout*** et ~~*les deux*~~";
+        let s = inline(line, Block::Normal, None);
+        let shown: String = line
+            .chars()
+            .zip(&s)
+            .filter(|(_, st)| !st.marker)
+            .map(|(c, _)| c)
+            .collect();
+        assert_eq!(shown, "tout et les deux");
+        assert!(s[3].bold && s[3].italic);
+        assert!(s[20].strike && s[20].italic);
+    }
+
 }

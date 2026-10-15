@@ -49,7 +49,17 @@ impl Files {
         let Some(entry) = self.browser.entries.get(row) else {
             return;
         };
-        let (path, name, is_dir) = (entry.path.clone(), entry.name.clone(), entry.is_dir);
+        // Un élément de la sélection multiple emmène toute la sélection
+        self.collapse = None;
+        let (paths, name, is_dir) = if self.browser.multiple() && self.browser.is_picked(row) {
+            let sel = self.browser.selection();
+            let paths: Vec<_> = sel.iter().map(|e| e.path.clone()).collect();
+            let all_dirs = sel.iter().all(|e| e.is_dir);
+            let label = format!("{} éléments", paths.len());
+            (paths, label, all_dirs)
+        } else {
+            (vec![entry.path.clone()], entry.name.clone(), entry.is_dir)
+        };
         let source =
             manager.create_drag_and_drop_source(&self.qh, MIMES, DndAction::Copy | DndAction::Move);
         let icon = self.compositor.create_surface(&self.qh);
@@ -57,7 +67,7 @@ impl Files {
         self.draw_drag_icon(&icon, &name, is_dir);
         self.drag = Some(Drag {
             source,
-            path,
+            paths,
             _icon: icon,
         });
     }
@@ -102,7 +112,7 @@ impl Files {
 
     /// Dossier sous le pointeur où déposer l'élément glissé, s'il peut y aller
     fn drop_target_at(&self, x: f64, y: f64) -> Option<std::path::PathBuf> {
-        let dragged = &self.drag.as_ref()?.path;
+        let dragged = &self.drag.as_ref()?.paths;
         let target = match self.hit_at(x, y)? {
             Hit::Row(i) => self
                 .browser
@@ -114,7 +124,9 @@ impl Files {
             _ => return None,
         };
         // Ni sur lui-même, ni dans son propre dossier, ni dans un de ses sous-dossiers
-        let pointless = target.starts_with(dragged) || dragged.parent() == Some(target.as_path());
+        let pointless = dragged
+            .iter()
+            .any(|d| target.starts_with(d) || d.parent() == Some(target.as_path()));
         (!pointless).then_some(target)
     }
 
@@ -134,8 +146,38 @@ impl Files {
         }
     }
 
+    /// Dépôt de plusieurs éléments : chacun est déplacé ; le message résume
+    fn move_into(&mut self, sources: &[std::path::PathBuf], dir: &Path) {
+        if let [one] = sources {
+            return self.move_one(one, dir);
+        }
+        let to_trash = common::trash::files_dir().is_some_and(|t| t == dir);
+        let mut moved = Vec::new();
+        let mut error = None;
+        for source in sources {
+            match move_path(source, dir, to_trash) {
+                Ok(()) => moved.push(source.clone()),
+                Err(e) => error = Some(e),
+            }
+        }
+        let n = moved.len();
+        let done = if to_trash {
+            self.last_trashed = moved;
+            format!("{n} éléments mis à la corbeille — Ctrl+Z pour annuler")
+        } else {
+            format!("{n} éléments déplacés dans {}", dir.display())
+        };
+        self.browser.reload();
+        self.browser.message = Some(match error {
+            Some(e) if n == 0 => e,
+            Some(e) => format!("{done} ; {e}"),
+            None => done,
+        });
+        self.navigated();
+    }
+
     /// Dépôt sur un dossier : déplacement (corbeille : mise à la corbeille)
-    fn move_into(&mut self, source: &Path, dir: &Path) {
+    fn move_one(&mut self, source: &Path, dir: &Path) {
         let name = source
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -144,7 +186,7 @@ impl Files {
         let message = if to_trash {
             match common::trash::trash(source) {
                 Ok(()) => {
-                    self.last_trashed = Some(source.to_path_buf());
+                    self.last_trashed = vec![source.to_path_buf()];
                     format!("« {name} » mis à la corbeille — Ctrl+Z pour annuler")
                 }
                 Err(e) => e,
@@ -173,6 +215,35 @@ impl Files {
         self.browser.reload();
         self.browser.message = Some(message);
         self.navigated();
+    }
+}
+
+/// Déplace un élément dans `dir` (ou à la corbeille), sans rien écraser
+fn move_path(source: &Path, dir: &Path, to_trash: bool) -> Result<(), String> {
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if to_trash {
+        return common::trash::trash(source);
+    }
+    if dir.join(&name).exists() {
+        return Err(format!("« {name} » existe déjà dans {}", dir.display()));
+    }
+    let out = std::process::Command::new("mv")
+        .arg("-n")
+        .arg("--")
+        .arg(source)
+        .arg(dir)
+        .output()
+        .map_err(|e| format!("Déplacement impossible : {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Déplacement de « {name} » impossible : {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
@@ -216,13 +287,13 @@ impl DataDeviceHandler for Files {
 
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
         let target = self.drop_target.take();
-        let source = self.drag.as_ref().map(|d| d.path.clone());
+        let sources = self.drag.as_ref().map(|d| d.paths.clone());
         if let Some(offer) = drag_offer(device) {
             offer.finish();
             offer.destroy();
         }
-        match (source, target) {
-            (Some(source), Some(dir)) => self.move_into(&source, &dir),
+        match (sources, target) {
+            (Some(sources), Some(dir)) => self.move_into(&sources, &dir),
             _ => self.draw(),
         }
     }
@@ -269,10 +340,16 @@ impl DataSourceHandler for Files {
         let Some(drag) = self.drag.as_ref().filter(|d| d.source.inner() == source) else {
             return;
         };
+        // Texte : chemins séparés par des espaces (un terminal les reçoit
+        // comme arguments)
         let data = if mime == MIMES[0] {
-            info::uri_list(&drag.path)
+            drag.paths.iter().map(|p| info::uri_list(p)).collect()
         } else {
-            drag.path.to_string_lossy().into_owned()
+            drag.paths
+                .iter()
+                .map(|p| p.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
         };
         let _ = fd.write_all(data.as_bytes());
     }

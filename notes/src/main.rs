@@ -979,12 +979,25 @@ impl Notes {
     /// Mise en page à jour (le texte a pu changer depuis le dernier dessin)
     fn fresh_layout(&mut self) -> &Layout {
         let (_, width) = self.text_column();
+        let reveal = self.reveal();
         self.layout.insert(editor::layout(
             &self.editor.text,
             &self.fonts,
             &self.sizes(),
             width,
+            reveal,
         ))
+    }
+
+    /// Paragraphes dont les marqueurs Markdown s'affichent : ceux du curseur
+    /// et de la sélection ; aucun dans la corbeille (lecture seule)
+    fn reveal(&self) -> Option<(usize, usize)> {
+        if self.reading_trash() || self.current.is_none() {
+            return None;
+        }
+        let e = &self.editor;
+        let (a, b) = e.selection().unwrap_or((e.cursor, e.cursor));
+        Some((e.paragraph(a).0, e.paragraph(b).1))
     }
 
     /// ↑, ↓, Pg.préc, Pg.suiv : d'une ligne à l'écran à l'autre, à la même abscisse
@@ -1229,7 +1242,13 @@ impl Notes {
             self.layout = None;
             return;
         }
-        let lay = editor::layout(&self.editor.text, &self.fonts, &self.sizes(), tw);
+        let lay = editor::layout(
+            &self.editor.text,
+            &self.fonts,
+            &self.sizes(),
+            tw,
+            self.reveal(),
+        );
         // Défilement : le curseur reste visible ; pas au-delà du texte
         let view_h = h - top - DATE_H * s;
         if self.follow {

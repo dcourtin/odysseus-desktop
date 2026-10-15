@@ -86,6 +86,9 @@ const CONFIRM_TIME: Duration = Duration::from_millis(1500);
 const BTN_LEFT: u32 = 0x110;
 
 /// Zones cliquables, en coordonnées logiques de la fenêtre
+/// Au-delà, ouvrir toute une sélection d'un coup est refusé
+const MAX_OPEN: usize = 12;
+
 #[derive(Clone, PartialEq)]
 enum Hit {
     Row(usize),
@@ -117,7 +120,7 @@ enum Hit {
 /// Glisser-déposer en cours depuis Fichiers
 pub struct Drag {
     source: smithay_client_toolkit::data_device_manager::data_source::DragSource,
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     /// Image qui suit le pointeur (gardée vivante pendant le glisser)
     _icon: wl_surface::WlSurface,
 }
@@ -161,8 +164,11 @@ struct Files {
     hits: Vec<((f64, f64, f64, f64), Hit)>,
     last_click: Option<(Instant, usize)>,
     typed: (String, Instant),
-    /// Dernier élément mis à la corbeille (Ctrl+Z le remet)
-    last_trashed: Option<PathBuf>,
+    /// Derniers éléments mis à la corbeille (Ctrl+Z les remet)
+    last_trashed: Vec<PathBuf>,
+    /// Clic sans touche sur un élément d'une sélection multiple : elle se
+    /// réduit à lui au relâchement, sauf si l'appui devient un glisser
+    collapse: Option<usize>,
     /// « Vider la corbeille » armé : un second clic confirme
     empty_armed: Option<Instant>,
     width: u32,
@@ -360,7 +366,8 @@ fn main() {
         hits: Vec::new(),
         last_click: None,
         typed: (String::new(), Instant::now()),
-        last_trashed: None,
+        last_trashed: Vec::new(),
+        collapse: None,
         empty_armed: None,
         width: 960,
         height: 620,
@@ -413,6 +420,9 @@ impl Files {
     }
 
     fn open_selected(&mut self) {
+        if self.browser.multiple() {
+            return self.open_many();
+        }
         let Some(entry) = self.browser.entries.get(self.browser.selected) else {
             return;
         };
@@ -430,13 +440,49 @@ impl Files {
         if archive::kind(&path).is_some() {
             return self.extract_selected();
         }
-        if is_text(&path, entry.size) {
+        let (name, size) = (entry.name.clone(), entry.size);
+        self.open_file(&path, &name, size);
+        self.draw();
+    }
+
+    /// Sélection multiple : chaque fichier s'ouvre (pas les dossiers ni les
+    /// archives), dans la limite de MAX_OPEN
+    fn open_many(&mut self) {
+        let files: Vec<(PathBuf, String, u64)> = self
+            .browser
+            .selection()
+            .iter()
+            .filter(|e| !e.is_dir && archive::kind(&e.path).is_none())
+            .map(|e| (e.path.clone(), e.name.clone(), e.size))
+            .collect();
+        if files.is_empty() {
+            self.browser.message = Some("Aucun fichier à ouvrir dans la sélection".into());
+        } else if files.len() > MAX_OPEN {
+            self.browser.message = Some(format!(
+                "{} fichiers : c'est beaucoup de fenêtres, ouvrez-en {MAX_OPEN} au plus",
+                files.len()
+            ));
+        } else {
+            for (path, name, size) in files {
+                self.open_file(&path, &name, size);
+            }
+        }
+        self.draw();
+    }
+
+    /// Ouvre un fichier : image dans Aperçu, texte dans l'éditeur
+    fn open_file(&mut self, path: &Path, name: &str, size: u64) {
+        if is_image_path(path) {
+            spawn_sibling("apercu", path);
+            return;
+        }
+        if is_text(path, size) {
             let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
             let result = std::process::Command::new(term)
                 .arg("-e")
                 .arg(editor)
-                .arg(&path)
+                .arg(path)
                 .process_group(0)
                 .spawn();
             match result {
@@ -449,10 +495,8 @@ impl Files {
                 }
             }
         } else {
-            self.browser.message =
-                Some(format!("Aucune application pour ouvrir « {} »", entry.name));
+            self.browser.message = Some(format!("Aucune application pour ouvrir « {name} »"));
         }
-        self.draw();
     }
 
     fn key(&mut self, event: KeyEvent) {
@@ -460,16 +504,28 @@ impl Files {
         let page = self.visible_rows().saturating_sub(1).max(1);
         let alt = self.modifiers.alt;
         let ctrl = self.modifiers.ctrl;
+        let cur = self.browser.selected;
+        // Déplacement : Maj étend la sélection
+        let goto = match event.keysym {
+            Keysym::Down if n > 0 && !alt => Some((cur + 1).min(n - 1)),
+            Keysym::Up if !alt => Some(cur.saturating_sub(1)),
+            Keysym::Next if n > 0 => Some((cur + page).min(n - 1)),
+            Keysym::Prior => Some(cur.saturating_sub(page)),
+            Keysym::Home => Some(0),
+            Keysym::End => Some(n.saturating_sub(1)),
+            _ => None,
+        };
+        if let Some(i) = goto {
+            if self.modifiers.shift {
+                self.browser.extend_to(i);
+            } else {
+                self.browser.select(i);
+            }
+            return self.navigated();
+        }
         match event.keysym {
             Keysym::Up if alt => self.browser.parent(),
-            Keysym::Down if n > 0 => self.browser.selected = (self.browser.selected + 1).min(n - 1),
-            Keysym::Up => self.browser.selected = self.browser.selected.saturating_sub(1),
-            Keysym::Next if n > 0 => {
-                self.browser.selected = (self.browser.selected + page).min(n - 1)
-            }
-            Keysym::Prior => self.browser.selected = self.browser.selected.saturating_sub(page),
-            Keysym::Home => self.browser.selected = 0,
-            Keysym::End => self.browser.selected = n.saturating_sub(1),
+            Keysym::a if ctrl => self.browser.select_all(),
             Keysym::Return | Keysym::KP_Enter => return self.open_selected(),
             Keysym::Left if alt => self.browser.back(),
             Keysym::Right if alt => self.browser.forward(),
@@ -495,6 +551,10 @@ impl Files {
                 return self.open_terminal(&dir);
             }
             Keysym::i if ctrl => self.info = !self.info,
+            Keysym::Escape if self.browser.multiple() => {
+                let cur = self.browser.selected;
+                self.browser.select(cur);
+            }
             Keysym::Escape if self.info => self.info = false,
             Keysym::q if ctrl => {
                 self.exit = true;
@@ -533,10 +593,28 @@ impl Files {
     fn click(&mut self, x: f64, y: f64, serial: u32) {
         match self.hit_at(x, y) {
             Some(Hit::Row(i)) => {
+                if self.modifiers.ctrl {
+                    self.browser.toggle(i);
+                    self.last_click = None;
+                    return self.draw();
+                }
+                if self.modifiers.shift {
+                    self.browser.extend_to(i);
+                    self.last_click = None;
+                    return self.draw();
+                }
                 let double = self
                     .last_click
                     .is_some_and(|(t, row)| row == i && t.elapsed() < Duration::from_millis(400));
-                self.browser.selected = i;
+                if self.browser.multiple() && self.browser.is_picked(i) && !double {
+                    // Peut-être le début d'un glisser de toute la sélection
+                    self.collapse = Some(i);
+                    self.last_click = Some((Instant::now(), i));
+                    return;
+                }
+                if !(double && self.browser.multiple()) {
+                    self.browser.select(i);
+                }
                 self.info = true;
                 self.last_click = Some((Instant::now(), i));
                 if double {
@@ -578,16 +656,19 @@ impl Files {
             Some(Hit::Terminal(dir)) => self.open_terminal(&dir),
             Some(Hit::Extract) => self.extract_selected(),
             Some(Hit::AskAgent) => {
-                if let Some(path) = self.selected_path() {
+                let paths = self.selected_paths();
+                if !paths.is_empty() {
                     let exe = std::env::current_exe()
                         .ok()
                         .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")));
-                    if let Some(exe) = exe
-                        && let Ok(mut child) = std::process::Command::new(exe)
-                            .arg("--joindre")
-                            .arg(&path)
-                            .process_group(0)
-                            .spawn()
+                    let mut cmd = exe.map(std::process::Command::new);
+                    if let Some(cmd) = cmd.as_mut() {
+                        for path in &paths {
+                            cmd.arg("--joindre").arg(path);
+                        }
+                    }
+                    if let Some(mut cmd) = cmd
+                        && let Ok(mut child) = cmd.process_group(0).spawn()
                     {
                         std::thread::spawn(move || child.wait());
                         self.confirm(Hit::AskAgent, Ok(()));
@@ -615,12 +696,27 @@ impl Files {
             .map(|e| e.path.clone())
     }
 
-    /// Chemin complet dans le presse-papiers (wl-copy le garde après la fermeture)
+    /// Chemins des éléments sélectionnés, dans l'ordre de la liste
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.browser
+            .selection()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Chemins complets dans le presse-papiers, un par ligne (wl-copy les
+    /// garde après la fermeture)
     fn copy_path(&mut self) {
-        let Some(path) = self.selected_path() else {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
             return;
-        };
-        let text = path.to_string_lossy().into_owned();
+        }
+        let text = paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n");
         let result = wl_copy(&["--", &text], None);
         self.confirm(Hit::CopyPath, result);
     }
@@ -647,18 +743,30 @@ impl Files {
 
     /// Décompresse l'archive sélectionnée dans un fil ; la liste suit à la fin
     fn extract_selected(&mut self) {
-        let Some(path) = self.selected_path() else {
+        let archives: Vec<PathBuf> = self
+            .selected_paths()
+            .into_iter()
+            .filter(|p| archive::kind(p).is_some())
+            .collect();
+        let [first, ..] = archives.as_slice() else {
             return;
         };
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.browser.message = Some(format!("Décompression de « {name} »…"));
+        self.browser.message = Some(if archives.len() == 1 {
+            let name = first
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("Décompression de « {name} »…")
+        } else {
+            format!("Décompression de {} archives…", archives.len())
+        });
         self.done = Some((Hit::Extract, Instant::now() + Duration::from_secs(3600)));
         let tx = self.extracts.clone();
+        // Les unes après les autres, dans un seul fil
         std::thread::spawn(move || {
-            let _ = tx.send(archive::extract(&path));
+            for path in archives {
+                let _ = tx.send(archive::extract(&path));
+            }
         });
         self.draw();
     }
@@ -669,7 +777,7 @@ impl Files {
             Ok(dest) => {
                 self.browser.reload();
                 if let Some(i) = self.browser.entries.iter().position(|e| e.path == dest) {
-                    self.browser.selected = i;
+                    self.browser.select(i);
                 }
                 self.browser.message = None;
                 self.navigated();
@@ -747,40 +855,68 @@ impl Files {
                 Some("Déjà dans la corbeille : « Vider la corbeille » pour supprimer".into());
             return self.draw();
         }
-        let Some(entry) = self.browser.entries.get(self.browser.selected) else {
+        let picked: Vec<(PathBuf, String)> = self
+            .browser
+            .selection()
+            .iter()
+            .map(|e| (e.path.clone(), e.name.clone()))
+            .collect();
+        if picked.is_empty() {
             return;
-        };
-        let (path, name) = (entry.path.clone(), entry.name.clone());
-        match common::trash::trash(&path) {
-            Ok(()) => {
-                self.last_trashed = Some(path);
-                self.browser.reload();
-                self.browser.message = Some(format!(
-                    "« {name} » mis à la corbeille — Ctrl+Z pour annuler"
-                ));
-            }
-            Err(e) => self.browser.message = Some(e),
         }
+        let mut trashed = Vec::new();
+        let mut error = None;
+        for (path, _) in &picked {
+            match common::trash::trash(path) {
+                Ok(()) => trashed.push(path.clone()),
+                Err(e) => error = Some(e),
+            }
+        }
+        let count = trashed.len();
+        if count > 0 {
+            self.last_trashed = trashed;
+        }
+        self.browser.reload();
+        self.browser.message = Some(match (count, error) {
+            (_, Some(e)) if count == 0 => e,
+            (_, Some(e)) => format!("{count} élément(s) mis à la corbeille ; {e}"),
+            (1, None) => format!(
+                "« {} » mis à la corbeille — Ctrl+Z pour annuler",
+                picked[0].1
+            ),
+            (n, None) => format!("{n} éléments mis à la corbeille — Ctrl+Z pour annuler"),
+        });
         self.navigated();
     }
 
     fn undo_trash(&mut self) {
-        let Some(original) = self.last_trashed.take() else {
+        let originals = std::mem::take(&mut self.last_trashed);
+        if originals.is_empty() {
             return;
-        };
-        let item = common::trash::list()
-            .into_iter()
-            .find(|i| i.original == original);
-        self.browser.message = Some(match item.map(|i| common::trash::restore(&i)) {
-            Some(Ok(())) => format!(
+        }
+        let items = common::trash::list();
+        let mut restored = 0;
+        let mut error = None;
+        for original in &originals {
+            match items.iter().find(|i| &i.original == original) {
+                Some(item) => match common::trash::restore(item) {
+                    Ok(()) => restored += 1,
+                    Err(e) => error = Some(e),
+                },
+                None => error = Some("Introuvable dans la corbeille".into()),
+            }
+        }
+        self.browser.message = Some(match error {
+            Some(e) if restored == 0 => e,
+            Some(e) => format!("{restored} élément(s) remis en place ; {e}"),
+            None if restored == 1 => format!(
                 "« {} » remis en place",
-                original
+                originals[0]
                     .file_name()
                     .map(|n| n.to_string_lossy())
                     .unwrap_or_default()
             ),
-            Some(Err(e)) => e,
-            None => "Introuvable dans la corbeille".into(),
+            None => format!("{restored} éléments remis en place"),
         });
         let keep = self.browser.message.take();
         self.browser.reload();
@@ -790,17 +926,27 @@ impl Files {
 
     /// Dans la corbeille : remet l'élément sélectionné à sa place.
     fn restore_selected(&mut self) {
-        let Some(entry) = self.browser.entries.get(self.browser.selected) else {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
             return;
-        };
-        let path = entry.path.clone();
-        let item = common::trash::list().into_iter().find(|i| i.path == path);
-        let message = match item {
-            Some(item) => match common::trash::restore(&item) {
-                Ok(()) => format!("Remis dans {}", item.original.display()),
-                Err(e) => e,
-            },
-            None => "Origine inconnue".into(),
+        }
+        let items = common::trash::list();
+        let mut done = Vec::new();
+        let mut error = None;
+        for path in &paths {
+            match items.iter().find(|i| &i.path == path) {
+                Some(item) => match common::trash::restore(item) {
+                    Ok(()) => done.push(item.original.clone()),
+                    Err(e) => error = Some(e),
+                },
+                None => error = Some("Origine inconnue".into()),
+            }
+        }
+        let message = match (done.as_slice(), error) {
+            ([], Some(e)) => e,
+            (d, Some(e)) => format!("{} élément(s) remis en place ; {e}", d.len()),
+            ([one], None) => format!("Remis dans {}", one.display()),
+            (d, None) => format!("{} éléments remis en place", d.len()),
         };
         self.browser.reload();
         self.browser.message = Some(message);
@@ -1290,7 +1436,7 @@ impl Files {
             if e.is_dir && self.drop_target.as_ref() == Some(&e.path) {
                 let a = theme::palette().accent.with_alpha(0.45);
                 c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, a);
-            } else if idx == b.selected {
+            } else if b.is_picked(idx) {
                 let mut sel = theme::palette().accent;
                 sel.a = 0.25;
                 c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, sel);
@@ -1354,6 +1500,16 @@ impl Files {
         c.fill_rounded(x0, sy, right - x0, s, 0.0, theme::palette().ink(0.06));
         let status = match &b.message {
             Some(m) => m.clone(),
+            None if b.multiple() => {
+                let sel = b.selection();
+                let bytes: u64 = sel.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
+                format!(
+                    "{} éléments sélectionnés sur {} · {} · Échap pour désélectionner",
+                    sel.len(),
+                    b.entries.len(),
+                    format_size(bytes)
+                )
+            }
             None => {
                 let dirs = b.entries.iter().filter(|e| e.is_dir).count();
                 let files = b.entries.len() - dirs;
@@ -1390,7 +1546,30 @@ impl Files {
                     .map(|(h, _)| h),
             };
             let in_trash = common::trash::files_dir().is_some_and(|t| self.browser.cwd == t);
-            draw_info(&fonts, d, in_trash, &mut c, right, h as f32, s, &mut hit);
+            let multi = self.browser.multiple().then(|| {
+                let sel = self.browser.selection();
+                Multi {
+                    count: sel.len(),
+                    dirs: sel.iter().filter(|e| e.is_dir).count(),
+                    bytes: sel.iter().filter(|e| !e.is_dir).map(|e| e.size).sum(),
+                    archives: sel
+                        .iter()
+                        .filter(|e| archive::kind(&e.path).is_some())
+                        .count(),
+                    place: self.browser.cwd.to_string_lossy().into_owned(),
+                }
+            });
+            draw_info(
+                &fonts,
+                d,
+                multi.as_ref(),
+                in_trash,
+                &mut c,
+                right,
+                h as f32,
+                s,
+                &mut hit,
+            );
         }
 
         self.hits = hits;
@@ -1413,11 +1592,22 @@ struct Fonts<'a> {
     done: Option<&'a Hit>,
 }
 
+/// Résumé d'une sélection multiple, pour le panneau d'informations
+struct Multi {
+    count: usize,
+    dirs: usize,
+    /// Taille cumulée des fichiers (les dossiers ne sont pas parcourus)
+    bytes: u64,
+    archives: usize,
+    place: String,
+}
+
 /// Panneau d'informations : aperçu, détails, actions rapides.
 #[allow(clippy::too_many_arguments)]
 fn draw_info(
     fonts: &Fonts,
     d: &Details,
+    multi: Option<&Multi>,
     in_trash: bool,
     c: &mut Canvas,
     x0: f32,
@@ -1457,8 +1647,11 @@ fn draw_info(
     );
     c.fill_rounded(x0, TOOLBAR_H * s - s, w, s, 0.0, p.ink(0.06));
 
-    // Aperçu : la vignette d'une image, sinon une grande icône
     let mut y = TOOLBAR_H * s + pad;
+    if let Some(m) = multi {
+        return draw_multi_info(fonts, m, in_trash, c, x, y, inner, h, s, hit);
+    }
+    // Aperçu : la vignette d'une image, sinon une grande icône
     let box_h = 168.0 * s;
     c.fill_rounded(x, y, inner, box_h, 10.0 * s, p.ink(0.04));
     match d.thumbnail.as_ref() {
@@ -1601,6 +1794,149 @@ fn draw_info(
     let tip = "Glissez l'élément vers une autre fenêtre, ou sur un dossier pour l'y ranger.";
     let lines = fonts.regular.wrap(tip, 11.5 * s, inner, 3);
     let mut ty = h - pad - lines.len() as f32 * 16.0 * s;
+    if ty > y {
+        for line in lines {
+            fonts
+                .regular
+                .draw_in(c, &line, x, ty, 16.0 * s, 11.5 * s, p.text_dim);
+            ty += 16.0 * s;
+        }
+    }
+}
+
+/// Panneau d'une sélection multiple : pile d'icônes, résumé, actions par lot
+#[allow(clippy::too_many_arguments)]
+fn draw_multi_info(
+    fonts: &Fonts,
+    m: &Multi,
+    in_trash: bool,
+    c: &mut Canvas,
+    x: f32,
+    mut y: f32,
+    inner: f32,
+    h: f32,
+    s: f32,
+    hit: &mut impl FnMut(f32, f32, f32, f32, Hit),
+) {
+    let p = theme::palette();
+    let box_h = 168.0 * s;
+    c.fill_rounded(x, y, inner, box_h, 10.0 * s, p.ink(0.04));
+    // Trois fiches décalées : « plusieurs »
+    let size = 46.0 * s;
+    let (cx, cy) = (x + inner / 2.0, y + box_h / 2.0);
+    for k in 0..3 {
+        let off = (k as f32 - 1.0) * 14.0 * s;
+        let (ix, iy) = (cx - size / 2.0 + off, cy - size * 0.6 + off * 0.4);
+        if k < m.dirs.min(3) {
+            draw_folder_icon(c, ix, iy, size, p.accent);
+        } else {
+            draw_file_icon(c, ix + size * 0.12, iy, size * 0.76, p.text_dim);
+        }
+    }
+    y += box_h + 14.0 * s;
+    let title = format!("{} éléments", m.count);
+    fonts
+        .bold
+        .draw_in(c, &title, x, y, 20.0 * s, 15.0 * s, p.text);
+    y += 20.0 * s;
+    let files = m.count - m.dirs;
+    let mut parts = Vec::new();
+    if m.dirs > 0 {
+        parts.push(format!("{} dossier{}", m.dirs, plural(m.dirs)));
+    }
+    if files > 0 {
+        parts.push(format!(
+            "{files} fichier{} · {}",
+            plural(files),
+            format_size(m.bytes)
+        ));
+    }
+    fonts.regular.draw_in(
+        c,
+        &parts.join(" · "),
+        x,
+        y + 2.0 * s,
+        18.0 * s,
+        12.5 * s,
+        p.text_dim,
+    );
+    y += 30.0 * s;
+    c.fill_rounded(x, y, inner, s, 0.0, p.ink(0.06));
+    y += 10.0 * s;
+    fonts
+        .regular
+        .draw_in(c, "Emplacement", x, y, 20.0 * s, 12.0 * s, p.text_dim);
+    let label_w = 92.0 * s;
+    for line in wrap_chars(fonts.regular, &m.place, 12.5 * s, inner - label_w, 3) {
+        fonts
+            .regular
+            .draw_in(c, &line, x + label_w, y, 20.0 * s, 12.5 * s, p.text);
+        y += 18.0 * s;
+    }
+    y += 12.0 * s;
+
+    let mut actions = Vec::new();
+    if files > m.archives {
+        actions.push((
+            icon::EXTERNAL_LINK,
+            "Ouvrir les fichiers",
+            Hit::Open,
+            p.text,
+        ));
+    }
+    if m.archives > 0 {
+        actions.push((
+            icon::PACKAGE_OPEN,
+            "Décompresser les archives",
+            Hit::Extract,
+            p.text,
+        ));
+    }
+    actions.push((icon::COPY, "Copier les chemins", Hit::CopyPath, p.text));
+    actions.push((icon::BOT, "Demander à l'Assistant", Hit::AskAgent, p.text));
+    actions.push(if in_trash {
+        (icon::UNDO, "Tout remettre à sa place", Hit::Trash, p.text)
+    } else {
+        (
+            icon::TRASH,
+            "Tout mettre à la corbeille",
+            Hit::Trash,
+            p.danger,
+        )
+    });
+    let bh = 32.0 * s;
+    for (glyph, label, what, color) in actions {
+        if y + bh > h - 48.0 * s {
+            break;
+        }
+        let done = fonts.done == Some(&what);
+        let (bg, glyph, label, color) = if done {
+            let label = match what {
+                Hit::CopyPath => "Chemins copiés",
+                Hit::Extract => "Décompression…",
+                Hit::AskAgent => "Assistant ouvert",
+                _ => "Ouverture…",
+            };
+            (p.success.with_alpha(0.22), icon::CHECK, label, p.success)
+        } else if fonts.hover == Some(&what) {
+            (p.tile_hover(), glyph, label, color)
+        } else {
+            (p.tile(), glyph, label, color)
+        };
+        c.fill_rounded(x, y, inner, bh, 8.0 * s, bg);
+        fonts
+            .icons
+            .icon(c, glyph, x + 18.0 * s, y + bh / 2.0, 14.0 * s, color);
+        fonts
+            .regular
+            .draw_in(c, label, x + 36.0 * s, y, bh, 13.0 * s, color);
+        hit(x, y, inner, bh, what);
+        y += bh + 6.0 * s;
+    }
+
+    let tip = "Ctrl+clic ajoute ou retire un élément, Maj+clic prend une plage, Ctrl+A tout. Glissez la sélection sur un dossier pour l'y ranger.";
+    let lines = fonts.regular.wrap(tip, 11.5 * s, inner, 4);
+    let mut ty = h - 16.0 * s - lines.len() as f32 * 16.0 * s;
     if ty > y {
         for line in lines {
             fonts
@@ -1894,7 +2230,15 @@ impl PointerHandler for Files {
                 }
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
-                } => self.press = None,
+                } => {
+                    if self.press.take().is_some()
+                        && let Some(i) = self.collapse.take()
+                    {
+                        self.browser.select(i);
+                        self.draw();
+                    }
+                    self.collapse = None;
+                }
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
                     let max = self
                         .browser
