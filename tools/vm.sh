@@ -5,7 +5,7 @@
 #
 #   tools/vm.sh installer     installe la base (sans écran, ~15 min, réseau)
 #   tools/vm.sh neuf          repart d'une Debian neuve (copie jetable effacée)
-#   tools/vm.sh lancer        démarre l'essai dans une fenêtre
+#   tools/vm.sh lancer        démarre l'essai dans une fenêtre (accélérée)
 #   tools/vm.sh sans-ecran    démarre l'essai sans fenêtre (piloté par ssh)
 #   tools/vm.sh ssh [cmd]     se connecte à l'essai (utilisateur odysseus)
 #   tools/vm.sh arreter       éteint l'essai proprement
@@ -25,10 +25,12 @@ CPUS=4
 mkdir -p "$DIR"
 cd "$DIR"
 
-# Paramètres communs : KVM, processeur de l'hôte, disque et réseau virtio
+# Paramètres communs : KVM, processeur de l'hôte, disque et réseau virtio.
+# La carte réseau a une place fixe sur le bus PCI : son nom dans Debian
+# (enp0s2) ne change pas quand on ajoute un écran ou du son.
 qemu_base() {
     echo "-enable-kvm -cpu host -m $MEM -smp $CPUS -machine q35 \
--netdev user,id=net0,hostfwd=tcp:127.0.0.1:$PORT-:22 -device virtio-net-pci,netdev=net0 \
+-netdev user,id=net0,hostfwd=tcp:127.0.0.1:$PORT-:22 -device virtio-net-pci,netdev=net0,addr=0x2 \
 -device virtio-rng-pci -pidfile $DIR/qemu.pid"
 }
 
@@ -135,10 +137,15 @@ lancer | sans-ecran)
     running && { echo "vm.sh : l'essai tourne déjà" >&2; exit 1; }
     [ -f essai.qcow2 ] || "$0" neuf
     if [ "$1" = lancer ]; then
-        # Fenêtre et son par PipeWire, dans la session graphique. Sans
-        # accélération : virgl demande l'OpenGL de bureau (libGL), que la Mesa
-        # Wayland seule de cette machine n'a pas ; le rendu se fait par le processeur.
-        display="-device virtio-vga -display gtk \
+        # Fenêtre accélérée (virgl) et son par PipeWire, dans la session graphique.
+        # virgl demande l'OpenGL de bureau (libOpenGL, de libglvnd) ; sans lui,
+        # ODYSSEUS_VM_GL=non passe à un rendu par le processeur.
+        if [ "${ODYSSEUS_VM_GL:-oui}" = non ]; then
+            gpu="-device virtio-vga -display gtk"
+        else
+            gpu="-device virtio-vga-gl -display gtk,gl=on"
+        fi
+        display="$gpu \
 -audiodev pipewire,id=son -device intel-hda -device hda-duplex,audiodev=son"
     else
         display="-display none -serial file:$DIR/console.log -daemonize"
