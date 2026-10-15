@@ -1,11 +1,11 @@
 [Desktop Entry]
-Icon=/home/david/odysseus-desktop/settings/data/odysseus-reglages.svg
+Icon=@ICONES@/odysseus-reglages.svg
 Type=Application
 Name=Settings
 Name[fr]=Réglages
 Comment=Appearance, wallpaper, display, keyboard, language, power
 Comment[fr]=Apparence, fond d'écran, écran, clavier, langue, énergie
 Keywords=settings;preferences;wallpaper;display;resolution;language;keyboard;sleep;réglages;préférences;fond;écran;résolution;langue;clavier;veille;
-Exec=/home/david/odysseus-desktop/target/release/odysseus-reglages
+Exec=@BIN@/odysseus-reglages
 Terminal=false
 Categories=Settings;System;
