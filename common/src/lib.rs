@@ -8,6 +8,7 @@ pub mod chrome;
 pub mod draw;
 pub mod icons;
 pub mod ipc;
+pub mod net;
 pub mod settings;
 pub mod shortcuts;
 pub mod stats;

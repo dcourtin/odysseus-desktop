@@ -251,7 +251,9 @@ impl Launcher {
             .enumerate()
             .filter_map(|(i, app)| apps::score(&self.query, app).map(|s| (s, i)))
             .collect();
-        scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
+        // Par pertinence, puis les applis d'odysseus d'abord (sans recherche :
+        // toutes à égalité, donc odysseus puis les autres, par ordre alphabétique)
+        scored.sort_by_key(|&(score, i)| (std::cmp::Reverse(score), !self.apps[i].is_odysseus()));
         let limit = if self.query.is_empty() {
             MAX_ROWS
         } else {

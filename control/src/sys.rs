@@ -1,5 +1,5 @@
 //! Accès au système pour le centre de contrôle : Wi-Fi (iwd), Bluetooth
-//! (BlueZ), Ethernet (/sys et ip), son (wpctl / PipeWire), « Ne pas déranger »
+//! (BlueZ), Ethernet (/sys et getifaddrs), son (wpctl / PipeWire), « Ne pas déranger »
 //! (odysseus-notify) et alimentation (logind). Tout passe par D-Bus ou par les
 //! outils déjà installés : aucun démon supplémentaire.
 //!
@@ -403,18 +403,10 @@ pub fn wired() -> Wired {
     }
 }
 
-/// Adresse IPv4 d'une interface (sortie de `ip -4 -o addr show dev X`).
+/// Adresse IPv4 d'une interface (lue auprès du système, sans `ip` : il est
+/// dans /usr/sbin, hors du PATH de la session)
 pub fn ipv4(interface: &str) -> Option<String> {
-    let out = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", interface])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut words = text.split_whitespace();
-    words.find(|w| *w == "inet")?;
-    words
-        .next()
-        .map(|a| a.split('/').next().unwrap_or(a).to_string())
+    common::net::ipv4(interface)
 }
 
 // --- Son (PipeWire, via wpctl) ----------------------------------------------

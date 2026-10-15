@@ -498,6 +498,8 @@ impl Dock {
                 }
             }
         }
+        // Applis d'odysseus d'abord, puis les autres (chaque groupe garde son ordre)
+        items.sort_by_key(|i| !i.app.as_ref().is_some_and(App::is_odysseus));
         self.items = items;
         if self
             .menu

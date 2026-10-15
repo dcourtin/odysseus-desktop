@@ -17,6 +17,13 @@ pub struct App {
     pub icon: String,
 }
 
+impl App {
+    /// Appli d'odysseus (identifiant « odysseus-… ») : rangée en tête du lanceur et du Dock
+    pub fn is_odysseus(&self) -> bool {
+        self.id.starts_with("odysseus-")
+    }
+}
+
 /// Dossiers « applications » selon la spécification XDG, du plus prioritaire au moins.
 fn application_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
