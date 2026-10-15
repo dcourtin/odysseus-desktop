@@ -1,9 +1,10 @@
-//! Portail freedesktop réduit à l'essentiel : org.freedesktop.portal.Settings,
+//! Backend « odysseus » de xdg-desktop-portal : org.freedesktop.impl.portal.Settings,
 //! espace « org.freedesktop.appearance ». Firefox et les applications GTK 4 /
-//! libadwaita y lisent la préférence claire ou sombre (color-scheme) et la
-//! couleur d'accent, et suivent ses changements (signal SettingChanged).
-//! Les valeurs viennent du thème d'odysseus : Odyssée claire → clair, sinon
-//! sombre. Si un vrai xdg-desktop-portal tient déjà le nom, on s'efface.
+//! libadwaita y lisent (par le portail) la préférence claire ou sombre
+//! (color-scheme) et la couleur d'accent, et suivent ses changements (signal
+//! SettingChanged). Les valeurs viennent du thème d'odysseus : Odyssée claire
+//! → clair, sinon sombre. Déclaré par odysseus.portal ; odysseus-portals.conf
+//! confie le reste (ScreenCast, Screenshot) à xdg-desktop-portal-wlr.
 
 use std::{os::fd::RawFd, time::Duration};
 
@@ -13,18 +14,17 @@ use dbus::{
     channel::{BusType, Channel},
 };
 
-const NAME: &str = "org.freedesktop.portal.Desktop";
+const NAME: &str = "org.freedesktop.impl.portal.desktop.odysseus";
 const PATH: &str = "/org/freedesktop/portal/desktop";
-const IFACE: &str = "org.freedesktop.portal.Settings";
+const IFACE: &str = "org.freedesktop.impl.portal.Settings";
 const APPEARANCE: &str = "org.freedesktop.appearance";
 
 const INTROSPECTION: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
- <interface name="org.freedesktop.portal.Settings">
+ <interface name="org.freedesktop.impl.portal.Settings">
   <method name="ReadAll"><arg type="as" name="namespaces" direction="in"/><arg type="a{sa{sv}}" name="value" direction="out"/></method>
   <method name="Read"><arg type="s" name="namespace" direction="in"/><arg type="s" name="key" direction="in"/><arg type="v" name="value" direction="out"/></method>
-  <method name="ReadOne"><arg type="s" name="namespace" direction="in"/><arg type="s" name="key" direction="in"/><arg type="v" name="value" direction="out"/></method>
   <signal name="SettingChanged"><arg type="s" name="namespace"/><arg type="s" name="key"/><arg type="v" name="value"/></signal>
   <property name="version" type="u" access="read"/>
  </interface>
@@ -108,17 +108,11 @@ impl Portal {
             }
             let member = msg.member().map(|m| m.to_string()).unwrap_or_default();
             match member.as_str() {
-                "ReadOne" | "Read" => {
+                "Read" => {
                     let (ns, key): (Option<String>, Option<String>) = msg.get2();
                     match (ns.as_deref(), key.as_deref().and_then(value)) {
                         (Some(APPEARANCE), Some(v)) => {
-                            let reply = if member == "Read" {
-                                // Ancienne méthode : valeur enveloppée deux fois, comme le vrai portail
-                                msg.method_return().append1(Variant(Variant(v)))
-                            } else {
-                                msg.method_return().append1(Variant(v))
-                            };
-                            self.reply(reply);
+                            self.reply(msg.method_return().append1(Variant(v)))
                         }
                         _ => self.not_found(&msg),
                     }
@@ -149,7 +143,7 @@ impl Portal {
                 "Get" => {
                     let (iface, prop): (Option<String>, Option<String>) = msg.get2();
                     if iface.as_deref() == Some(IFACE) && prop.as_deref() == Some("version") {
-                        self.reply(msg.method_return().append1(Variant(2u32)));
+                        self.reply(msg.method_return().append1(Variant(1u32)));
                     } else {
                         self.not_found(&msg);
                     }
@@ -157,7 +151,7 @@ impl Portal {
                 "GetAll" => {
                     let mut props: std::collections::HashMap<String, Variant<Box<dyn RefArg>>> =
                         std::collections::HashMap::new();
-                    props.insert("version".into(), Variant(Box::new(2u32)));
+                    props.insert("version".into(), Variant(Box::new(1u32)));
                     self.reply(msg.method_return().append1(props));
                 }
                 "Introspect" => self.reply(msg.method_return().append1(INTROSPECTION)),

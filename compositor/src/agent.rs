@@ -60,6 +60,16 @@ impl Odysseus {
         let focus = self.seat.get_keyboard().unwrap().current_focus();
         let mut items = Vec::new();
         let active = self.workspaces.active;
+        let identifiers: std::collections::HashMap<u64, String> = self
+            .space
+            .elements()
+            .map(window_id)
+            .chain(
+                (0..crate::workspaces::COUNT)
+                    .flat_map(|ws| self.workspaces.hidden(ws).iter().map(|(w, _)| window_id(w))),
+            )
+            .filter_map(|id| self.screencast.identifier(id).map(|i| (id, i)))
+            .collect();
         let mut push = |window: &Window, workspace: usize, loc: (i32, i32)| {
             let (app_id, title) = app_and_title(window);
             let size = window.geometry().size;
@@ -67,8 +77,11 @@ impl Odysseus {
                 && window
                     .toplevel()
                     .is_some_and(|t| focus.as_ref() == Some(t.wl_surface()));
+            let id = window_id(window);
             items.push(serde_json::json!({
-                "id": window_id(window),
+                "id": id,
+                // Identifiant ext-foreign-toplevel (sélecteur du partage d'écran)
+                "partage": identifiers.get(&id),
                 "app_id": app_id,
                 "title": title,
                 "workspace": workspace + 1,

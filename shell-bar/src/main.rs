@@ -99,6 +99,9 @@ struct Bar {
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
     monitor_zone: (f64, f64),
+    /// Partages d'écran en cours (témoin cliquable : un clic les arrête)
+    sharing: u64,
+    share_zone: (f64, f64),
     assistant_zone: (f64, f64),
     /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
     cpu_prev: (u64, u64),
@@ -168,6 +171,8 @@ fn main() {
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
         monitor_zone: (0.0, 0.0),
+        sharing: 0,
+        share_zone: (0.0, 0.0),
         assistant_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
@@ -387,6 +392,7 @@ impl Bar {
                 Ok(list) => self.workspaces = list,
                 Err(e) => eprintln!("shell-bar : lecture des bureaux ({e})"),
             }
+            self.sharing = ipc.screencast().unwrap_or(0);
         }
         self.draw();
     }
@@ -435,6 +441,10 @@ impl Bar {
         }
         if x >= self.assistant_zone.0 && x < self.assistant_zone.1 {
             spawn_sibling("odysseus-assistant", &[]);
+            return;
+        }
+        if self.sharing > 0 && x >= self.share_zone.0 && x < self.share_zone.1 {
+            self.sway_command("screencast stop");
             return;
         }
         if x >= self.monitor_zone.0 && x < self.monitor_zone.1 {
@@ -632,8 +642,43 @@ impl Bar {
         let ix = ix - step;
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
+        // Témoin : l'écran (ou une fenêtre) est partagé ; un clic arrête le partage
+        let mut left = ax - step - if agent_watching() { step } else { 0.0 };
+        self.share_zone = (0.0, 0.0);
+        if self.sharing > 0 {
+            let danger = theme::palette().danger;
+            let label = "Partage";
+            let fpx = 12.0 * sf;
+            let tw = self.bold.measure(label, fpx);
+            let pw = 10.0 * sf + icon_px + 6.0 * sf + tw + 12.0 * sf;
+            let x1 = left + step / 2.0 - 4.0 * sf;
+            let x0 = x1 - pw;
+            canvas.fill_rounded(
+                x0,
+                cy - 11.0 * sf,
+                pw,
+                22.0 * sf,
+                11.0 * sf,
+                danger.with_alpha(0.22),
+            );
+            let icx = x0 + 10.0 * sf + icon_px / 2.0;
+            self.icons
+                .icon(&mut canvas, icon::SCREEN_SHARE, icx, cy, icon_px, danger);
+            self.bold.draw_in(
+                &mut canvas,
+                label,
+                icx + icon_px / 2.0 + 6.0 * sf,
+                cy - 11.0 * sf,
+                22.0 * sf,
+                fpx,
+                danger,
+            );
+            self.share_zone = ((x0 / sf) as f64, (x1 / sf) as f64);
+            left = x0 - step / 2.0;
+        }
+
         // Icônes des applications, à gauche des icônes du bureau
-        let mut tx = ax - step - if agent_watching() { step } else { 0.0 } - 6.0 * sf;
+        let mut tx = left - 6.0 * sf;
         let size = 16.0 * sf;
         self.tray_zones.clear();
         let menu_key = self.menu.as_ref().map(|m| m.key.clone());

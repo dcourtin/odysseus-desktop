@@ -1,0 +1,16 @@
+[package]
+name = "partage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "odysseus-partage : choix de l'écran ou de la fenêtre à partager (xdg-desktop-portal-wlr)"
+
+[[bin]]
+name = "odysseus-partage"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }

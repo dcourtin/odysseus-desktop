@@ -8,7 +8,9 @@
 //! « nightlight on|off|auto|toggle », « output scale X », « output mode WxH[@Hz] »),
 //! GET_WORKSPACES, SUBSCRIBE (événements « workspace »), GET_OUTPUTS ; propres
 //! à odysseus, pour les agents : GET_WINDOWS (100), « focus <id> »,
-//! « agent-capture <fichier.png> [<id>] ».
+//! « agent-capture <fichier.png> [<id>] » ; partage d'écran : GET_SCREENCAST
+//! (101, sessions en cours, signalées aux abonnés par un événement
+//! « workspace » de changement « screencast ») et « screencast stop ».
 
 use std::{
     ffi::OsStr,
@@ -28,6 +30,8 @@ const SUBSCRIBE: u32 = 2;
 const GET_OUTPUTS: u32 = 3;
 /// Propre à odysseus : fenêtres de tous les bureaux (pour les agents)
 const GET_WINDOWS: u32 = 100;
+/// Propre à odysseus : partages d'écran en cours (témoin de la barre)
+const GET_SCREENCAST: u32 = 101;
 /// Bit des événements ; l'événement « workspace » a le type 0
 const EVENT_WORKSPACE: u32 = 0x8000_0000;
 
@@ -131,6 +135,7 @@ fn handle_message(state: &mut Odysseus, kind: u32, payload: &str, stream: &UnixS
         GET_WORKSPACES => workspaces_json(state),
         GET_OUTPUTS => outputs_json(state),
         GET_WINDOWS => state.windows_json(),
+        GET_SCREENCAST => format!("{{\"sessions\":{}}}", state.screencast.active()),
         SUBSCRIBE => {
             if payload.contains("\"workspace\"")
                 && let Ok(clone) = stream.try_clone()
@@ -175,6 +180,10 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
             return n >= 1 && state.move_window_to_workspace(id, n - 1);
         }
         return false;
+    }
+    if command == "screencast stop" {
+        state.stop_screencasts();
+        return true;
     }
     // « agent-capture <fichier.png> [<id de fenêtre>] »
     if let Some(arg) = command.strip_prefix("agent-capture ") {
@@ -286,6 +295,21 @@ fn workspaces_json(state: &Odysseus) -> String {
         })
         .collect();
     format!("[{}]", items.join(","))
+}
+
+/// Partage d'écran commencé ou fini : les abonnés relisent GET_SCREENCAST
+pub fn broadcast_screencast(state: &mut Odysseus, sessions: usize) {
+    if state.ipc_subscribers.is_empty() {
+        return;
+    }
+    let msg = message(
+        EVENT_WORKSPACE,
+        &format!("{{\"change\":\"screencast\",\"sessions\":{sessions}}}"),
+    );
+    state.ipc_subscribers.retain(|s| {
+        let mut s: &UnixStream = s;
+        s.write_all(&msg).is_ok()
+    });
 }
 
 /// Prévient les abonnés qu'un bureau a changé ; ils relisent la liste.

@@ -23,6 +23,12 @@ export MOZ_ENABLE_WAYLAND=1
 export RUST_LOG="${RUST_LOG:-info}"
 unset WAYLAND_DISPLAY DISPLAY
 
+# Partage d'écran : xdg-desktop-portal-wlr demande à odysseus-partage quoi montrer
+XDPW="${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal-wlr"
+mkdir -p "$XDPW"
+printf '# Écrit par odysseus-session.sh à chaque connexion\n[screencast]\nchooser_type=dmenu\nchooser_cmd=%s\nmax_fps=30\n' \
+  "$ROOT/odysseus-partage" > "$XDPW/odysseus"
+
 # Au démarrage : l'affichage est transmis au bus de session (le démon de notifications
 # peut y être relancé à la demande, voir ~/.local/share/dbus-1/services), puis
 # démons de notifications et des automatismes, et barre

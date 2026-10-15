@@ -13,6 +13,7 @@ mod ipc;
 mod lock;
 mod night;
 mod render;
+mod screencast;
 mod screenshot;
 mod snap;
 mod state;

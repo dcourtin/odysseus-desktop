@@ -11,6 +11,8 @@ const MAGIC: &[u8; 6] = b"i3-ipc";
 const RUN_COMMAND: u32 = 0;
 const GET_WORKSPACES: u32 = 1;
 const SUBSCRIBE: u32 = 2;
+/// Propre à odysseus : partages d'écran en cours
+const GET_SCREENCAST: u32 = 101;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Workspace {
@@ -65,6 +67,14 @@ impl Ipc {
             serde_json::from_slice(&self.recv()?).map_err(io::Error::other)?;
         list.sort_by_key(|w| w.num);
         Ok(list)
+    }
+
+    /// Partages d'écran en cours (0 sous sway, qui ne connaît pas ce message)
+    pub fn screencast(&mut self) -> io::Result<u64> {
+        self.send(GET_SCREENCAST, "")?;
+        let v: serde_json::Value =
+            serde_json::from_slice(&self.recv()?).map_err(io::Error::other)?;
+        Ok(v["sessions"].as_u64().unwrap_or(0))
     }
 
     pub fn command(&mut self, cmd: &str) -> io::Result<()> {

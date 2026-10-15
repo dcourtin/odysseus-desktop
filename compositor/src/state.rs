@@ -74,6 +74,8 @@ pub struct Odysseus {
     pub viewporter_state: ViewporterState,
     pub single_pixel_state: SinglePixelBufferState,
     pub idle_inhibit_state: IdleInhibitManagerState,
+    /// Partage d'écran (ext-image-copy-capture) et liste des fenêtres
+    pub screencast: crate::screencast::ScreencastState,
 
     pub seat: Seat<Self>,
 
@@ -185,6 +187,7 @@ impl Odysseus {
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let single_pixel_state = SinglePixelBufferState::new::<Self>(&dh);
         let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&dh);
+        let screencast = crate::screencast::ScreencastState::new(&dh);
 
         // A seat is a group of keyboards, pointer and touch devices.
         // A seat typically has a pointer and maintains a keyboard focus and a pointer focus.
@@ -251,6 +254,7 @@ impl Odysseus {
             viewporter_state,
             single_pixel_state,
             idle_inhibit_state,
+            screencast,
             seat,
             unplaced: HashSet::new(),
             opening: HashMap::new(),
@@ -314,6 +318,7 @@ impl Odysseus {
         }
         self.space.refresh();
         self.refresh_workspaces();
+        self.sync_toplevels();
         self.popups.cleanup();
         let _ = self.display_handle.flush_clients();
     }

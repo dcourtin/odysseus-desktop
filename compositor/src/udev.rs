@@ -755,6 +755,14 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
             Err(e) => tracing::warn!("capture pour un agent impossible : {e}"),
         }
     }
+    // Partage d'écran : images demandées par les clients (xdg-desktop-portal-wlr…)
+    state.fulfill_screencast(
+        &mut udev.renderer,
+        &udev.shaders,
+        &output,
+        &elements,
+        &elements[scene_start..],
+    );
     let request = state.capture_request.take();
     if let Some(request) = request {
         let to_px = |r: smithay::utils::Rectangle<f64, smithay::utils::Logical>| {

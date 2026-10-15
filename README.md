@@ -37,6 +37,10 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|
 | ![Automatismes](docs/captures/automatismes.png) |
 
+| Partage d'écran (visioconférence dans Firefox…) : l'écran entier ou une fenêtre, choisis sur vignettes ; un témoin dans la barre, un clic l'arrête |
+|---|
+| ![Partage d'écran](docs/captures/partage.png) |
+
 | Réglages : fond d'écran, et six autres pages |
 |---|
 | ![Réglages](docs/captures/reglages.png) |
@@ -63,14 +67,15 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
-| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
-| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite les icônes des applications (zone de notification StatusNotifierItem : la barre tient le registre, clic gauche pour l'action de l'application, clic droit pour son menu dbusmenu, clic du milieu pour l'action secondaire), puis Assistant, moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
-| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; portail des réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
+| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, partage d'écran (ext-image-copy-capture et ext-foreign-toplevel-list : un écran ou une fenêtre, image copiée seulement quand elle change, rien pendant le verrouillage), lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
+| `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite les icônes des applications (zone de notification StatusNotifierItem : la barre tient le registre, clic gauche pour l'action de l'application, clic droit pour son menu dbusmenu, clic du milieu pour l'action secondaire), puis le témoin « Partage » (écran partagé ; un clic arrête le partage), Assistant, moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
+| `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; backend « odysseus » de xdg-desktop-portal pour les réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
 | `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Automatismes (validation, pause, lancement, dernière exécution), Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, huit autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
 | `mcp/` | `odysseus-mcp` : le bureau exposé aux agents (Model Context Protocol) — état du système, écran, réglages, journaux ; documentation (man pages découpées par partie, apropos, documentation du noyau, des paquets, manuels info, notes de construction de la machine, PDF et textes de ~/Documents/Bibliothèque) ; lecture des fichiers (jamais les secrets : clés, mots de passe, historiques) ; fenêtres, notifications, captures ; actions (notifier, ouvrir, lancer une application, fermer ou déplacer une fenêtre, bureaux, son, Ne pas déranger, thème, fond, lumière de nuit, échelle) ; presse-papiers ; commandes shell, chacune approuvée dans une notification Autoriser / Refuser. Huit catégories autorisées ou non dans Réglages > Agent, chaque appel consigné (~/.local/state/odysseus/agent.log) | fonctionne |
 | `assistant/` | `odysseus-assistant` : panneau de conversation avec l'agent choisi dans Réglages > Agent (Claude Code, Ollama ou commande personnalisée), qui passe par odysseus-mcp ; réponse en direct, outils appelés affichés, fichiers joints (glisser-déposer, Ctrl+V, depuis Fichiers), arrêt avec Échap ; panneau en haut à droite, ouvert par son icône de la barre, Super+A, « ? » dans le lanceur ou Fichiers > Demander à l'Assistant | fonctionne |
 | `auto/` | `odysseus-auto` : automatismes façon Raccourcis d'iOS — un fichier JSON par automatisme (~/.config/odysseus/automatismes), déclencheurs à la demande (lanceur, Réglages, Assistant), à heure fixe (jours au choix) ou à l'arrivée d'un fichier dans un dossier ; étapes = outils d'odysseus-mcp, plus attendre, choisir (boutons dans une notification), agent (le modèle transforme un texte), si / alors / sinon ; variables {resultat}, {fichier}, noms gardés, passées aux commandes par l'environnement (un nom de fichier piégé n'est jamais interprété). Écrits par l'agent (outil creer_automatisme) ou à la main, ils ne tournent qu'une fois validés dans Réglages > Automatismes ; toute modification demande une nouvelle validation | fonctionne |
+| `partage/` | `odysseus-partage` : sélecteur du partage d'écran, appelé par xdg-desktop-portal-wlr — vignettes de l'écran et des fenêtres (icône de l'application, bureau), Annuler / Partager, clavier et souris | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) ; « ? question » ou dernière ligne : demander à l'Assistant | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
@@ -175,7 +180,8 @@ défaut). Un refus est expliqué à l'agent ; chaque appel est consigné dans
 `~/.local/state/odysseus/agent.log` et affiché dans Réglages. Pendant une capture, un œil
 rouge s'allume dans la barre. Lancé par un agent qui tourne en root, le serveur prend
 l'identité de l'utilisateur du bureau. Le compositeur offre pour cela, par IPC, la liste
-des fenêtres (`GET_WINDOWS`, 100), `focus <id>` et `agent-capture <fichier> [<id>]`.
+des fenêtres (`GET_WINDOWS`, 100), `focus <id>` et `agent-capture <fichier> [<id>]` ;
+pour la barre, les partages d'écran en cours (`GET_SCREENCAST`, 101) et `screencast stop`.
 
 Agent local : Réglages > Agent installe Ollama (archive officielle, empreinte SHA-256
 vérifiée, dans `~/.local/opt/ollama`, service utilisateur systemd ; bibliothèques NVIDIA
@@ -189,7 +195,11 @@ de systemd ; le groupe doit exister).
 Au-delà de Smithay et des bibliothèques Wayland : PipeWire et WirePlumber (son),
 iwd (Wi-Fi), BlueZ (Bluetooth), logind et polkit (veille, arrêt), PAM (verrou),
 wl-clipboard (`wl-copy` / `wl-paste`), librsvg (icônes SVG), hwdata (nom de la carte
-graphique). Températures : `k10temp` (processeur AMD) et `amdgpu`.
+graphique). Partage d'écran : xdg-desktop-portal et xdg-desktop-portal-wlr (0.8 ou plus,
+pour ext-image-copy-capture), avec `/usr/share/xdg-desktop-portal/odysseus-portals.conf`
+(Settings → odysseus, ScreenCast → wlr) et `odysseus.portal` ; la session écrit la
+configuration de xdg-desktop-portal-wlr (`~/.config/xdg-desktop-portal-wlr/odysseus`).
+Températures : `k10temp` (processeur AMD) et `amdgpu`.
 
 ## Licence
 

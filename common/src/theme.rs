@@ -364,4 +364,5 @@ pub mod icon {
     pub const SHIELD_CHECK: char = '\u{e1ff}';
     pub const TERMINAL: char = '\u{e181}';
     pub const PACKAGE_OPEN: char = '\u{e2cc}';
+    pub const SCREEN_SHARE: char = '\u{e14f}';
 }
