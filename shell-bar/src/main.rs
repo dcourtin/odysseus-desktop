@@ -1,6 +1,6 @@
 //! Barre du haut : surface layer-shell ancrée en haut de l'écran. À gauche le
 //! nom de la machine et les bureaux (clic pour y aller, molette pour passer au
-//! suivant). À droite : le moniteur système (jauge), le centre de contrôle
+//! suivant). À droite : l'Assistant, le moniteur système (jauge), le centre de contrôle
 //! (réseau, son, Bluetooth, Réglages…), la cloche des notifications, puis la
 //! date et l'heure (clic : centre de notifications). Avant eux, les icônes des
 //! applications (zone de notification StatusNotifierItem, menu au clic droit).
@@ -99,6 +99,7 @@ struct Bar {
     /// Zones cliquables de droite (début, fin) : icônes d'état et horloge
     status_zone: (f64, f64),
     monitor_zone: (f64, f64),
+    assistant_zone: (f64, f64),
     /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
     cpu_prev: (u64, u64),
     bell_zone: (f64, f64),
@@ -167,6 +168,7 @@ fn main() {
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         status_zone: (0.0, 0.0),
         monitor_zone: (0.0, 0.0),
+        assistant_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
@@ -286,7 +288,10 @@ fn panel_open(name: &str) -> bool {
     if name == "notifications" {
         return dir.join("odysseus-notifications.ouvert").exists();
     }
-    std::fs::read_to_string(dir.join(format!("odysseus-{name}.pid")))
+    // Fichier propre à l'écran (Assistant, Réglages), sinon commun
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    std::fs::read_to_string(dir.join(format!("odysseus-{name}.{display}.pid")))
+        .or_else(|_| std::fs::read_to_string(dir.join(format!("odysseus-{name}.pid"))))
         .ok()
         .and_then(|p| p.trim().parse::<u32>().ok())
         .and_then(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok())
@@ -426,6 +431,10 @@ impl Bar {
         let bell = x >= self.bell_zone.0 && x < self.bell_zone.1;
         if bell || (x >= self.clock_zone.0 && x < self.clock_zone.1) {
             spawn_sibling("odysseus-notify", &["--center"]);
+            return;
+        }
+        if x >= self.assistant_zone.0 && x < self.assistant_zone.1 {
+            spawn_sibling("odysseus-assistant", &[]);
             return;
         }
         if x >= self.monitor_zone.0 && x < self.monitor_zone.1 {
@@ -596,9 +605,18 @@ impl Bar {
             ((mx - step / 2.0) / sf) as f64,
             ((mx + step / 2.0) / sf) as f64,
         );
+        // Assistant (agent choisi dans Réglages > Agent)
+        let ax = mx - step;
+        let color = highlight(&mut canvas, ax, cy, sf, panel_open("assistant"));
+        self.icons
+            .icon(&mut canvas, icon::SPARKLES, ax, cy, icon_px, color);
+        self.assistant_zone = (
+            ((ax - step / 2.0) / sf) as f64,
+            ((ax + step / 2.0) / sf) as f64,
+        );
         // Témoin : un agent capture l'écran en ce moment (odysseus-mcp)
         if agent_watching() {
-            let ex = mx - step;
+            let ex = ax - step;
             let danger = theme::palette().danger;
             canvas.fill_rounded(
                 ex - 13.0 * sf,
@@ -615,7 +633,7 @@ impl Bar {
         self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
         // Icônes des applications, à gauche des icônes du bureau
-        let mut tx = mx - step - if agent_watching() { step } else { 0.0 } - 6.0 * sf;
+        let mut tx = ax - step - if agent_watching() { step } else { 0.0 } - 6.0 * sf;
         let size = 16.0 * sf;
         self.tray_zones.clear();
         let menu_key = self.menu.as_ref().map(|m| m.key.clone());

@@ -70,9 +70,9 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
 
-const MARGIN: f32 = 24.0;
-const PW: f32 = 760.0;
-const PH: f32 = 620.0;
+const MARGIN: f32 = 16.0;
+const PW: f32 = 580.0;
+const PH: f32 = 700.0;
 const HEADER_H: f32 = 56.0;
 const INPUT_H: f32 = 96.0;
 const PAD: f32 = 22.0;
@@ -223,8 +223,8 @@ fn main() {
         Some("odysseus-assistant"),
         None,
     );
-    layer.set_anchor(Anchor::TOP);
-    layer.set_margin(90, 0, 0, 0);
+    // En haut à droite, sous son icône de la barre, comme les autres panneaux
+    layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
     layer.set_size(width, height);
     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
     layer.commit();
@@ -571,7 +571,7 @@ impl App {
             Some((k, px)) if *k == key => c.buf.copy_from_slice(px),
             _ => {
                 c.clear();
-                c.shadow(x0 * s, (y0 + 6.0) * s, PW * s, PH * s, r, 28.0 * s, 0.5);
+                c.shadow(x0 * s, (y0 + 4.0) * s, PW * s, PH * s, r, 22.0 * s, 0.45);
                 c.fill_rounded(x0 * s, y0 * s, PW * s, PH * s, r, p.panel.with_alpha(0.97));
                 c.stroke_rounded(
                     x0 * s,
@@ -750,7 +750,7 @@ impl App {
         } else {
             ui.round_button(bx, by, icon::ARROW_UP, Hit::Send, true);
         }
-        let hint = "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre · Réglages > Agent";
+        let hint = "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre";
         ui.text_centered(hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
     }
 
