@@ -12,7 +12,7 @@ lit aussi (documentation « guide ») : on peut lui demander « comment je fais�
 |---|---|
 | lancer une application, un automatisme, poser une question | Super+Espace, puis taper ; « ? question » pour l'Assistant |
 | ouvrir un terminal | Super+Entrée |
-| fermer la fenêtre | Super+Q |
+| fermer, réduire, agrandir la fenêtre | ses trois boutons en haut à gauche ; ou Super+Q, Super+M, Super+F |
 | déplacer une fenêtre | glisser sa barre d'outils, ou Super+glisser n'importe où |
 | redimensionner une fenêtre | saisir un bord ou un coin, juste à l'extérieur ; ou Super+clic droit glissé |
 | ranger une fenêtre en moitié, quart, plein écran | la glisser contre un bord ou un coin ; ou Super+flèches |
@@ -40,6 +40,12 @@ puis à droite :
 Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifications.
 
 ## Fenêtres et bureaux
+
+- **Les trois boutons**, en haut à gauche de chaque fenêtre : fermer, réduire,
+  agrandir. Ronds gris au repos, leurs symboles apparaissent au survol ; fermer
+  prend la couleur d'accent. Alt+clic sur agrandir : plein écran. Double-clic
+  sur la barre de titre : agrandir ou rendre sa taille ; la glisser : déplacer.
+- **Réduire** (Super+M) : la fenêtre quitte l'écran sans se fermer.
 
 - **Aimantation** : glisser une fenêtre contre le bord gauche ou droit la met en
   moitié, contre le haut en plein écran, dans un coin en quart. La décrocher lui
@@ -98,6 +104,8 @@ de volume affichent un indicateur.
   - les joindre à une question pour l'Assistant ;
   - tout mettre à la corbeille (Ctrl+Z annule), ou, depuis la corbeille, tout
     remettre à sa place.
+- **Toujours à jour** : un fichier qui arrive dans le dossier affiché (capture
+  d'écran, téléchargement) ou qui en part apparaît ou disparaît aussitôt.
 - **Glisser-déposer** : glisser un élément, ou toute la sélection, sur un dossier
   (liste, favoris, chemin) le déplace ; vers une autre fenêtre, il y est déposé (un
   terminal reçoit les chemins).

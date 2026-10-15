@@ -527,6 +527,8 @@ pub fn single_window_elements(
         motions: &empty_motion,
         slide: None,
         snap_preview: None,
+        titled: std::collections::HashSet::new(),
+        title_hover: None,
     };
     window_elements(window, loc, 0.0, renderer, shaders, &frame, &scene)
 }
@@ -576,7 +578,31 @@ fn window_elements(
         .focused
         .is_some_and(|f| window.toplevel().is_some_and(|t| t.wl_surface() == f));
 
-    let uniforms = frame.rounded_uniforms(geo);
+    // Barre de titre (décoration côté serveur) : au-dessus de la surface ; les
+    // coins arrondis, le liseré et l'ombre englobent l'ensemble
+    let titled = id.as_ref().is_some_and(|id| scene.titled.contains(id));
+    let frame_geo = if titled {
+        let t = crate::decor::TITLE_H as f64 * zoom;
+        let bar = Rectangle::new(geo.loc - Point::from((0.0, t)), (geo.size.w, t).into());
+        let hover = scene
+            .title_hover
+            .as_ref()
+            .filter(|(h, _)| Some(h) == id.as_ref())
+            .map(|(_, part)| *part);
+        out.extend(crate::decor::titlebar_element(
+            renderer,
+            window,
+            bar,
+            frame.scale,
+            is_focused,
+            hover,
+            alpha,
+        ));
+        Rectangle::new(bar.loc, (geo.size.w, geo.size.h + t).into())
+    } else {
+        geo
+    };
+    let uniforms = frame.rounded_uniforms(frame_geo);
     let render_loc = (geo.loc
         - Point::from((geometry.loc.x as f64 * sx, geometry.loc.y as f64 * sy)))
     .to_physical(frame.scale)
@@ -600,7 +626,7 @@ fn window_elements(
     } else {
         theme::SHADOW_ALPHA
     };
-    out.push(frame.shadow(shaders, geo, alpha * shadow_alpha));
+    out.push(frame.shadow(shaders, frame_geo, alpha * shadow_alpha));
     out
 }
 
@@ -760,6 +786,9 @@ pub struct Scene<'a> {
     pub motions: &'a HashMap<ObjectId, crate::anim::Motion>,
     pub slide: Option<&'a crate::anim::WorkspaceSlide>,
     pub snap_preview: Option<crate::anim::SnapPreview>,
+    /// Fenêtres qui ont une barre de titre dessinée ici, et celle survolée
+    pub titled: std::collections::HashSet<ObjectId>,
+    pub title_hover: Option<(ObjectId, crate::decor::TitlePart)>,
 }
 
 /// Éléments à dessiner pour une sortie, du plus haut au plus bas.

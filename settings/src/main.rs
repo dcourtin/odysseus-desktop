@@ -16,7 +16,6 @@ mod trousseau;
 use std::{
     fs::File,
     io::Read,
-    os::fd::{FromRawFd, IntoRawFd},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -648,7 +647,8 @@ fn read_drop(
     pipe: smithay_client_toolkit::data_device_manager::ReadPipe,
     tx: channel::Sender<Msg>,
 ) {
-    let mut file = unsafe { File::from_raw_fd(pipe.into_raw_fd()) };
+    // Pas into_raw_fd() : celui de smithay-client-toolkit 0.19 ferme le descripteur au passage
+    let mut file = File::from(std::os::fd::OwnedFd::from(pipe));
     std::thread::spawn(move || {
         let mut text = String::new();
         if file.read_to_string(&mut text).is_ok() {

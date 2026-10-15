@@ -338,6 +338,8 @@ pub mod icon {
     pub const ZOOM_IN: char = '\u{e1b6}';
     pub const ZOOM_OUT: char = '\u{e1b7}';
     pub const MAXIMIZE: char = '\u{e112}';
+    pub const MAXIMIZE_2: char = '\u{e113}';
+    pub const MINUS: char = '\u{e11c}';
     pub const SAVE: char = '\u{e14d}';
     pub const IMAGE: char = '\u{e0f6}';
     pub const UNDO: char = '\u{e2a1}';

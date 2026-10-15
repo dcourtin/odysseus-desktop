@@ -41,6 +41,8 @@ enum Action {
     Launcher,
     ToggleMaximize,
     CycleWindows,
+    /// Super+M : réduire la fenêtre active
+    Minimize,
     Lock,
     /// Super+K : aide-mémoire des raccourcis
     Shortcuts,
@@ -156,6 +158,7 @@ impl Odysseus {
                                 Keysym::space => Some(Action::Launcher),
                                 Keysym::f => Some(Action::ToggleMaximize),
                                 Keysym::Tab => Some(Action::CycleWindows),
+                                Keysym::m | Keysym::M => Some(Action::Minimize),
                                 Keysym::l | Keysym::L => Some(Action::Lock),
                                 Keysym::k | Keysym::K => Some(Action::Shortcuts),
                                 Keysym::a | Keysym::A => Some(Action::Assistant),
@@ -241,7 +244,14 @@ impl Odysseus {
                     && !pointer.is_grabbed()
                     && on_layer.is_none()
                 {
-                    if let Some((window, _loc)) = self
+                    let title = (button == BTN_LEFT)
+                        .then(|| self.titlebar_under(pointer.current_location()))
+                        .flatten();
+                    if let Some((window, part)) = title {
+                        // Barre de titre dessinée par le compositeur : boutons, déplacer
+                        let alt = keyboard.modifier_state().alt;
+                        self.titlebar_click(window, part, serial, alt);
+                    } else if let Some((window, _loc)) = self
                         .space
                         .element_under(pointer.current_location())
                         .map(|(w, l)| (w.clone(), l))
@@ -399,6 +409,7 @@ impl Odysseus {
                 }
             }
             Action::CycleWindows => self.cycle_windows(),
+            Action::Minimize => self.minimize_focused(),
             Action::Lock => self.lock_session(),
             Action::Shortcuts => self.spawn_sibling("odysseus-raccourcis", &[]),
             Action::Assistant => self.spawn_sibling("odysseus-assistant", &[]),
@@ -452,6 +463,7 @@ impl Odysseus {
             self.surface_under(pos)
         };
         self.update_edge_cursor(pos, under.is_none());
+        self.update_title_hover(pos, under.is_none());
         pointer.motion(
             self,
             under,

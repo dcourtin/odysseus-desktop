@@ -70,7 +70,7 @@ impl Odysseus {
             )
             .filter_map(|id| self.screencast.identifier(id).map(|i| (id, i)))
             .collect();
-        let mut push = |window: &Window, workspace: usize, loc: (i32, i32)| {
+        let mut push = |window: &Window, workspace: usize, loc: (i32, i32), minimized: bool| {
             let (app_id, title) = app_and_title(window);
             let size = window.geometry().size;
             let focused = workspace == active
@@ -85,22 +85,26 @@ impl Odysseus {
                 "app_id": app_id,
                 "title": title,
                 "workspace": workspace + 1,
-                "focused": focused,
+                "focused": focused && !minimized,
+                "minimized": minimized,
                 "x": loc.0, "y": loc.1, "width": size.w, "height": size.h,
             }));
         };
         // Bureau actif, du dessous vers le dessus, puis les autres bureaux
         for window in self.space.elements() {
             let loc = self.space.element_location(window).unwrap_or_default();
-            push(window, active, (loc.x, loc.y));
+            push(window, active, (loc.x, loc.y), false);
         }
         for ws in 0..crate::workspaces::COUNT {
             if ws == active {
                 continue;
             }
             for (window, loc) in self.workspaces.hidden(ws) {
-                push(window, ws, (loc.x, loc.y));
+                push(window, ws, (loc.x, loc.y), false);
             }
+        }
+        for m in &self.minimized {
+            push(&m.window, m.workspace, (m.loc.x, m.loc.y), true);
         }
         serde_json::Value::Array(items).to_string()
     }
@@ -110,13 +114,20 @@ impl Odysseus {
         if let Some(w) = self.space.elements().find(|w| window_id(w) == id) {
             return Some((w.clone(), self.workspaces.active));
         }
-        (0..crate::workspaces::COUNT).find_map(|ws| {
-            self.workspaces
-                .hidden(ws)
-                .iter()
-                .find(|(w, _)| window_id(w) == id)
-                .map(|(w, _)| (w.clone(), ws))
-        })
+        (0..crate::workspaces::COUNT)
+            .find_map(|ws| {
+                self.workspaces
+                    .hidden(ws)
+                    .iter()
+                    .find(|(w, _)| window_id(w) == id)
+                    .map(|(w, _)| (w.clone(), ws))
+            })
+            .or_else(|| {
+                self.minimized
+                    .iter()
+                    .find(|m| window_id(&m.window) == id)
+                    .map(|m| (m.window.clone(), m.workspace))
+            })
     }
 
     /// Demande à une fenêtre de se fermer (comme Mod+q) : l'application peut
@@ -134,11 +145,24 @@ impl Odysseus {
         }
     }
 
+    /// Réduit une fenêtre affichée (IPC « minimize <id> »)
+    pub fn minimize_by_id(&mut self, id: u64) -> bool {
+        let Some(window) = self.space.elements().find(|w| window_id(w) == id).cloned() else {
+            return false;
+        };
+        self.minimize(&window);
+        true
+    }
+
     /// Met une fenêtre au premier plan, en allant sur son bureau si besoin
     pub fn focus_by_id(&mut self, id: u64) -> bool {
         let Some((window, ws)) = self.window_by_id(id) else {
             return false;
         };
+        // Réduite : elle revient (sur son bureau)
+        if self.unminimize(&window) {
+            return true;
+        }
         if ws != self.workspaces.active {
             self.switch_workspace(ws);
         }

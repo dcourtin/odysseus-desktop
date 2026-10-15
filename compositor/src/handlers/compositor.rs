@@ -108,11 +108,13 @@ impl Odysseus {
         let Some(out) = self.usable_area() else {
             return;
         };
-        // Centrée, puis décalée en cascade (32 px par fenêtre déjà ouverte) pour rester visible
+        // Centrée (barre de titre comprise), puis décalée en cascade (32 px par
+        // fenêtre déjà ouverte) pour rester visible
         let step = 32 * ((self.space.elements().count() as i32 - 1).max(0) % 8);
+        let t = self.inset(&window);
         let loc = (
             out.loc.x + (out.size.w - size.w) / 2 + step,
-            out.loc.y + (out.size.h - size.h) / 2 + step,
+            (out.loc.y + t + (out.size.h - size.h - t) / 2 + step).max(out.loc.y + t),
         );
         self.unplaced.remove(&root.id());
         self.opening.insert(root.id(), std::time::Instant::now());

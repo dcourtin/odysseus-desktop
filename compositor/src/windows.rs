@@ -47,6 +47,15 @@ impl Odysseus {
         };
         match (wanted, area) {
             (Some(state), Some(area)) => {
+                // Agrandie avec barre de titre : la barre prend le haut de la zone
+                let area = if state == InitialState::Maximized && self.ssd.contains(&id) {
+                    Rectangle::new(
+                        (area.loc.x, area.loc.y + crate::decor::TITLE_H).into(),
+                        (area.size.w, area.size.h - crate::decor::TITLE_H).into(),
+                    )
+                } else {
+                    area
+                };
                 self.initial_state.insert(id, state);
                 toplevel.with_pending_state(|s| {
                     s.states.set(if state == InitialState::Maximized {
@@ -96,6 +105,7 @@ impl Odysseus {
         if state == InitialState::Fullscreen {
             self.fullscreen.insert(toplevel.wl_surface().id());
         }
+        let area = self.client_rect(window, area);
         self.space.map_element(window.clone(), area.loc, true);
         true
     }
@@ -192,6 +202,7 @@ impl Odysseus {
         if state == State::Fullscreen {
             self.fullscreen.insert(toplevel.wl_surface().id());
         }
+        let area = self.client_rect(window, area);
         let from = self.visual_rect(window, loc);
         toplevel.with_pending_state(|s| {
             s.states.set(state);
@@ -278,7 +289,10 @@ impl Odysseus {
     /// Fenêtre dont un bord (ou un coin) est sous le pointeur, juste à
     /// l'extérieur : pas sur une fenêtre, ni sur une fenêtre agrandie
     pub fn edge_under(&self, pos: Point<f64, Logical>) -> Option<(Window, ResizeEdge)> {
-        if self.space.element_under(pos).is_some() || self.top_is_fullscreen() {
+        if self.space.element_under(pos).is_some()
+            || self.top_is_fullscreen()
+            || self.titlebar_under(pos).is_some()
+        {
             return None;
         }
         // Du dessus vers le dessous : la première fenêtre dont la bande contient le pointeur
@@ -287,7 +301,7 @@ impl Odysseus {
                 return None;
             }
             let loc = self.space.element_location(window)?;
-            let r = Rectangle::new(loc, window.geometry().size).to_f64();
+            let r = self.frame_rect(window, loc).to_f64();
             let (left, top) = (r.loc.x, r.loc.y);
             let (right, bottom) = (left + r.size.w, top + r.size.h);
             let inside_band = pos.x >= left - EDGE_GRAB

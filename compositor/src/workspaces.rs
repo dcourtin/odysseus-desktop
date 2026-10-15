@@ -142,6 +142,11 @@ impl Odysseus {
         if ws == target {
             return true;
         }
+        // Réduite : elle reviendra sur ce bureau
+        if let Some(m) = self.minimized.iter_mut().find(|m| m.window == window) {
+            m.workspace = target;
+            return true;
+        }
         let loc = if ws == self.workspaces.active {
             let loc = self.space.element_location(&window).unwrap_or_default();
             self.space.unmap_elem(&window);

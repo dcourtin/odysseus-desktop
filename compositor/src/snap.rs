@@ -141,6 +141,7 @@ impl Odysseus {
         let Some(rect) = self.zone_rect(zone) else {
             return;
         };
+        let rect = self.client_rect(window, rect);
         let Some(toplevel) = window.toplevel().cloned() else {
             return;
         };
@@ -212,7 +213,8 @@ impl Odysseus {
         let ratio = ((pointer.x - loc.x as f64) / size.w.max(1) as f64).clamp(0.0, 1.0);
         let new_loc: Point<i32, Logical> = (
             (pointer.x - ratio * saved.size.w as f64).round() as i32,
-            (pointer.y - 12.0) as i32,
+            // Sous le pointeur : le haut de la fenêtre, ou le milieu de sa barre de titre
+            (pointer.y - 12.0 + self.inset(window) as f64 * 0.9) as i32,
         )
             .into();
         let from = self.visual_rect(window, loc);

@@ -39,7 +39,7 @@ use smithay_client_toolkit::{
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
-            EventLoop, Interest, LoopHandle, Mode, PostAction,
+            EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
             channel::{self, Event as ChannelEvent},
             generic::Generic,
             timer::{TimeoutAction, Timer},
@@ -169,6 +169,9 @@ struct Files {
     /// Clic sans touche sur un élément d'une sélection multiple : elle se
     /// réduit à lui au relâchement, sauf si l'appui devient un glisser
     collapse: Option<usize>,
+    /// Dossier affiché surveillé (inotify) : la liste suit les fichiers qui
+    /// arrivent (captures d'écran, téléchargements) ou s'en vont
+    watched: Option<(PathBuf, RegistrationToken)>,
     /// « Vider la corbeille » armé : un second clic confirme
     empty_armed: Option<Instant>,
     width: u32,
@@ -368,6 +371,7 @@ fn main() {
         typed: (String::new(), Instant::now()),
         last_trashed: Vec::new(),
         collapse: None,
+        watched: None,
         empty_armed: None,
         width: 960,
         height: 620,
@@ -376,6 +380,7 @@ fn main() {
         exit: false,
     };
     files.update_title();
+    files.watch_cwd();
 
     while !files.exit {
         // Compositeur arrêté ou connexion perdue : on s'arrête proprement
@@ -414,9 +419,41 @@ impl Files {
     }
 
     fn navigated(&mut self) {
+        self.watch_cwd();
         self.update_title();
         self.follow_selection();
         self.draw();
+    }
+
+    /// Surveille le dossier affiché (et lui seul) ; sa liste se relit d'elle-même
+    fn watch_cwd(&mut self) {
+        let cwd = self.browser.cwd.clone();
+        if self.watched.as_ref().is_some_and(|(p, _)| *p == cwd) {
+            return;
+        }
+        if let Some((_, token)) = self.watched.take() {
+            self.loop_handle.remove(token);
+        }
+        let Some(fd) = common::watch::existing(&cwd) else {
+            return;
+        };
+        let token = self.loop_handle.insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, files| {
+                common::watch::drain(fd.as_fd());
+                // Le message en cours (« mis à la corbeille — Ctrl+Z ») reste affiché
+                let message = files.browser.message.take();
+                files.browser.reload();
+                if files.browser.message.is_none() {
+                    files.browser.message = message;
+                }
+                files.draw();
+                Ok(PostAction::Continue)
+            },
+        );
+        if let Ok(token) = token {
+            self.watched = Some((cwd, token));
+        }
     }
 
     fn open_selected(&mut self) {

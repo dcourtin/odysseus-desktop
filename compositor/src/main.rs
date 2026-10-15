@@ -5,6 +5,7 @@ mod anim;
 mod capture;
 mod closing;
 mod cursor;
+mod decor;
 mod handlers;
 
 mod grabs;

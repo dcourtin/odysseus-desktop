@@ -48,6 +48,7 @@ impl XdgShellHandler for Odysseus {
 
     /// Fenêtre détruite par le client : retirée de l'espace, dernière image animée si disponible.
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.ssd.remove(&surface.wl_surface().id());
         let window = self
             .space
             .elements()
@@ -69,6 +70,12 @@ impl XdgShellHandler for Odysseus {
             self.closing.push(closing);
         }
         self.space.unmap_elem(&window);
+    }
+
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for(&surface) {
+            self.minimize(&window);
+        }
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {

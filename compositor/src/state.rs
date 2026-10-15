@@ -96,6 +96,13 @@ pub struct Odysseus {
     /// Curseur de redimensionnement posé par le compositeur (pointeur au bord
     /// d'une fenêtre)
     pub edge_cursor: bool,
+    /// Fenêtres décorées par le compositeur (mode côté serveur) : barre de titre
+    pub ssd: HashSet<ObjectId>,
+    /// Barre de titre survolée (fenêtre, partie), dernier clic sur une barre (double-clic)
+    pub title_hover: Option<(ObjectId, crate::decor::TitlePart)>,
+    pub last_title_click: Option<(ObjectId, Instant)>,
+    /// Fenêtres réduites, dans l'ordre de leur réduction
+    pub minimized: Vec<crate::decor::Minimized>,
     /// Coin actif (haut à droite) déclenché, en attente que le pointeur s'éloigne
     pub hot_corner_used: bool,
     /// Glisser-déposer entre clients : image qui suit le pointeur
@@ -268,6 +275,10 @@ impl Odysseus {
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
             edge_cursor: false,
+            ssd: HashSet::new(),
+            title_hover: None,
+            last_title_click: None,
+            minimized: Vec::new(),
             dnd_icon: None,
             hot_corner_used: false,
             session: None,
@@ -322,6 +333,7 @@ impl Odysseus {
         }
         self.space.refresh();
         self.refresh_workspaces();
+        self.refresh_minimized();
         self.sync_toplevels();
         self.popups.cleanup();
         let _ = self.display_handle.flush_clients();
@@ -337,6 +349,8 @@ impl Odysseus {
             motions: &self.motions,
             slide: self.slide.as_ref(),
             snap_preview: self.snap_preview,
+            titled: self.titled(),
+            title_hover: self.title_hover.clone(),
         }
     }
 
@@ -507,6 +521,11 @@ impl Odysseus {
                 } else {
                     area
                 };
+                let target = if full {
+                    target
+                } else {
+                    self.client_rect(&window, target)
+                };
                 toplevel.with_pending_state(|s| s.size = Some(target.size));
                 toplevel.send_pending_configure();
                 self.space.map_element(window, target.loc, false);
@@ -516,6 +535,8 @@ impl Odysseus {
                 continue;
             };
             let size = window.geometry().size;
+            // La barre de titre reste sous la barre du haut
+            let area = self.client_rect(&window, area);
             let x = loc.x.clamp(
                 area.loc.x,
                 (area.loc.x + area.size.w - size.w.min(area.size.w)).max(area.loc.x),

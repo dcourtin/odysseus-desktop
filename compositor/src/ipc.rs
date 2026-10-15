@@ -169,6 +169,10 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
         return id.trim().parse().is_ok_and(|id| state.focus_by_id(id));
     }
     // « close <id> » : fermer une fenêtre ; « move <id> workspace <n> » : l'envoyer sur un bureau
+    // « minimize <id> » : réduire (la rendre : « focus <id> »)
+    if let Some(id) = command.strip_prefix("minimize ") {
+        return id.trim().parse().is_ok_and(|id| state.minimize_by_id(id));
+    }
     if let Some(id) = command.strip_prefix("close ") {
         return id.trim().parse().is_ok_and(|id| state.close_by_id(id));
     }
@@ -318,6 +322,18 @@ pub fn broadcast_workspace_event(state: &mut Odysseus) {
         return;
     }
     let msg = message(EVENT_WORKSPACE, "{\"change\":\"focus\"}");
+    state.ipc_subscribers.retain(|s| {
+        let mut s: &UnixStream = s;
+        s.write_all(&msg).is_ok()
+    });
+}
+
+/// Fenêtre réduite ou rendue : les abonnés (le Dock) relisent GET_WINDOWS
+pub fn broadcast_window_event(state: &mut Odysseus) {
+    if state.ipc_subscribers.is_empty() {
+        return;
+    }
+    let msg = message(EVENT_WORKSPACE, "{\"change\":\"window\"}");
     state.ipc_subscribers.retain(|s| {
         let mut s: &UnixStream = s;
         s.write_all(&msg).is_ok()

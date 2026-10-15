@@ -1,5 +1,5 @@
 //! Surveillance d'un dossier (inotify) : le descripteur devient lisible quand
-//! un fichier y est créé, écrit, renommé ou supprimé. À brancher sur la boucle
+//! un fichier y est créé, écrit, déplacé (vers ou depuis) ou supprimé. À brancher sur la boucle
 //! d'événements ; appeler [`drain()`] à chaque réveil.
 
 use std::{
@@ -11,8 +11,14 @@ use std::{
     path::Path,
 };
 
+/// Surveille `path`, créé au besoin
 pub fn dir(path: &Path) -> Option<OwnedFd> {
     std::fs::create_dir_all(path).ok()?;
+    existing(path)
+}
+
+/// Surveille `path` s'il existe (sans le créer)
+pub fn existing(path: &Path) -> Option<OwnedFd> {
     let c_dir = CString::new(path.as_os_str().as_bytes()).ok()?;
     unsafe {
         let fd = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
@@ -20,7 +26,11 @@ pub fn dir(path: &Path) -> Option<OwnedFd> {
             return None;
         }
         let fd = OwnedFd::from_raw_fd(fd);
-        let mask = libc::IN_CREATE | libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_DELETE;
+        let mask = libc::IN_CREATE
+            | libc::IN_CLOSE_WRITE
+            | libc::IN_MOVED_TO
+            | libc::IN_MOVED_FROM
+            | libc::IN_DELETE;
         (libc::inotify_add_watch(fd.as_raw_fd(), c_dir.as_ptr(), mask) >= 0).then_some(fd)
     }
 }

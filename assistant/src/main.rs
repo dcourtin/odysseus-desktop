@@ -11,13 +11,7 @@
 mod backend;
 mod mcp;
 
-use std::{
-    fs::File,
-    io::Read,
-    os::fd::{FromRawFd, IntoRawFd},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fs::File, io::Read, path::PathBuf, time::Duration};
 
 use backend::{Context, Event, Job};
 use common::{
@@ -1227,7 +1221,8 @@ impl DataDeviceHandler for App {
         if let Some(offer) = drag_offer(device) {
             if let Ok(pipe) = offer.receive("text/uri-list".into()) {
                 let _ = conn.flush();
-                let mut file = unsafe { File::from_raw_fd(pipe.into_raw_fd()) };
+                // Pas into_raw_fd() : celui de smithay-client-toolkit 0.19 ferme le descripteur au passage
+                let mut file = File::from(std::os::fd::OwnedFd::from(pipe));
                 let tx = self.drops.clone();
                 std::thread::spawn(move || {
                     let mut text = String::new();
