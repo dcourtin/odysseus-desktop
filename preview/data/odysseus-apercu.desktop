@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Aperçu
+GenericName=Visionneuse d'images
+Comment=Afficher, pivoter et recadrer des images
+Exec=/home/david/odysseus-desktop/target/release/apercu %f
+Icon=/home/david/odysseus-desktop/preview/data/odysseus-apercu.svg
+Terminal=false
+NoDisplay=false
+Categories=Graphics;Viewer;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/bmp;image/tiff;

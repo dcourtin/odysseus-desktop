@@ -1,0 +1,10 @@
+[Desktop Entry]
+Icon=/home/david/odysseus-desktop/files/data/odysseus-files.svg
+Type=Application
+Name=Files
+Name[fr]=Fichiers
+Comment=Browse files and folders
+Comment[fr]=Parcourir les fichiers et dossiers
+Exec=/home/david/odysseus-desktop/target/release/files %U
+Terminal=false
+Categories=System;FileManager;

@@ -311,6 +311,24 @@ fn main() {
             },
         );
     }
+    // Applis installées, retirées ou modifiées (entrées .desktop, icônes) : le Dock suit
+    let applications = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .map(|d| d.join("applications"));
+    if let Some(fd) = applications.and_then(|d| common::watch::existing(&d)) {
+        let _ = event_loop.handle().insert_source(
+            Generic::new(fd, Interest::READ, Mode::Level),
+            |_, fd, dock| {
+                common::watch::drain(fd.as_fd());
+                dock.apps = common::apps::load();
+                // Icônes relues (une icône a pu changer sans changer de chemin)
+                dock.items.clear();
+                dock.rebuild();
+                Ok(PostAction::Continue)
+            },
+        );
+    }
     // Fenêtres : relues deux fois par seconde
     event_loop
         .handle()
