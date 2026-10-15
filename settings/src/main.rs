@@ -10,6 +10,7 @@ mod agents;
 mod automatismes;
 mod fonds;
 mod system;
+mod trousseau;
 
 use std::{
     fs::File,
@@ -174,11 +175,12 @@ enum Page {
     Energie,
     Raccourcis,
     Automatismes,
+    Trousseau,
     Agent,
     APropos,
 }
 
-const PAGES: [Page; 9] = [
+const PAGES: [Page; 10] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
@@ -186,6 +188,7 @@ const PAGES: [Page; 9] = [
     Page::Energie,
     Page::Raccourcis,
     Page::Automatismes,
+    Page::Trousseau,
     Page::Agent,
     Page::APropos,
 ];
@@ -200,6 +203,7 @@ impl Page {
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
             Page::Automatismes => ("Automatismes", icon::ZAP),
+            Page::Trousseau => ("Trousseau", icon::LOCK),
             Page::Agent => ("Agent", icon::BOT),
             Page::APropos => ("À propos", icon::INFO),
         }
@@ -214,6 +218,7 @@ impl Page {
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
             "automatismes" => Page::Automatismes,
+            "trousseau" | "secrets" => Page::Trousseau,
             "agent" | "assistant" => Page::Agent,
             "apropos" | "a-propos" => Page::APropos,
             _ => return None,
@@ -230,6 +235,9 @@ enum Hit {
     AutoEdit(usize),
     AutoDelete(usize),
     AutoFolder,
+    KeyringLock(usize),
+    KeyringUnlock(usize),
+    SecretDelete(usize, usize),
     Theme(usize),
     Fond(usize),
     FondUni,
@@ -325,6 +333,9 @@ struct App {
     delete_armed: Option<(String, Instant)>,
     /// Automatismes (~/.config/odysseus/automatismes) et leur état, fichiers illisibles
     autos: Vec<(common::auto::Automatism, common::auto::Status)>,
+    /// Trousseaux (Secret Service) et noms des secrets rangés
+    keyrings: trousseau::State,
+    keyrings_read: Option<Instant>,
     autos_bad: Vec<(String, String)>,
     drop_hover: bool,
     width: u32,
@@ -484,6 +495,8 @@ fn main() {
         news,
         delete_armed: None,
         autos: Vec::new(),
+        keyrings: trousseau::State::Unknown,
+        keyrings_read: None,
         autos_bad: Vec::new(),
         drop_hover: false,
         width: 1060,
@@ -782,6 +795,15 @@ impl App {
             self.refresh_autos();
             redraw = true;
         }
+        // Page Trousseau : ouverture par la fenêtre de mot de passe, secrets ajoutés
+        if self.page == Page::Trousseau
+            && self
+                .keyrings_read
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
+        {
+            self.refresh_keyrings();
+            redraw = true;
+        }
         if let Some(c) = self.confirm.as_ref() {
             if c.since.elapsed() >= CONFIRM {
                 self.revert_mode();
@@ -889,6 +911,9 @@ impl App {
                 }
                 if p == Page::Automatismes {
                     self.refresh_autos();
+                }
+                if p == Page::Trousseau {
+                    self.refresh_keyrings();
                 }
                 if p == Page::Ecran || p == Page::APropos {
                     self.screen = system::screen();
@@ -1055,6 +1080,9 @@ impl App {
             | Hit::AutoEdit(_)
             | Hit::AutoDelete(_)
             | Hit::AutoFolder => self.auto_click(hit),
+            Hit::KeyringLock(_) | Hit::KeyringUnlock(_) | Hit::SecretDelete(_, _) => {
+                self.keyring_click(hit)
+            }
             Hit::EditAgentJson => {
                 // Fichier créé s'il n'existe pas encore, puis ouvert dans l'éditeur
                 if common::agent::path().is_none_or(|p| !p.exists()) {
@@ -1195,6 +1223,7 @@ impl App {
             Page::Energie => self.page_energie(&mut ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(&mut ui, cx, top, cw),
+            Page::Trousseau => self.page_trousseau(&mut ui, cx, top, cw),
             Page::Agent => self.page_agent(&mut ui, cx, top, cw),
             Page::APropos => self.page_apropos(&mut ui, cx, top, cw),
         };

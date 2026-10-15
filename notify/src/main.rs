@@ -16,6 +16,7 @@ mod client;
 mod icons;
 mod model;
 mod portal;
+mod prompter;
 
 use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
@@ -116,6 +117,8 @@ struct App {
     bus: Bus,
     /// Portail des réglages d'apparence (Firefox, GTK 4), si aucun autre ne tourne
     portal: Option<portal::Portal>,
+    /// Demandes de mot de passe du trousseau (oo7)
+    prompter: Option<prompter::Prompter>,
     store: Store,
     /// Dernière valeur écrite pour la barre
     unseen_published: Option<usize>,
@@ -195,6 +198,22 @@ fn main() {
             .expect("source du portail");
     }
 
+    // Trousseau : fenêtre de mot de passe à la demande d'oo7-daemon
+    let prompter = prompter::Prompter::connect();
+    if let Some(fd) = prompter.as_ref().map(|p| p.fd()) {
+        handle
+            .insert_source(
+                Generic::new(unsafe { FdWrapper::new(fd) }, Interest::READ, Mode::Level),
+                |_, _, app| {
+                    if let Some(prompter) = app.prompter.as_mut() {
+                        prompter.poll();
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
+            .expect("source du trousseau");
+    }
+
     // Thème changé (centre de contrôle) : redessin avec la nouvelle palette
     if let Some(fd) = theme::watch() {
         let _ = handle.insert_source(
@@ -244,6 +263,7 @@ fn main() {
         },
         bus,
         portal,
+        prompter,
         store,
         unseen_published: None,
         banners: None,

@@ -2205,6 +2205,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "trousseau"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "smithay-client-toolkit",
+]
+
+[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
