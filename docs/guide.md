@@ -262,6 +262,12 @@ nouvelles versions, outils) ; pour chacun, au cas par cas :
 « Vérifier maintenant » relance la veille sans attendre. En ligne de commande :
 `odysseus-veille etat`.
 
+## Accueil
+
+Au premier démarrage, l'accueil guide pas à pas : thème, fond d'écran, taille de
+l'affichage, clavier et agent, puis l'essentiel en quelques gestes. On le revoit
+quand on veut : Réglages > À propos > « Revoir l'accueil ».
+
 ## Réglages
 
 Apparence (thèmes), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la

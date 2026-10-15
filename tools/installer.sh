@@ -141,8 +141,11 @@ Interfaces=org.freedesktop.impl.portal.Settings;
 UseIn=odysseus
 EOF
 
-# Verrouillage : le mot de passe de l'utilisateur, selon la distribution
-if [ ! -e /etc/pam.d/odysseus-lock ]; then
+# Verrouillage : le mot de passe de l'utilisateur, selon la distribution ;
+# un fichier déjà posé par odysseus est gardé (et noté pour la désinstallation)
+if grep -q "verrouillage d'odysseus" /etc/pam.d/odysseus-lock 2>/dev/null; then
+    echo /etc/pam.d/odysseus-lock >> "$tmp"
+elif [ ! -e /etc/pam.d/odysseus-lock ]; then
     if [ -e /etc/pam.d/common-auth ]; then
         printf '%s\n' "# Écran de verrouillage d'odysseus : mot de passe de l'utilisateur" \
             "@include common-auth" "@include common-account" | gen /etc/pam.d/odysseus-lock
