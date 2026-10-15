@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod apps;
+pub mod auto;
 pub mod draw;
 pub mod icons;
 pub mod ipc;

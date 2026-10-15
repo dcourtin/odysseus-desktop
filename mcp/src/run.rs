@@ -9,8 +9,8 @@ use std::{
     os::unix::process::CommandExt,
     process::{Command, Stdio},
     sync::{
-        Arc,
-        atomic::{AtomicU8, AtomicU32, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -25,15 +25,18 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(90);
 const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 const OUTPUT_LIMIT: usize = 20_000;
 
-/// Réponse de l'utilisateur : en attente, oui, non
-const PENDING: u8 = 0;
-const YES: u8 = 1;
-const NO: u8 = 2;
-
-/// Demande l'accord de l'utilisateur ; true s'il autorise
-fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
+/// Notification à boutons ; renvoie la clé du bouton choisi, ou None (fermée,
+/// ou pas de réponse dans le délai). Critique : elle reste affichée jusqu'au
+/// choix, même en « Ne pas déranger ».
+pub fn notify_choice(
+    summary: &str,
+    body: &str,
+    actions: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<Option<String>, String> {
     let conn = Connection::new_session().map_err(|e| format!("bus de session : {e}"))?;
-    let answer = Arc::new(AtomicU8::new(PENDING));
+    // None : en attente ; Some(None) : fermée sans choix ; Some(Some(clé)) : choisi
+    let answer: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
     let id = Arc::new(AtomicU32::new(0));
     {
         let (answer, id) = (answer.clone(), id.clone());
@@ -43,7 +46,7 @@ fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
                 .with_sender("org.freedesktop.Notifications"),
             move |(nid, key): (u32, String), _, _| {
                 if nid == id.load(Ordering::Relaxed) {
-                    answer.store(if key == "autoriser" { YES } else { NO }, Ordering::Relaxed);
+                    *answer.lock().unwrap() = Some(Some(key));
                 }
                 true
             },
@@ -56,10 +59,9 @@ fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
             MatchRule::new_signal("org.freedesktop.Notifications", "NotificationClosed")
                 .with_sender("org.freedesktop.Notifications"),
             move |(nid, _reason): (u32, u32), _, _| {
-                // Fermée sans choisir : refus
-                if nid == id.load(Ordering::Relaxed) {
-                    let _ =
-                        answer.compare_exchange(PENDING, NO, Ordering::Relaxed, Ordering::Relaxed);
+                let mut a = answer.lock().unwrap();
+                if nid == id.load(Ordering::Relaxed) && a.is_none() {
+                    *a = Some(None);
                 }
                 true
             },
@@ -72,8 +74,29 @@ fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
         Duration::from_secs(5),
     );
     let mut hints: HashMap<&str, Variant<Box<dyn RefArg>>> = HashMap::new();
-    // Critique : reste affichée jusqu'au choix, même en « Ne pas déranger »
     hints.insert("urgency", Variant(Box::new(2u8)));
+    let flat: Vec<&str> = actions.iter().flat_map(|(k, l)| [*k, *l]).collect();
+    let (nid,): (u32,) = proxy
+        .method_call(
+            "org.freedesktop.Notifications",
+            "Notify",
+            ("Assistant", 0u32, "", summary, body, flat, hints, 0i32),
+        )
+        .map_err(|e| format!("notifications : {e}"))?;
+    id.store(nid, Ordering::Relaxed);
+    let start = Instant::now();
+    while answer.lock().unwrap().is_none() && start.elapsed() < timeout {
+        conn.process(Duration::from_millis(200))
+            .map_err(|e| e.to_string())?;
+    }
+    // Réponse donnée (ou délai passé) : la notification s'en va
+    let _: Result<(), _> =
+        proxy.method_call("org.freedesktop.Notifications", "CloseNotification", (nid,));
+    Ok(answer.lock().unwrap().clone().flatten())
+}
+
+/// Demande l'accord de l'utilisateur ; true s'il autorise
+fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
     let body = format!(
         "{}{command}\n\nDans {dir}, avec vos droits.",
         if reason.trim().is_empty() {
@@ -82,37 +105,37 @@ fn ask(command: &str, dir: &str, reason: &str) -> Result<bool, String> {
             format!("{}\n\n", reason.trim())
         }
     );
-    let (nid,): (u32,) = proxy
-        .method_call(
-            "org.freedesktop.Notifications",
-            "Notify",
-            (
-                "Assistant",
-                0u32,
-                "utilities-terminal",
-                "Commande de l'agent",
-                body,
-                vec!["autoriser", "Autoriser", "refuser", "Refuser"],
-                hints,
-                0i32,
-            ),
-        )
-        .map_err(|e| format!("notifications : {e}"))?;
-    id.store(nid, Ordering::Relaxed);
-    let start = Instant::now();
-    while answer.load(Ordering::Relaxed) == PENDING && start.elapsed() < ASK_TIMEOUT {
-        conn.process(Duration::from_millis(200))
-            .map_err(|e| e.to_string())?;
-    }
-    // Réponse donnée (ou délai passé) : la notification s'en va
-    {
-        let _: Result<(), _> =
-            proxy.method_call("org.freedesktop.Notifications", "CloseNotification", (nid,));
-    }
-    Ok(answer.load(Ordering::Relaxed) == YES)
+    let key = notify_choice(
+        "Commande de l'agent",
+        &body,
+        &[("autoriser", "Autoriser"), ("refuser", "Refuser")],
+        ASK_TIMEOUT,
+    )?;
+    Ok(key.as_deref() == Some("autoriser"))
 }
 
-pub fn execute(command: &str, dir: Option<&str>, reason: &str) -> Result<String, String> {
+/// Une question et jusqu'à trois réponses ; l'indice choisi, ou None
+pub fn choose(title: &str, question: &str, choices: &[String]) -> Result<Option<usize>, String> {
+    let keys: Vec<String> = (0..choices.len()).map(|i| i.to_string()).collect();
+    let actions: Vec<(&str, &str)> = keys
+        .iter()
+        .zip(choices)
+        .map(|(k, c)| (k.as_str(), c.as_str()))
+        .collect();
+    let key = notify_choice(title, question, &actions, Duration::from_secs(300))?;
+    Ok(key
+        .and_then(|k| k.parse().ok())
+        .filter(|i| *i < choices.len()))
+}
+
+/// Lance une commande ; sans `approved` (automatisme validé), l'utilisateur
+/// l'autorise d'abord dans une notification
+pub fn execute(
+    command: &str,
+    dir: Option<&str>,
+    reason: &str,
+    approved: bool,
+) -> Result<String, String> {
     let command = command.trim();
     if command.is_empty() {
         return Err("Commande vide".into());
@@ -129,7 +152,7 @@ pub fn execute(command: &str, dir: Option<&str>, reason: &str) -> Result<String,
     if !std::path::Path::new(&dir).is_dir() {
         return Err(format!("Dossier introuvable : {dir}"));
     }
-    if !ask(command, &dir, reason)? {
+    if !approved && !ask(command, &dir, reason)? {
         return Err(
             "Refusé par l'utilisateur (ou pas de réponse). Ne relancez pas la même commande \
              sans lui demander pourquoi."

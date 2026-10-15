@@ -1,0 +1,17 @@
+[package]
+name = "auto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "odysseus-auto : automatismes du bureau (déclencheurs et exécution)"
+
+[[bin]]
+name = "odysseus-auto"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+mcp = { path = "../mcp" }
+serde_json.workspace = true
+chrono.workspace = true
+libc = "0.2"

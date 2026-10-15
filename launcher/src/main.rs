@@ -68,6 +68,31 @@ enum Entry {
     Ask(String),
 }
 
+/// Les automatismes validés qu'on peut lancer à la main, comme des applications
+fn with_automatisms(mut list: Vec<App>) -> Vec<App> {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("odysseus-auto")))
+        .unwrap_or_else(|| "odysseus-auto".into());
+    for a in common::auto::load_all().0 {
+        if !a.manual() || !common::auto::status(&a).validated {
+            continue;
+        }
+        list.push(App {
+            name: a.name.clone(),
+            comment: if a.description.is_empty() {
+                "Automatisme".into()
+            } else {
+                format!("Automatisme · {}", a.description)
+            },
+            exec: format!("'{}' lancer '{}'", exe.display(), a.id),
+            terminal: false,
+            icon: String::new(),
+        });
+    }
+    list
+}
+
 struct Launcher {
     registry_state: RegistryState,
     output_state: OutputState,
@@ -182,7 +207,7 @@ fn main() {
         modifiers: Modifiers::default(),
         regular: Text::load(theme::FONT_REGULAR).expect("police"),
         bold: Text::load(theme::FONT_BOLD).expect("police"),
-        apps: apps::load(),
+        apps: with_automatisms(apps::load()),
         // Requête initiale optionnelle : `launcher foot`
         query: std::env::args().skip(1).collect::<Vec<_>>().join(" "),
         entries: Vec::new(),

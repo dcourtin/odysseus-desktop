@@ -14,10 +14,7 @@
 //! Déclaration dans Claude Code :
 //!     claude mcp add odysseus -- ~/odysseus-desktop/target/release/odysseus-mcp
 
-mod docs;
-mod files;
-mod run;
-mod tools;
+use mcp::tools;
 
 use std::io::{BufRead, Write};
 

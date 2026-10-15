@@ -344,6 +344,35 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "creer_automatisme",
+        title: "Créer un automatisme",
+        cat: Cat::Act,
+        description: "Crée (ou remplace, même nom) un automatisme : une suite d'étapes lancée à la demande, à heure fixe ou à l'arrivée d'un fichier dans un dossier. Il reste inactif tant que l'utilisateur ne l'a pas validé dans Réglages > Automatismes : dites-le-lui. Définition JSON : {\"nom\", \"description\", \"declencheurs\": [{\"type\": \"manuel\"} | {\"type\": \"heure\", \"heure\": \"HH:MM\", \"jours\": [\"lun\"…\"dim\"] (tous si absent)} | {\"type\": \"dossier\", \"dossier\": \"~/Téléchargements\"}], \"etapes\": [...]}. Chaque étape : {\"action\": nom d'un outil odysseus (notifier, ouvrir, regler, son, ne_pas_deranger, lancer_application, fermer_fenetre, deplacer_fenetre, changer_bureau, executer, ecrire_presse_papiers, lire_presse_papiers, lire_fichier, lister_dossier, etat_systeme, notifications, fenetres, documentation, manuel…), suivi de ses paramètres, et \"garder\": \"nom\" (lettres sans accent, chiffres, _) pour réutiliser son résultat}. Étapes de contrôle : {\"action\": \"attendre\", \"secondes\": 5}, {\"action\": \"choisir\", \"question\", \"choix\": [1 à 3 réponses], \"garder\"} (boutons dans une notification), {\"action\": \"agent\", \"consigne\": \"Résume : {resultat}\", \"garder\"} (le modèle de l'utilisateur transforme un texte), {\"si\": {\"contient\": [texte, morceau]} | {\"egal\": [a, b]} | {\"vide\": texte} | {\"non_vide\": texte}, \"alors\": [étapes], \"sinon\": [étapes]}. Variables dans les textes : {resultat} (étape précédente), {nom gardé}, {fichier} (déclencheur dossier : chemin du nouveau fichier), {fichier_nom}, {date}, {heure}. Les commandes (executer) ne demandent pas d'accord à chaque fois : l'utilisateur les approuve en validant l'automatisme.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "definition": {"type": "object", "description": "L'automatisme, au format décrit"}
+            }, "required": ["definition"]})
+        },
+    },
+    Tool {
+        name: "lister_automatismes",
+        title: "Automatismes",
+        cat: Cat::Read,
+        description: "Les automatismes de l'utilisateur : nom, déclencheurs, étapes, validé ou non, en pause, dernière exécution.",
+        schema: no_args,
+    },
+    Tool {
+        name: "lancer_automatisme",
+        title: "Lancer un automatisme",
+        cat: Cat::Act,
+        description: "Lance un automatisme validé, d'après son nom.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "nom": {"type": "string"}
+            }, "required": ["nom"]})
+        },
+    },
+    Tool {
         name: "executer",
         title: "Exécuter une commande",
         cat: Cat::Run,
@@ -389,6 +418,28 @@ fn text(t: impl Into<String>) -> Vec<Value> {
     vec![json!({"type": "text", "text": t.into()})]
 }
 
+/// Étape d'un automatisme validé par l'utilisateur : sans contrôle des
+/// autorisations de l'agent ni demande d'accord pour les commandes (validées
+/// avec l'automatisme). Renvoie le texte produit.
+pub fn perform(name: &str, args: &Value, automatism: &str) -> Result<String, String> {
+    if !TOOLS.iter().any(|t| t.name == name) || name.ends_with("automatisme") {
+        return Err(format!("Action inconnue : {name}"));
+    }
+    let outcome = run(name, args, &Settings::load(), true);
+    log(
+        name,
+        outcome.is_ok(),
+        &format!("automatisme « {automatism} » : {}", summary(args)),
+    );
+    outcome.map(|content| {
+        content
+            .iter()
+            .filter_map(|c| c["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
 pub fn call(name: &str, args: &Value) -> Value {
     let Some(tool) = TOOLS.iter().find(|t| t.name == name) else {
         return json!({"isError": true, "content": text(format!("Outil inconnu : {name}"))});
@@ -404,7 +455,7 @@ pub fn call(name: &str, args: &Value) -> Value {
             tool.cat.label()
         ))});
     }
-    let outcome = run(name, args, &settings);
+    let outcome = run(name, args, &settings, false);
     // Commande refusée dans la notification : consignée comme refusée
     match &outcome {
         Err(e) if tool.cat == Cat::Run && e.starts_with("Refusé") => log(
@@ -420,7 +471,7 @@ pub fn call(name: &str, args: &Value) -> Value {
     }
 }
 
-fn run(name: &str, args: &Value, settings: &Settings) -> Outcome {
+fn run(name: &str, args: &Value, settings: &Settings, approved: bool) -> Outcome {
     let s = |k: &str| args.get(k).and_then(Value::as_str);
     let n = |k: &str| args.get(k).and_then(Value::as_f64);
     match name {
@@ -520,8 +571,24 @@ fn run(name: &str, args: &Value, settings: &Settings) -> Outcome {
             s("commande").unwrap_or(""),
             s("dossier"),
             s("raison").unwrap_or(""),
+            approved,
         )
         .map(text),
+        "creer_automatisme" => create_automatism(args),
+        "lister_automatismes" => Ok(text(list_automatisms())),
+        "lancer_automatisme" => {
+            let key = s("nom").ok_or("« nom » manquant")?;
+            let a =
+                common::auto::find(key).ok_or_else(|| format!("Automatisme inconnu : {key}"))?;
+            if !common::auto::status(&a).validated {
+                return Err(format!(
+                    "« {} » n'est pas encore validé : l'utilisateur doit le valider dans Réglages > Automatismes",
+                    a.name
+                ));
+            }
+            spawn(sibling("odysseus-auto"), &["lancer", &a.id])?;
+            Ok(text(format!("« {} » lancé", a.name)))
+        }
         _ => Err(format!("Outil inconnu : {name}")),
     }
 }
@@ -1231,6 +1298,81 @@ fn sound(volume: Option<f64>, mute: Option<bool>) -> Outcome {
     } else {
         format!("Réglé : {}. {now}", done.join(", "))
     }))
+}
+
+fn create_automatism(args: &Value) -> Outcome {
+    let def = args
+        .get("definition")
+        .filter(|d| d.is_object())
+        .ok_or("« definition » manquante (objet JSON)")?;
+    let a = common::auto::save(def).map_err(|e| format!("Automatisme refusé : {e}"))?;
+    let st = common::auto::status(&a);
+    let _ = notify(
+        &format!("Automatisme « {} » à valider", a.name),
+        "Relisez ses étapes dans Réglages > Automatismes, puis validez-le.",
+    );
+    let mut steps = Vec::new();
+    common::auto::flatten(&a.steps, 0, &mut steps);
+    Ok(text(format!(
+        "« {} » enregistré ({}). Déclencheurs : {}. {} étape(s). {}",
+        a.name,
+        common::auto::tilde(&a.path()),
+        a.triggers
+            .iter()
+            .map(|t| t.label())
+            .collect::<Vec<_>>()
+            .join(", "),
+        steps.len(),
+        if st.validated {
+            "Déjà validé (identique à la version validée)."
+        } else {
+            "Il ne fonctionnera qu'une fois validé par l'utilisateur dans Réglages > Automatismes : dites-le-lui."
+        }
+    )))
+}
+
+fn list_automatisms() -> String {
+    let (all, bad) = common::auto::load_all();
+    if all.is_empty() && bad.is_empty() {
+        return "Aucun automatisme".into();
+    }
+    let mut out = String::new();
+    for a in &all {
+        let st = common::auto::status(a);
+        let state = match (st.validated, st.paused) {
+            (false, _) if st.changed => "modifié, à revalider",
+            (false, _) => "à valider",
+            (true, true) => "validé, en pause",
+            (true, false) => "actif",
+        };
+        out.push_str(&format!(
+            "- {} [{}] — {}\n  Déclencheurs : {}\n",
+            a.name,
+            state,
+            if a.description.is_empty() {
+                "sans description"
+            } else {
+                &a.description
+            },
+            a.triggers
+                .iter()
+                .map(|t| t.label())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        let mut steps = Vec::new();
+        common::auto::flatten(&a.steps, 0, &mut steps);
+        for (d, l) in steps {
+            out.push_str(&format!("  {}· {l}\n", "  ".repeat(d)));
+        }
+        if let Some((when, res)) = st.last {
+            out.push_str(&format!("  Dernière exécution : {when} ({res})\n"));
+        }
+    }
+    for (id, e) in bad {
+        out.push_str(&format!("- {id}.json : illisible ({e})\n"));
+    }
+    out
 }
 
 fn clipboard_read() -> Outcome {

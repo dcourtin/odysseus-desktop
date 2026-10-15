@@ -33,6 +33,10 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|
 | ![Assistant](docs/captures/assistant.png) |
 
+| Automatismes : à la demande, à heure fixe, à l'arrivée d'un fichier ; créés par l'Assistant, validés par vous |
+|---|
+| ![Automatismes](docs/captures/automatismes.png) |
+
 | Réglages : fond d'écran, et six autres pages |
 |---|
 | ![Réglages](docs/captures/reglages.png) |
@@ -63,9 +67,10 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite les icônes des applications (zone de notification StatusNotifierItem : la barre tient le registre, clic gauche pour l'action de l'application, clic droit pour son menu dbusmenu, clic du milieu pour l'action secondaire), puis Assistant, moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; portail des réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
-| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, huit autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
+| `settings/` | `odysseus-reglages` : Réglages — Apparence (thèmes), Fond d'écran (dégradés d'odysseus calculés en 4K, images de l'utilisateur, dépôt depuis Fichiers), Écran (définition avec confirmation et retour automatique, fréquence, taille, lumière de nuit : horaires et teinte), Clavier et langue (disposition, répétition, zone d'essai, langue du système via systemd-localed), Énergie (extinction, verrouillage, veille), Raccourcis, Automatismes (validation, pause, lancement, dernière exécution), Agent (Claude Code et Ollama installés, mis à jour et connectés depuis la page, modèles téléchargés avec progression, huit autorisations d'odysseus-mcp, activité ; tout vient de `~/.config/odysseus/agent.json`, modifiable à la main), À propos | fonctionne |
 | `mcp/` | `odysseus-mcp` : le bureau exposé aux agents (Model Context Protocol) — état du système, écran, réglages, journaux ; documentation (man pages découpées par partie, apropos, documentation du noyau, des paquets, manuels info, notes de construction de la machine, PDF et textes de ~/Documents/Bibliothèque) ; lecture des fichiers (jamais les secrets : clés, mots de passe, historiques) ; fenêtres, notifications, captures ; actions (notifier, ouvrir, lancer une application, fermer ou déplacer une fenêtre, bureaux, son, Ne pas déranger, thème, fond, lumière de nuit, échelle) ; presse-papiers ; commandes shell, chacune approuvée dans une notification Autoriser / Refuser. Huit catégories autorisées ou non dans Réglages > Agent, chaque appel consigné (~/.local/state/odysseus/agent.log) | fonctionne |
 | `assistant/` | `odysseus-assistant` : panneau de conversation avec l'agent choisi dans Réglages > Agent (Claude Code, Ollama ou commande personnalisée), qui passe par odysseus-mcp ; réponse en direct, outils appelés affichés, fichiers joints (glisser-déposer, Ctrl+V, depuis Fichiers), arrêt avec Échap ; panneau en haut à droite, ouvert par son icône de la barre, Super+A, « ? » dans le lanceur ou Fichiers > Demander à l'Assistant | fonctionne |
+| `auto/` | `odysseus-auto` : automatismes façon Raccourcis d'iOS — un fichier JSON par automatisme (~/.config/odysseus/automatismes), déclencheurs à la demande (lanceur, Réglages, Assistant), à heure fixe (jours au choix) ou à l'arrivée d'un fichier dans un dossier ; étapes = outils d'odysseus-mcp, plus attendre, choisir (boutons dans une notification), agent (le modèle transforme un texte), si / alors / sinon ; variables {resultat}, {fichier}, noms gardés, passées aux commandes par l'environnement (un nom de fichier piégé n'est jamais interprété). Écrits par l'agent (outil creer_automatisme) ou à la main, ils ne tournent qu'une fois validés dans Réglages > Automatismes ; toute modification demande une nouvelle validation | fonctionne |
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) ; « ? question » ou dernière ligne : demander à l'Assistant | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
@@ -146,6 +151,7 @@ l'empêche.
     odysseus-moniteur                        # moniteur système (bascule)
     odysseus-reglages [ecran|fond|clavier…]  # Réglages, sur une page donnée
     odysseus-assistant [--joindre f] ["question"]  # Assistant (bascule), question posée d'emblée
+    odysseus-auto lancer "Pause café"      # lancer un automatisme validé (odysseus-auto liste : tous)
 
     cargo build --release          # tout compiler
     cargo run -p shell-bar         # lancer la barre (depuis un terminal dans sway)

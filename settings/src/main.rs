@@ -7,6 +7,7 @@
 //! `odysseus-reglages [apparence|fond|ecran|clavier|energie|raccourcis|apropos]`
 
 mod agents;
+mod automatismes;
 mod fonds;
 mod system;
 
@@ -172,17 +173,19 @@ enum Page {
     Clavier,
     Energie,
     Raccourcis,
+    Automatismes,
     Agent,
     APropos,
 }
 
-const PAGES: [Page; 8] = [
+const PAGES: [Page; 9] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
     Page::Clavier,
     Page::Energie,
     Page::Raccourcis,
+    Page::Automatismes,
     Page::Agent,
     Page::APropos,
 ];
@@ -196,6 +199,7 @@ impl Page {
             Page::Clavier => ("Clavier et langue", icon::KEYBOARD),
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
+            Page::Automatismes => ("Automatismes", icon::ZAP),
             Page::Agent => ("Agent", icon::BOT),
             Page::APropos => ("À propos", icon::INFO),
         }
@@ -209,6 +213,7 @@ impl Page {
             "clavier" | "langue" => Page::Clavier,
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
+            "automatismes" => Page::Automatismes,
             "agent" | "assistant" => Page::Agent,
             "apropos" | "a-propos" => Page::APropos,
             _ => return None,
@@ -219,6 +224,12 @@ impl Page {
 #[derive(Clone, PartialEq, Debug)]
 enum Hit {
     Page(Page),
+    AutoValidate(usize),
+    AutoPause(usize),
+    AutoRun(usize),
+    AutoEdit(usize),
+    AutoDelete(usize),
+    AutoFolder,
     Theme(usize),
     Fond(usize),
     FondUni,
@@ -312,6 +323,9 @@ struct App {
     tasks: Vec<(agents::Task, f32, String)>,
     news: channel::Sender<agents::News>,
     delete_armed: Option<(String, Instant)>,
+    /// Automatismes (~/.config/odysseus/automatismes) et leur état, fichiers illisibles
+    autos: Vec<(common::auto::Automatism, common::auto::Status)>,
+    autos_bad: Vec<(String, String)>,
     drop_hover: bool,
     width: u32,
     height: u32,
@@ -469,6 +483,8 @@ fn main() {
         tasks: Vec::new(),
         news,
         delete_armed: None,
+        autos: Vec::new(),
+        autos_bad: Vec::new(),
         drop_hover: false,
         width: 1060,
         height: 720,
@@ -738,9 +754,34 @@ impl App {
         self.draw();
     }
 
+    /// Ouvre un fichier dans l'éditeur ($EDITOR, vim par défaut), dans un terminal
+    fn edit_in_terminal(&mut self, path: &std::path::Path, title: &str) {
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+        let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+        use std::os::unix::process::CommandExt;
+        match std::process::Command::new(term)
+            .arg(format!("--title={title}"))
+            .arg(editor)
+            .arg(path)
+            .process_group(0)
+            .spawn()
+        {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+                self.toast("Enregistrez : Réglages suit le fichier aussitôt");
+            }
+            Err(e) => self.toast(format!("Terminal introuvable : {e}")),
+        }
+    }
+
     fn tick(&mut self) {
         // Page Agent : le journal d'activité se met à jour tout seul
         let mut redraw = self.page == Page::Agent;
+        // Page Automatismes : un automatisme écrit par l'agent apparaît aussitôt
+        if self.page == Page::Automatismes {
+            self.refresh_autos();
+            redraw = true;
+        }
         if let Some(c) = self.confirm.as_ref() {
             if c.since.elapsed() >= CONFIRM {
                 self.revert_mode();
@@ -845,6 +886,9 @@ impl App {
                 self.scroll = 0.0;
                 if p == Page::Agent {
                     self.agent_status = agents::status();
+                }
+                if p == Page::Automatismes {
+                    self.refresh_autos();
                 }
                 if p == Page::Ecran || p == Page::APropos {
                     self.screen = system::screen();
@@ -1005,28 +1049,19 @@ impl App {
                 });
                 agents::install_claude(update, self.news.clone());
             }
+            Hit::AutoValidate(_)
+            | Hit::AutoPause(_)
+            | Hit::AutoRun(_)
+            | Hit::AutoEdit(_)
+            | Hit::AutoDelete(_)
+            | Hit::AutoFolder => self.auto_click(hit),
             Hit::EditAgentJson => {
                 // Fichier créé s'il n'existe pas encore, puis ouvert dans l'éditeur
                 if common::agent::path().is_none_or(|p| !p.exists()) {
                     self.save_agent();
                 }
                 if let Some(path) = common::agent::path() {
-                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
-                    let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
-                    use std::os::unix::process::CommandExt;
-                    match std::process::Command::new(term)
-                        .arg("--title=agent.json")
-                        .arg(editor)
-                        .arg(&path)
-                        .process_group(0)
-                        .spawn()
-                    {
-                        Ok(mut child) => {
-                            std::thread::spawn(move || child.wait());
-                            self.toast("Enregistrez : Réglages suit le fichier aussitôt");
-                        }
-                        Err(e) => self.toast(format!("Terminal introuvable : {e}")),
-                    }
+                    self.edit_in_terminal(&path, "agent.json");
                 }
             }
             Hit::ClaudeLogin => match agents::claude_login() {
@@ -1159,6 +1194,7 @@ impl App {
             Page::Clavier => self.page_clavier(&mut ui, cx, top, cw),
             Page::Energie => self.page_energie(&mut ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
+            Page::Automatismes => self.page_automatismes(&mut ui, cx, top, cw),
             Page::Agent => self.page_agent(&mut ui, cx, top, cw),
             Page::APropos => self.page_apropos(&mut ui, cx, top, cw),
         };

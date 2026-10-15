@@ -348,6 +348,7 @@ pub mod icon {
     pub const GPU: char = '\u{e66a}';
     pub const THERMOMETER: char = '\u{e186}';
     pub const ZAP: char = '\u{e1b4}';
+    pub const CLOCK: char = '\u{e087}';
     pub const FAN: char = '\u{e379}';
     pub const ARROW_DOWN: char = '\u{e042}';
     pub const ARROW_UP: char = '\u{e04a}';
