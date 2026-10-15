@@ -264,7 +264,7 @@ nouvelles versions, outils) ; pour chacun, au cas par cas :
 
 ## Réglages
 
-Apparence (thèmes), Fond d'écran, Écran (définition gardée seulement si on la
+Apparence (thèmes), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
 Raccourcis, Dock, Automatismes, Trousseau, Mises à jour, Agent, À propos.

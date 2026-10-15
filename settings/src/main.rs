@@ -268,6 +268,8 @@ enum Hit {
     Theme(usize),
     Fond(usize),
     FondUni,
+    /// Croix sur une de vos images : la mettre à la corbeille
+    FondDelete(usize),
     Scale(usize),
     Resolution(i32, i32),
     Refresh(i32),
@@ -696,6 +698,40 @@ impl App {
         }
     }
 
+    /// Relit la liste des fonds ; les vignettes déjà calculées sont gardées
+    fn reload_fonds(&mut self) {
+        let (list, _) = fonds::list();
+        let old = std::mem::replace(&mut self.fonds, list);
+        for f in self.fonds.iter_mut() {
+            if let Some(o) = old.iter().find(|o| o.path == f.path) {
+                f.thumb = o.thumb.clone();
+            }
+        }
+        self.load_thumbs();
+    }
+
+    /// Retire une de vos images (à la corbeille : elle se récupère) ; si
+    /// c'était le fond actuel, on revient au premier fond d'odysseus
+    fn delete_fond(&mut self, i: usize) {
+        let Some(f) = self.fonds.get(i) else {
+            return;
+        };
+        let (path, name) = (f.path.clone(), f.name.clone());
+        if let Err(e) = common::trash::trash(&path) {
+            return self.toast(format!("Image non retirée : {e}"));
+        }
+        let current = self.settings.wallpaper.as_deref() == Some(&*path.to_string_lossy());
+        self.reload_fonds();
+        if current {
+            let first = self
+                .fonds
+                .first()
+                .map(|f| f.path.to_string_lossy().into_owned());
+            self.set_wallpaper(first);
+        }
+        self.toast(format!("« {name} » mis à la corbeille"));
+    }
+
     fn load_thumbs(&self) {
         let paths: Vec<PathBuf> = self
             .fonds
@@ -739,15 +775,7 @@ impl App {
                     }
                 }
                 if let Some(dest) = last {
-                    let (list, _) = fonds::list();
-                    let old = std::mem::replace(&mut self.fonds, list);
-                    // Les vignettes déjà calculées sont gardées
-                    for f in self.fonds.iter_mut() {
-                        if let Some(o) = old.iter().find(|o| o.path == f.path) {
-                            f.thumb = o.thumb.clone();
-                        }
-                    }
-                    self.load_thumbs();
+                    self.reload_fonds();
                     self.set_wallpaper(Some(dest.to_string_lossy().into_owned()));
                     self.toast("Image ajoutée à vos fonds d'écran");
                 }
@@ -1008,6 +1036,7 @@ impl App {
                 }
             }
             Hit::FondUni => self.set_wallpaper(Some("uni".into())),
+            Hit::FondDelete(i) => self.delete_fond(i),
             Hit::Scale(i) => {
                 let scale = SCALES[i];
                 match system::command(&format!("output scale {scale}")) {
@@ -1507,7 +1536,11 @@ impl App {
                         current.as_deref() == Some(&*self.fonds[*i].path.to_string_lossy()),
                     ),
                 };
-                let hovered = ui.hover == Some(hit.clone());
+                // Vos images : une croix au survol pour les retirer
+                let removable = index.filter(|i| *i >= builtin);
+                let delete_hovered =
+                    removable.is_some_and(|i| ui.hover == Some(Hit::FondDelete(i)));
+                let hovered = ui.hover == Some(hit.clone()) || delete_hovered;
                 if selected {
                     ui.rounded(tx - 4.0, ty - 4.0, tw + 8.0, th + 8.0, 14.0, p.accent);
                 }
@@ -1537,6 +1570,24 @@ impl App {
                     color,
                 );
                 ui.hit((tx, ty, tw, th + 28.0), hit);
+                if let Some(i) = removable.filter(|_| hovered) {
+                    let (cx, cy) = (tx + tw - 16.0, ty + 16.0);
+                    let fill = if delete_hovered {
+                        p.accent
+                    } else {
+                        common::theme::Rgba::hex(0x000000, 0.6)
+                    };
+                    ui.circle(cx, cy, 11.0, fill);
+                    ui.icon(
+                        icon::CLOSE,
+                        cx,
+                        cy,
+                        12.0,
+                        common::theme::Rgba::hex(0xffffff, 1.0),
+                    );
+                    // Après la vignette : la croix l'emporte sous le pointeur
+                    ui.hit((cx - 13.0, cy - 13.0, 26.0, 26.0), Hit::FondDelete(i));
+                }
                 bottom = ty + th + 40.0;
             }
             bottom
