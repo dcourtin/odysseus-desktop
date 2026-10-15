@@ -1216,7 +1216,7 @@ fn draw_main(
         );
     } else {
         d.text(
-            "PipeWire indisponible",
+            "Service audio indisponible",
             x + PAD,
             sy + 40.0,
             26.0,

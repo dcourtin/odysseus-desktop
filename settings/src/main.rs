@@ -1809,7 +1809,7 @@ impl App {
             x,
             y + 8.0,
             w,
-            "La langue s'applique aux applications (Firefox, terminal…) à la prochaine connexion. Les applications d'odysseus restent en français.",
+            "La langue s'applique aux applications (navigateur, terminal…) à la prochaine connexion. Les applications d'odysseus restent en français.",
         )
     }
 
@@ -2246,7 +2246,7 @@ impl App {
             p.text,
         );
         ui.centered(
-            "Bureau Wayland en Rust, inspiré de macOS",
+            "Poste de pilotage minimaliste, écrit en Rust",
             x + w / 2.0,
             iy + isz + 46.0,
             20.0,

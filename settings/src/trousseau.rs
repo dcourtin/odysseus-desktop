@@ -191,8 +191,8 @@ impl App {
             x,
             y,
             w,
-            "Les applications (VS Code, git, applications Electron…) rangent ici mots de passe et \
-             jetons, chiffrés sur le disque. Le trousseau de session s'ouvre avec votre mot de passe \
+            "Les applications rangent ici leurs mots de passe et jetons d'accès, chiffrés sur le \
+             disque. Le trousseau de session s'ouvre avec votre mot de passe \
              de connexion. Seuls les noms sont montrés, jamais les valeurs ; l'agent n'y a pas accès.",
         ) + 10.0;
 
@@ -209,7 +209,7 @@ impl App {
                     14.0,
                     p.text,
                 );
-                let msg = ui.truncate(&format!("oo7-daemon ne répond pas ({e})."), 12.0, w - 36.0);
+                let msg = ui.truncate(&format!("Le service du trousseau ne répond pas ({e})."), 12.0, w - 36.0);
                 ui.text(&msg, x + 18.0, y + 40.0, 20.0, 12.0, p.text_dim);
                 return y + 76.0;
             }
