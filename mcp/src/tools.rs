@@ -153,7 +153,7 @@ const TOOLS: &[Tool] = &[
         schema: || {
             json!({"type": "object", "properties": {
                 "recherche": {"type": "string", "description": "Mots à chercher"},
-                "source": {"type": "string", "enum": ["tout", "machine", "odysseus", "noyau", "paquets", "info", "bibliotheque"]},
+                "source": {"type": "string", "enum": ["tout", "machine", "guide", "odysseus", "noyau", "paquets", "info", "bibliotheque"]},
                 "chemin": {"type": "string", "description": "Document à lire (chemin absolu)"},
                 "partie": {"type": "string"},
                 "chercher": {"type": "string"},

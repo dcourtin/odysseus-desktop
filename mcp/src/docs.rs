@@ -272,6 +272,11 @@ pub fn sources() -> Vec<(&'static str, PathBuf, &'static str)> {
             "comment cette machine a été construite : STATUS.md (journal), PLAN.md, scripts build-*.sh",
         ),
         (
+            "guide",
+            home.join("odysseus-desktop/docs/guide.md"),
+            "guide d'odysseus : ce que fait le bureau et comment s'en servir, geste par geste",
+        ),
+        (
             "odysseus",
             home.join("odysseus-desktop/README.md"),
             "le bureau odysseus-desktop : composants, raccourcis, commandes",
