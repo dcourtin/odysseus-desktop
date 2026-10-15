@@ -79,6 +79,8 @@ fn with_automatisms(mut list: Vec<App>) -> Vec<App> {
             continue;
         }
         list.push(App {
+            id: String::new(),
+            wm_class: String::new(),
             name: a.name.clone(),
             comment: if a.description.is_empty() {
                 "Automatisme".into()

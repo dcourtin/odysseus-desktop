@@ -1,0 +1,15 @@
+[package]
+name = "dock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "odysseus-dock : applis favorites, applis ouvertes et fenêtres réduites, en bas de l'écran"
+
+[[bin]]
+name = "odysseus-dock"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+serde_json.workspace = true

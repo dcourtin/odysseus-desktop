@@ -5,6 +5,10 @@ use std::{collections::HashSet, path::PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct App {
+    /// Identifiant : nom du fichier .desktop sans l'extension (« org.foo.Bar »)
+    pub id: String,
+    /// Classe de fenêtre annoncée (StartupWMClass), pour relier une fenêtre à l'appli
+    pub wm_class: String,
     pub name: String,
     pub comment: String,
     pub exec: String,
@@ -53,6 +57,7 @@ fn parse(content: &str) -> Option<App> {
     let (mut name, mut name_loc, mut comment, mut comment_loc) = (None, None, None, None);
     let (mut exec, mut terminal, mut hidden, mut kind) = (None, false, false, None);
     let mut icon = String::new();
+    let mut wm_class = String::new();
     let mut in_entry = false;
     for line in content.lines() {
         let line = line.trim();
@@ -72,6 +77,7 @@ fn parse(content: &str) -> Option<App> {
             "Comment" => comment = Some(value),
             "Exec" => exec = Some(value),
             "Icon" => icon = value,
+            "StartupWMClass" => wm_class = value,
             "Type" => kind = Some(value),
             "Terminal" => terminal = value == "true",
             "NoDisplay" | "Hidden" => hidden |= value == "true",
@@ -84,6 +90,8 @@ fn parse(content: &str) -> Option<App> {
         return None;
     }
     Some(App {
+        id: String::new(),
+        wm_class,
         name: name_loc.or(name)?,
         comment: comment_loc.or(comment).unwrap_or_default(),
         exec: clean_exec(&exec?),
@@ -109,7 +117,11 @@ pub fn load() -> Vec<App> {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(app) = std::fs::read_to_string(&path).ok().and_then(|c| parse(&c)) {
+            if let Some(mut app) = std::fs::read_to_string(&path).ok().and_then(|c| parse(&c)) {
+                app.id = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 apps.push(app);
             }
         }

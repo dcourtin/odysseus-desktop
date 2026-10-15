@@ -161,6 +161,13 @@ const PERMS: [(&str, &str); 9] = [
         "Chaque commande vous est montrée dans une notification : rien ne se lance sans votre accord. Jamais en root.",
     ),
 ];
+/// Dock : masquage et taille des icônes
+const DOCK_HIDE: [(&str, &str); 3] = [
+    ("intelligent", "Quand une fenêtre passe dessous"),
+    ("toujours", "Toujours"),
+    ("jamais", "Jamais"),
+];
+const DOCK_SIZE: [(u32, &str); 3] = [(40, "Petit"), (48, "Moyen"), (56, "Grand")];
 const SUSPEND: [(u32, &str); 4] = [(0, "Jamais"), (30, "30 min"), (60, "1 h"), (120, "2 h")];
 /// Dispositions proposées : réglage, nom
 const KEYBOARDS: [(&str, &str); 8] = [
@@ -182,6 +189,7 @@ enum Page {
     Clavier,
     Energie,
     Raccourcis,
+    Dock,
     Automatismes,
     Trousseau,
     MisesAJour,
@@ -189,13 +197,14 @@ enum Page {
     APropos,
 }
 
-const PAGES: [Page; 11] = [
+const PAGES: [Page; 12] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
     Page::Clavier,
     Page::Energie,
     Page::Raccourcis,
+    Page::Dock,
     Page::Automatismes,
     Page::Trousseau,
     Page::MisesAJour,
@@ -212,6 +221,7 @@ impl Page {
             Page::Clavier => ("Clavier et langue", icon::KEYBOARD),
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
+            Page::Dock => ("Dock", icon::APP),
             Page::Automatismes => ("Automatismes", icon::ZAP),
             Page::Trousseau => ("Trousseau", icon::LOCK),
             Page::MisesAJour => ("Mises à jour", icon::ARROW_DOWN_CIRCLE),
@@ -228,6 +238,7 @@ impl Page {
             "clavier" | "langue" => Page::Clavier,
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
+            "dock" => Page::Dock,
             "automatismes" => Page::Automatismes,
             "trousseau" | "secrets" => Page::Trousseau,
             "mises-a-jour" | "maj" => Page::MisesAJour,
@@ -271,6 +282,8 @@ enum Hit {
     ScreenOff(u32),
     LockToggle,
     Suspend(u32),
+    DockHide(&'static str),
+    DockSize(u32),
     SleepNow,
     Keep,
     Revert,
@@ -1093,6 +1106,14 @@ impl App {
                 self.settings.suspend_min = min;
                 self.save();
             }
+            Hit::DockHide(mode) => {
+                self.settings.dock_hide = mode.into();
+                self.save();
+            }
+            Hit::DockSize(size) => {
+                self.settings.dock_size = size;
+                self.save();
+            }
             Hit::SleepNow => system::suspend_now(),
             Hit::AgentKind(i) => {
                 self.agent.agent = AGENTS[i].0.to_string();
@@ -1289,6 +1310,7 @@ impl App {
             Page::Clavier => self.page_clavier(&mut ui, cx, top, cw),
             Page::Energie => self.page_energie(&mut ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(&mut ui, cx, top, cw),
+            Page::Dock => self.page_dock(&mut ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(&mut ui, cx, top, cw),
             Page::Trousseau => self.page_trousseau(&mut ui, cx, top, cw),
             Page::MisesAJour => self.page_maj(&mut ui, cx, top, cw),
@@ -1881,6 +1903,47 @@ impl App {
             y + 8.0,
             w,
             "La langue s'applique aux applications (navigateur, terminal…) à la prochaine connexion. Les applications d'odysseus restent en français.",
+        )
+    }
+
+    fn page_dock(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let mut y = ui.section(x, y, "Masquer le Dock");
+        let sel = DOCK_HIDE
+            .iter()
+            .position(|(m, _)| *m == self.settings.dock_hide);
+        ui.segmented(
+            x,
+            y,
+            w,
+            &DOCK_HIDE.iter().map(|d| d.1).collect::<Vec<_>>(),
+            sel,
+            |i| Hit::DockHide(DOCK_HIDE[i].0),
+        );
+        y += 52.0;
+        y = ui.note(
+            x,
+            y,
+            w,
+            "Masqué, il revient quand la souris touche le bas de l'écran. Il ne réserve jamais de place : une fenêtre agrandie prend tout l'écran.",
+        ) + 20.0;
+        y = ui.section(x, y, "Taille des icônes");
+        let sel = DOCK_SIZE
+            .iter()
+            .position(|(s, _)| *s == self.settings.dock_size);
+        ui.segmented(
+            x,
+            y,
+            w,
+            &DOCK_SIZE.iter().map(|d| d.1).collect::<Vec<_>>(),
+            sel,
+            |i| Hit::DockSize(DOCK_SIZE[i].0),
+        );
+        y += 52.0;
+        ui.note(
+            x,
+            y,
+            w,
+            "Clic droit sur une icône : garder dans le Dock ou l'en retirer, nouvelle fenêtre, quitter. Une fenêtre réduite rentre dans l'icône de son appli (un anneau la signale) ; un clic la ramène.",
         )
     }
 

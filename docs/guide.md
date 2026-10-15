@@ -39,6 +39,23 @@ puis à droite :
 
 Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifications.
 
+## Le Dock
+
+En bas de l'écran : à gauche vos applis favorites, puis, après un trait, les
+applis ouvertes qui n'en font pas partie, et la corbeille.
+
+- **Un clic** lance l'appli, ou ramène sa fenêtre ; si elle en a plusieurs, un
+  petit menu les liste. **Clic du milieu** : nouvelle fenêtre.
+- **Clic droit** : ses fenêtres, « Nouvelle fenêtre », « Garder dans le Dock »
+  ou « Retirer du Dock », « Quitter ».
+- **Repères** : un point sous une appli ouverte ; un anneau quand elle a des
+  fenêtres réduites, qui rentrent dans son icône.
+- **Il ne prend pas de place** : une fenêtre agrandie occupe tout l'écran, et
+  le Dock s'efface dès qu'une fenêtre passe dessous ; pousser la souris contre
+  le bas de l'écran le fait revenir.
+- **Réglages > Dock** : quand le masquer (quand une fenêtre passe dessous,
+  toujours, jamais) et la taille des icônes.
+
 ## Fenêtres et bureaux
 
 - **Les trois boutons**, en haut à gauche de chaque fenêtre : fermer, réduire,
@@ -48,7 +65,8 @@ Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifi
   Les applis d'odysseus n'ont pas de barre de titre : leurs boutons sont en
   haut de leur barre latérale ou de leur barre d'outils, et un double-clic sur
   leur barre d'outils agrandit de même.
-- **Réduire** (Super+M) : la fenêtre quitte l'écran sans se fermer.
+- **Réduire** (Super+M) : la fenêtre quitte l'écran sans se fermer et rentre
+  dans l'icône de son appli, dans le Dock ; un clic sur l'icône la ramène.
 
 - **Aimantation** : glisser une fenêtre contre le bord gauche ou droit la met en
   moitié, contre le haut en plein écran, dans un coin en quart. La décrocher lui
@@ -249,7 +267,7 @@ nouvelles versions, outils) ; pour chacun, au cas par cas :
 Apparence (thèmes), Fond d'écran, Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
-Raccourcis, Automatismes, Trousseau, Mises à jour, Agent, À propos.
+Raccourcis, Dock, Automatismes, Trousseau, Mises à jour, Agent, À propos.
 
 ## Verrouillage et énergie
 

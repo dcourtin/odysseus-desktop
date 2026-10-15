@@ -8,6 +8,7 @@ use std::{
 };
 
 pub const RUN_COMMAND: u32 = 0;
+pub const GET_WORKSPACES: u32 = 1;
 pub const GET_OUTPUTS: u32 = 3;
 /// Propre à odysseus : fenêtres de tous les bureaux
 pub const GET_WINDOWS: u32 = 100;
