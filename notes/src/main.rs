@@ -66,6 +66,8 @@ use store::{Folder, Store, Summary, View};
 const SIDEBAR_W: f32 = 216.0;
 const LIST_W: f32 = 300.0;
 const TOOLBAR_H: f32 = 52.0;
+/// Centre vertical des boutons de la fenêtre, à hauteur de la barre d'outils
+const CHROME_Y: f32 = TOOLBAR_H / 2.0;
 const ROW_H: f32 = 32.0;
 const NOTE_H: f32 = 64.0;
 /// Sous le bandeau de la liste : le nom de la vue
@@ -193,6 +195,9 @@ struct Notes {
     dragging: bool,
     clicks: (Instant, u32, (f64, f64)),
     last_folder_click: Option<(i64, Instant)>,
+    /// Boutons de la fenêtre, et dernier clic dans le bandeau (double-clic : agrandir)
+    chrome: common::chrome::Chrome,
+    last_toolbar_click: Option<Instant>,
 
     width: u32,
     height: u32,
@@ -219,7 +224,7 @@ fn main() {
     let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponible");
 
     let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
     window.set_app_id("odysseus-notes");
     window.set_title("Notes");
     window.set_min_size(Some((760, 420)));
@@ -300,6 +305,8 @@ fn main() {
         dragging: false,
         clicks: (Instant::now(), 0, (0.0, 0.0)),
         last_folder_click: None,
+        chrome: common::chrome::Chrome::default(),
+        last_toolbar_click: None,
         width: 1180,
         height: 740,
         scale: 1,
@@ -1056,7 +1063,28 @@ impl Notes {
         ))
     }
 
+    /// Boutons de la fenêtre : fermer, réduire, agrandir (Alt : plein écran)
+    fn chrome_action(&mut self, button: common::chrome::Button) {
+        use common::chrome::Button;
+        match button {
+            Button::Close => self.exit = true,
+            Button::Minimize => self.window.set_minimized(),
+            Button::Maximize if self.modifiers.alt || self.chrome.fullscreen => {
+                if self.chrome.fullscreen {
+                    self.window.unset_fullscreen();
+                } else {
+                    self.window.set_fullscreen(None);
+                }
+            }
+            Button::Maximize if self.chrome.maximized => self.window.unset_maximized(),
+            Button::Maximize => self.window.set_maximized(),
+        }
+    }
+
     fn press(&mut self, x: f64, y: f64, serial: u32) {
+        if let Some(b) = self.chrome.press(x as f32, y as f32, CHROME_Y) {
+            return self.chrome_action(b);
+        }
         let hit = self.hit_at(x, y);
         // Un clic hors du menu le ferme, sans autre effet
         if self.menu && !matches!(hit, Some(Hit::MoveTo(_)) | Some(Hit::MoveMenu)) {
@@ -1096,10 +1124,17 @@ impl Notes {
             }
             Some(h) => self.action(h),
             None => {
-                // Bandeau du haut vide : déplacer la fenêtre (pas de barre de titre)
-                if y < TOOLBAR_H as f64
+                // Bandeau du haut vide : double-clic agrandit, glisser déplace la fenêtre
+                let double = self
+                    .last_toolbar_click
+                    .is_some_and(|t| t.elapsed() < DOUBLE_CLICK);
+                if y < TOOLBAR_H as f64 && double {
+                    self.last_toolbar_click = None;
+                    self.chrome_action(common::chrome::Button::Maximize);
+                } else if y < TOOLBAR_H as f64
                     && let Some(seat) = self.seat.as_ref()
                 {
+                    self.last_toolbar_click = Some(Instant::now());
                     self.window.move_(seat, serial);
                 }
             }
@@ -1107,6 +1142,9 @@ impl Notes {
     }
 
     fn motion(&mut self, x: f64, y: f64) {
+        if self.chrome.motion(x as f32, y as f32, CHROME_Y) {
+            self.draw();
+        }
         if self.dragging {
             if let Some(pos) = self.byte_under(x, y) {
                 self.editor.cursor = pos;
@@ -1863,7 +1901,8 @@ impl Notes {
             push_hit(hits, s, rx, y, rw, row_h, hit);
         };
 
-        let mut y = TOOLBAR_H * s - 8.0 * s;
+        self.chrome.draw(c, &self.icons, CHROME_Y, s);
+        let mut y = TOOLBAR_H * s + 4.0 * s;
         row(
             c,
             hits,
@@ -2085,6 +2124,11 @@ impl WindowHandler for Notes {
             self.width = w.get();
             self.height = h.get();
         }
+        self.chrome.configure(
+            configure.is_activated(),
+            configure.is_maximized(),
+            configure.is_fullscreen(),
+        );
         self.configured = true;
         self.draw();
     }
@@ -2222,7 +2266,8 @@ impl PointerHandler for Notes {
                 } => self.dragging = false,
                 PointerEventKind::Motion { .. } => self.motion(x, y),
                 PointerEventKind::Leave { .. } => {
-                    if self.hover.take().is_some() {
+                    let chrome = self.chrome.leave();
+                    if self.hover.take().is_some() || chrome {
                         self.draw();
                     }
                 }

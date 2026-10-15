@@ -71,6 +71,8 @@ use smithay_client_toolkit::{
 // Mise en page, en pixels logiques (grille de 4)
 const SIDEBAR_W: f32 = 208.0;
 const TOOLBAR_H: f32 = 52.0;
+/// Centre vertical des boutons de la fenêtre, à hauteur de la barre d'outils
+const CHROME_Y: f32 = TOOLBAR_H / 2.0;
 const HEADER_H: f32 = 28.0;
 const ROW_H: f32 = 30.0;
 const STATUS_H: f32 = 28.0;
@@ -169,6 +171,10 @@ struct Files {
     /// Clic sans touche sur un élément d'une sélection multiple : elle se
     /// réduit à lui au relâchement, sauf si l'appui devient un glisser
     collapse: Option<usize>,
+    /// Boutons de la fenêtre (fermer, réduire, agrandir), et dernier clic dans
+    /// la barre d'outils (double-clic : agrandir)
+    chrome: common::chrome::Chrome,
+    last_toolbar_click: Option<Instant>,
     /// Dossier affiché surveillé (inotify) : la liste suit les fichiers qui
     /// arrivent (captures d'écran, téléchargements) ou s'en vont
     watched: Option<(PathBuf, RegistrationToken)>,
@@ -270,7 +276,7 @@ fn main() {
     let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponible");
 
     let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
     window.set_app_id("odysseus-files");
     window.set_min_size(Some((640, 420)));
     window.commit();
@@ -371,6 +377,8 @@ fn main() {
         typed: (String::new(), Instant::now()),
         last_trashed: Vec::new(),
         collapse: None,
+        chrome: common::chrome::Chrome::default(),
+        last_toolbar_click: None,
         watched: None,
         empty_armed: None,
         width: 960,
@@ -715,14 +723,38 @@ impl Files {
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
-                // Barre d'outils vide : déplacer la fenêtre (pas de barre de titre)
-                if y < TOOLBAR_H as f64
-                    && x > SIDEBAR_W as f64
-                    && let Some(seat) = self.seat.as_ref()
-                {
-                    self.window.move_(seat, serial);
+                // Barre d'outils vide : double-clic agrandit, glisser déplace la fenêtre
+                if y < TOOLBAR_H as f64 {
+                    let double = self
+                        .last_toolbar_click
+                        .is_some_and(|t| t.elapsed() < Duration::from_millis(400));
+                    self.last_toolbar_click = Some(Instant::now());
+                    if double {
+                        self.last_toolbar_click = None;
+                        self.chrome_action(common::chrome::Button::Maximize);
+                    } else if let Some(seat) = self.seat.as_ref() {
+                        self.window.move_(seat, serial);
+                    }
                 }
             }
+        }
+    }
+
+    /// Boutons de la fenêtre : fermer, réduire, agrandir (Alt : plein écran)
+    fn chrome_action(&mut self, button: common::chrome::Button) {
+        use common::chrome::Button;
+        match button {
+            Button::Close => self.exit = true,
+            Button::Minimize => self.window.set_minimized(),
+            Button::Maximize if self.modifiers.alt || self.chrome.fullscreen => {
+                if self.chrome.fullscreen {
+                    self.window.unset_fullscreen();
+                } else {
+                    self.window.set_fullscreen(None);
+                }
+            }
+            Button::Maximize if self.chrome.maximized => self.window.unset_maximized(),
+            Button::Maximize => self.window.set_maximized(),
         }
     }
 
@@ -1101,16 +1133,17 @@ impl Files {
         let sw = SIDEBAR_W * s;
         c.fill_rounded(0.0, 0.0, sw, h as f32, 0.0, theme::palette().sidebar);
         c.fill_rounded(sw - s, 0.0, s, h as f32, 0.0, theme::palette().ink(0.06));
+        self.chrome.draw(&mut c, &self.icons, CHROME_Y, s);
         self.regular.draw_in(
             &mut c,
             "FAVORIS",
             20.0 * s,
-            16.0 * s,
+            TOOLBAR_H * s,
             24.0 * s,
             11.0 * s,
             theme::palette().text_dim,
         );
-        let mut y = 44.0 * s;
+        let mut y = TOOLBAR_H * s + 28.0 * s;
         for (label, path) in &self.places {
             if label == "Racine" {
                 y += 12.0 * s;
@@ -2113,6 +2146,11 @@ impl WindowHandler for Files {
             self.width = w.get();
             self.height = h.get();
         }
+        self.chrome.configure(
+            configure.is_activated(),
+            configure.is_maximized(),
+            configure.is_fullscreen(),
+        );
         self.configured = true;
         self.follow_selection();
         self.draw();
@@ -2249,6 +2287,10 @@ impl PointerHandler for Files {
                     serial,
                     ..
                 } => {
+                    if let Some(b) = self.chrome.press(x as f32, y as f32, CHROME_Y) {
+                        self.chrome_action(b);
+                        continue;
+                    }
                     // Un appui sur une ligne peut devenir un glisser
                     self.press = match self.hit_at(x, y) {
                         Some(Hit::Row(i)) => Some((x, y, i, serial)),
@@ -2257,11 +2299,15 @@ impl PointerHandler for Files {
                     self.click(x, y, serial);
                 }
                 PointerEventKind::Motion { .. } => {
+                    if self.chrome.motion(x as f32, y as f32, CHROME_Y) {
+                        self.draw();
+                    }
                     self.pointer_moved(x, y);
                     self.update_hover(x, y);
                 }
                 PointerEventKind::Leave { .. } => {
-                    if self.hover.take().is_some() {
+                    let chrome = self.chrome.leave();
+                    if self.hover.take().is_some() || chrome {
                         self.draw();
                     }
                 }

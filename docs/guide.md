@@ -45,6 +45,9 @@ Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifi
   agrandir. Ronds gris au repos, leurs symboles apparaissent au survol ; fermer
   prend la couleur d'accent. Alt+clic sur agrandir : plein écran. Double-clic
   sur la barre de titre : agrandir ou rendre sa taille ; la glisser : déplacer.
+  Les applis d'odysseus n'ont pas de barre de titre : leurs boutons sont en
+  haut de leur barre latérale ou de leur barre d'outils, et un double-clic sur
+  leur barre d'outils agrandit de même.
 - **Réduire** (Super+M) : la fenêtre quitte l'écran sans se fermer.
 
 - **Aimantation** : glisser une fenêtre contre le bord gauche ou droit la met en

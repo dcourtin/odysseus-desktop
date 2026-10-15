@@ -127,6 +127,8 @@ struct Apercu {
     /// Dernière image mise à la corbeille (Ctrl+Z la remet)
     last_trashed: Option<PathBuf>,
     fullscreen: bool,
+    /// Boutons de la fenêtre (fermer, réduire, agrandir)
+    chrome: common::chrome::Chrome,
     qh: QueueHandle<Apercu>,
     /// Image en attente d'affichage, et dessin demandé entre-temps
     frame_pending: bool,
@@ -194,7 +196,7 @@ fn main() {
     let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponible");
 
     let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
     window.set_app_id("odysseus-apercu");
     window.set_title(file_name(&start));
     window.set_min_size(Some((480, 320)));
@@ -290,6 +292,7 @@ fn main() {
         message: None,
         last_trashed: None,
         fullscreen: false,
+        chrome: common::chrome::Chrome::default(),
         qh: qh.clone(),
         frame_pending: false,
         dirty: false,
@@ -891,6 +894,24 @@ impl Apercu {
         self.pool = Some(pool);
     }
 
+    /// Boutons de la fenêtre : fermer, réduire, agrandir (Alt : plein écran)
+    fn chrome_action(&mut self, button: common::chrome::Button) {
+        use common::chrome::Button as B;
+        match button {
+            B::Close => self.exit = true,
+            B::Minimize => self.window.set_minimized(),
+            B::Maximize if self.modifiers.alt || self.chrome.fullscreen => {
+                if self.chrome.fullscreen {
+                    self.window.unset_fullscreen();
+                } else {
+                    self.window.set_fullscreen(None);
+                }
+            }
+            B::Maximize if self.chrome.maximized => self.window.unset_maximized(),
+            B::Maximize => self.window.set_maximized(),
+        }
+    }
+
     fn draw_toolbar(&mut self, c: &mut Canvas, s: f32, vw: f32) {
         let bar = theme::palette().surface;
         c.fill_rounded(0.0, 0.0, vw * s, TOOLBAR_H * s, 0.0, bar);
@@ -903,9 +924,10 @@ impl Apercu {
             theme::palette().panel_border(),
         );
         let cy = TOOLBAR_H / 2.0;
+        self.chrome.draw(c, &self.icons, cy, s);
 
-        // Gauche : précédente / suivante, nom, position
-        let mut x = 14.0;
+        // Gauche, après les boutons de la fenêtre : précédente / suivante, nom, position
+        let mut x = common::chrome::WIDTH;
         for (glyph, button) in [
             (icon::CHEVRON_LEFT, Button::Prev),
             (icon::CHEVRON_RIGHT, Button::Next),
@@ -1128,6 +1150,11 @@ impl WindowHandler for Apercu {
             self.height = h.get();
         }
         self.fullscreen = configure.is_fullscreen();
+        self.chrome.configure(
+            configure.is_activated(),
+            configure.is_maximized(),
+            configure.is_fullscreen(),
+        );
         self.configured = true;
         self.draw();
     }
@@ -1148,6 +1175,7 @@ impl PointerHandler for Apercu {
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     self.pointer_pos = (x, y);
+                    redraw |= self.chrome.motion(x as f32, y as f32, TOOLBAR_H / 2.0);
                     self.toolbar_until = Instant::now() + TOOLBAR_IDLE;
                     match self.drag {
                         Some(Drag::Pan(start, center)) => {
@@ -1168,12 +1196,18 @@ impl PointerHandler for Apercu {
                         None => {}
                     }
                 }
-                PointerEventKind::Leave { .. } => {}
+                PointerEventKind::Leave { .. } => redraw |= self.chrome.leave(),
                 PointerEventKind::Press {
                     button: BTN_LEFT,
                     serial,
                     ..
                 } => {
+                    if self.toolbar_visible()
+                        && let Some(b) = self.chrome.press(x as f32, y as f32, TOOLBAR_H / 2.0)
+                    {
+                        self.chrome_action(b);
+                        continue;
+                    }
                     if self.toolbar_visible() && y < TOOLBAR_H as f64 {
                         match self.button_at(x, y) {
                             Some(b) => self.press_button(b),

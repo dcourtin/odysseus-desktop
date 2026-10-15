@@ -75,6 +75,10 @@ use system::Screen;
 // Mise en page, en pixels logiques
 const SIDEBAR_W: f32 = 240.0;
 const HEADER_H: f32 = 64.0;
+/// Centre vertical des boutons de la fenêtre (en haut de la barre latérale)
+const CHROME_Y: f32 = 24.0;
+/// Décalage de la barre latérale, sous les boutons de la fenêtre
+const SIDE_TOP: f32 = 30.0;
 const CONTENT_MAX: f32 = 660.0;
 const ROW_H: f32 = 52.0;
 const BTN_LEFT: u32 = 0x110;
@@ -354,6 +358,9 @@ struct App {
     updates: maj::State,
     autos_bad: Vec<(String, String)>,
     drop_hover: bool,
+    /// Boutons de la fenêtre, et dernier clic dans l'en-tête (double-clic : agrandir)
+    chrome: common::chrome::Chrome,
+    last_header_click: Option<Instant>,
     width: u32,
     height: u32,
     scale: i32,
@@ -408,7 +415,7 @@ fn main() {
     let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponible");
 
     let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::RequestClient, &qh);
     window.set_app_id("odysseus-reglages");
     window.set_title("Réglages");
     window.set_min_size(Some((860, 560)));
@@ -516,6 +523,8 @@ fn main() {
         updates: maj::State::default(),
         autos_bad: Vec::new(),
         drop_hover: false,
+        chrome: common::chrome::Chrome::default(),
+        last_header_click: None,
         width: 1060,
         height: 720,
         scale: 1,
@@ -914,14 +923,41 @@ impl App {
             .cloned()
     }
 
+    /// Boutons de la fenêtre : fermer, réduire, agrandir (Alt : plein écran)
+    fn chrome_action(&mut self, button: common::chrome::Button) {
+        use common::chrome::Button;
+        match button {
+            Button::Close => self.exit = true,
+            Button::Minimize => self.window.set_minimized(),
+            Button::Maximize if self.modifiers.alt || self.chrome.fullscreen => {
+                if self.chrome.fullscreen {
+                    self.window.unset_fullscreen();
+                } else {
+                    self.window.set_fullscreen(None);
+                }
+            }
+            Button::Maximize if self.chrome.maximized => self.window.unset_maximized(),
+            Button::Maximize => self.window.set_maximized(),
+        }
+    }
+
     fn click(&mut self, x: f32, y: f32, serial: u32) {
+        if let Some(b) = self.chrome.press(x, y, CHROME_Y) {
+            return self.chrome_action(b);
+        }
         let Some((rect, hit)) = self.hit_at(x, y) else {
-            // En-tête vide : déplacer la fenêtre (pas de barre de titre)
-            if y < HEADER_H
-                && x > SIDEBAR_W
-                && let Some(seat) = self.seat.as_ref()
-            {
-                self.window.move_(seat, serial);
+            // En-tête vide : double-clic agrandit, glisser déplace la fenêtre
+            if y < HEADER_H {
+                let double = self
+                    .last_header_click
+                    .is_some_and(|t| t.elapsed() < Duration::from_millis(400));
+                self.last_header_click = Some(Instant::now());
+                if double {
+                    self.last_header_click = None;
+                    self.chrome_action(common::chrome::Button::Maximize);
+                } else if let Some(seat) = self.seat.as_ref() {
+                    self.window.move_(seat, serial);
+                }
             }
             return;
         };
@@ -1295,18 +1331,21 @@ impl App {
             .take(2)
             .collect::<String>()
             .to_uppercase();
-        ui.circle(40.0, 44.0, 20.0, p.accent);
-        ui.centered(&initials, 40.0, 34.0, 20.0, 14.0, true, p.on_accent);
-        ui.bold_text(full, 70.0, 24.0, 22.0, 14.0, p.text);
+        let s = ui.s;
+        self.chrome.draw(ui.c, ui.icons, CHROME_Y, s);
+        let t = SIDE_TOP;
+        ui.circle(40.0, 44.0 + t, 20.0, p.accent);
+        ui.centered(&initials, 40.0, 34.0 + t, 20.0, 14.0, true, p.on_accent);
+        ui.bold_text(full, 70.0, 24.0 + t, 22.0, 14.0, p.text);
         ui.text(
             &format!("{login} · session odysseus"),
             70.0,
-            44.0,
+            44.0 + t,
             18.0,
             11.5,
             p.text_dim,
         );
-        let mut y = 88.0;
+        let mut y = 88.0 + t;
         for page in PAGES {
             let (label, glyph) = page.info();
             let selected = page == self.page;
@@ -2775,6 +2814,11 @@ impl WindowHandler for App {
             self.width = w.get();
             self.height = h.get();
         }
+        self.chrome.configure(
+            configure.is_activated(),
+            configure.is_maximized(),
+            configure.is_fullscreen(),
+        );
         self.configured = true;
         self.draw();
     }
@@ -2909,12 +2953,20 @@ impl PointerHandler for App {
                 } => self.click(x, y, serial),
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     let hover = self.hit_at(x, y).map(|(_, h)| h);
+                    if self.chrome.motion(x, y, CHROME_Y) {
+                        self.draw();
+                    }
                     if hover != self.hover {
                         self.hover = hover;
                         self.draw();
                     }
                 }
-                PointerEventKind::Leave { .. } if self.hover.take().is_some() => self.draw(),
+                PointerEventKind::Leave { .. } => {
+                    let chrome = self.chrome.leave();
+                    if self.hover.take().is_some() || chrome {
+                        self.draw();
+                    }
+                }
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
                     let max = (self.content_h - self.height as f32).max(0.0);
                     self.scroll = (self.scroll + vertical.absolute as f32 * 1.5).clamp(0.0, max);

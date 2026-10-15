@@ -16,8 +16,9 @@
 use std::{cell::RefCell, collections::HashMap, time::Instant};
 
 use common::{
+    chrome,
     draw::{Canvas, Text},
-    theme::{self, icon},
+    theme,
 };
 use smithay::{
     backend::{
@@ -40,10 +41,6 @@ use crate::{Odysseus, grabs::MoveSurfaceGrab, render::OdysseusElement};
 
 /// Hauteur de la barre de titre (pixels logiques)
 pub const TITLE_H: i32 = 30;
-/// Centres des trois boutons depuis le bord gauche, rayon, zone de clic
-const BUTTONS: [f64; 3] = [17.0, 37.0, 57.0];
-const BUTTON_R: f64 = 6.0;
-const BUTTON_HIT: f64 = 10.0;
 
 /// Partie de la barre de titre
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -113,11 +110,12 @@ impl Odysseus {
                 let bar = Rectangle::new((loc.x, loc.y - t).into(), (size.w, t).into()).to_f64();
                 if bar.contains(pos) {
                     let (x, y) = (pos.x - bar.loc.x, pos.y - bar.loc.y - t as f64 / 2.0);
-                    let part = [TitlePart::Close, TitlePart::Minimize, TitlePart::Maximize]
-                        .into_iter()
-                        .zip(BUTTONS)
-                        .find(|(_, cx)| (x - cx).hypot(y) <= BUTTON_HIT)
-                        .map_or(TitlePart::Bar, |(p, _)| p);
+                    let part = match chrome::hit(x as f32, y as f32) {
+                        Some(chrome::Button::Close) => TitlePart::Close,
+                        Some(chrome::Button::Minimize) => TitlePart::Minimize,
+                        Some(chrome::Button::Maximize) => TitlePart::Maximize,
+                        None => TitlePart::Bar,
+                    };
                     return Some((window.clone(), part));
                 }
             }
@@ -362,42 +360,25 @@ fn draw_bar(key: &BarKey, s: f32) -> Option<MemoryRenderBuffer> {
     FONTS.with(|fonts| {
         let fonts = fonts.as_ref()?;
         let cy = hf / 2.0;
-        let over_buttons = matches!(
-            key.hover,
-            Some(TitlePart::Close | TitlePart::Minimize | TitlePart::Maximize)
+        let hover = match key.hover {
+            Some(TitlePart::Close) => Some(chrome::Button::Close),
+            Some(TitlePart::Minimize) => Some(chrome::Button::Minimize),
+            Some(TitlePart::Maximize) => Some(chrome::Button::Maximize),
+            _ => None,
+        };
+        chrome::draw(
+            &mut c,
+            &fonts.icons,
+            0.0,
+            cy,
+            s,
+            key.focused,
+            hover.is_some(),
+            hover,
         );
-        for (part, (cx, glyph)) in [TitlePart::Close, TitlePart::Minimize, TitlePart::Maximize]
-            .into_iter()
-            .zip(
-                BUTTONS
-                    .iter()
-                    .zip([icon::CLOSE, icon::MINUS, icon::MAXIMIZE_2]),
-            )
-        {
-            let cx = *cx as f32 * s;
-            let hovered = key.hover == Some(part);
-            let fill = if hovered && part == TitlePart::Close {
-                p.accent
-            } else if hovered {
-                p.ink(0.30)
-            } else if key.focused {
-                p.ink(0.20)
-            } else {
-                p.ink(0.12)
-            };
-            c.fill_circle(cx, cy, BUTTON_R as f32 * s, fill);
-            if over_buttons {
-                let color = if hovered && part == TitlePart::Close {
-                    p.on_accent
-                } else {
-                    p.text
-                };
-                fonts.icons.icon(&mut c, glyph, cx, cy, 9.0 * s, color);
-            }
-        }
         // Titre centré, tronqué entre les boutons et le bord
         let px = 12.5 * s;
-        let room = wf - 2.0 * (BUTTONS[2] as f32 + 16.0) * s;
+        let room = wf - 2.0 * chrome::WIDTH * s;
         if room > 20.0 * s && !key.title.is_empty() {
             let title = fonts.bold.truncate(&key.title, px, room);
             let color = if key.focused {
