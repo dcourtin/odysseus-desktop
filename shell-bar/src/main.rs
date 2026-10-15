@@ -103,6 +103,8 @@ struct Bar {
     sharing: u64,
     share_zone: (f64, f64),
     assistant_zone: (f64, f64),
+    /// Empreinte de la dernière image envoyée (rien n'est envoyé si elle n'a pas changé)
+    last_frame: Option<u64>,
     /// Mises à jour à décider (rapport d'odysseus-veille), et l'icône qui les annonce
     updates: Updates,
     update_zone: (f64, f64),
@@ -177,6 +179,7 @@ fn main() {
         sharing: 0,
         share_zone: (0.0, 0.0),
         assistant_zone: (0.0, 0.0),
+        last_frame: None,
         updates: Updates::default(),
         update_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
@@ -788,6 +791,19 @@ impl Bar {
             tx -= step;
         }
 
+        // Redessinée chaque seconde (horloge, jauge) : l'image n'est envoyée que
+        // si elle a changé, sinon le compositeur recomposerait l'écran pour rien
+        let digest = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (w, h, self.scale).hash(&mut hasher);
+            canvas.buf.hash(&mut hasher);
+            hasher.finish()
+        };
+        if self.last_frame == Some(digest) {
+            return;
+        }
+        self.last_frame = Some(digest);
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);
         surface.damage_buffer(0, 0, w as i32, h as i32);
@@ -1161,6 +1177,7 @@ impl LayerShellHandler for Bar {
         }
         self.layer = create_layer(&self.compositor, &self.layer_shell, &self.qh);
         self.configured = false;
+        self.last_frame = None;
     }
 
     fn configure(
@@ -1186,6 +1203,8 @@ impl LayerShellHandler for Bar {
             self.height = h;
         }
         self.configured = true;
+        // Une configuration appelle toujours une image en réponse
+        self.last_frame = None;
         self.draw();
     }
 }

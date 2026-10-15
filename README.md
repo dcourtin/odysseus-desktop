@@ -158,6 +158,9 @@ retiré, elle revient au PC. Variables : `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARI
 
 Animations : `ODYSSEUS_ANIM_SLOW=10` les ralentit toutes dix fois (pour les régler à l'œil).
 
+Diagnostic : `ODYSSEUS_FPS=1` journalise toutes les 5 s le nombre d'images envoyées à
+l'écran et les éléments qui ont changé ; au repos, rien ne doit être envoyé.
+
 Inactivité (Réglages > Énergie) : l'écran s'éteint au bout de 10 min et la session se
 verrouille, puis, si demandé, l'ordinateur se met en veille ; une vidéo en lecture
 l'empêche.

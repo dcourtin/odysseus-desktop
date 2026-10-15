@@ -626,7 +626,10 @@ fn window_elements(
     } else {
         theme::SHADOW_ALPHA
     };
-    out.push(frame.shadow(shaders, frame_geo, alpha * shadow_alpha));
+    // Même ombre d'une image à l'autre tant que rien ne change : sinon le
+    // compositeur la croirait nouvelle et redessinerait tout l'écran à chaque image
+    let key = crate::agent::window_id(window);
+    out.push(frame.shadow_cached(key, shaders, frame_geo, alpha * shadow_alpha));
     out
 }
 
@@ -734,6 +737,47 @@ impl Frame {
             Uniform::new("border_width", self.scale as f32),
             Uniform::new("border_color", self.border_color),
         ]
+    }
+
+    /// Ombre de la fenêtre `key`, reprise telle quelle (même identifiant) si
+    /// sa place, son opacité et l'échelle n'ont pas changé
+    fn shadow_cached(
+        &self,
+        key: u64,
+        shaders: &Shaders,
+        geo: Rectangle<f64, Logical>,
+        alpha: f32,
+    ) -> OdysseusElement {
+        use std::cell::RefCell;
+        thread_local! {
+            static SHADOWS: RefCell<HashMap<u64, ([u64; 7], PixelShaderElement)>> =
+                RefCell::new(HashMap::new());
+        }
+        let sig = [
+            geo.loc.x.to_bits(),
+            geo.loc.y.to_bits(),
+            geo.size.w.to_bits(),
+            geo.size.h.to_bits(),
+            (alpha as f64).to_bits(),
+            self.scale.to_bits(),
+            self.radius as u64 ^ ((self.fb_size.w as u64) << 32) ^ self.fb_size.h as u64,
+        ];
+        SHADOWS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some((s, e)) = cache.get(&key)
+                && *s == sig
+            {
+                return OdysseusElement::Shadow(e.clone());
+            }
+            if cache.len() > 256 {
+                cache.clear();
+            }
+            let OdysseusElement::Shadow(e) = self.shadow(shaders, geo, alpha) else {
+                unreachable!("une ombre est un PixelShaderElement")
+            };
+            cache.insert(key, (sig, e.clone()));
+            OdysseusElement::Shadow(e)
+        })
     }
 
     /// Ombre portée sous `geo`, décalée vers le bas, d'opacité `alpha`.

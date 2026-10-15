@@ -838,6 +838,9 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     } else {
         theme::palette().background
     };
+    if std::env::var_os("ODYSSEUS_FPS").is_some() {
+        trace_changes(&elements, scale);
+    }
     let rendered = match surface.drm_output.render_frame(
         &mut udev.renderer,
         &elements,
@@ -847,6 +850,7 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
         Ok(result) if !result.is_empty => match surface.drm_output.queue_frame(()) {
             Ok(()) => {
                 surface.pending = true;
+                count_frame();
                 true
             }
             Err(e) => {
@@ -894,3 +898,69 @@ mod tests {
         assert_eq!(super::auto_scale(1280, 0), 1.0);
     }
 }
+
+/// ODYSSEUS_FPS=1 : nombre d'images envoyées à l'écran, journalisé toutes les
+/// 5 s (diagnostic : au repos, il doit tomber à zéro)
+fn count_frame() {
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU32, Ordering},
+    };
+    static ON: OnceLock<bool> = OnceLock::new();
+    static FRAMES: AtomicU32 = AtomicU32::new(0);
+    static SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    if !*ON.get_or_init(|| std::env::var_os("ODYSSEUS_FPS").is_some()) {
+        return;
+    }
+    let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut since = SINCE.lock().unwrap_or_else(|e| e.into_inner());
+    let start = *since.get_or_insert_with(std::time::Instant::now);
+    if start.elapsed() >= Duration::from_secs(5) {
+        tracing::info!("images envoyées : {n} en 5 s");
+        FRAMES_LOGGED.store(true, Ordering::Relaxed);
+        FRAMES.store(0, Ordering::Relaxed);
+        *since = Some(std::time::Instant::now());
+    }
+}
+
+/// ODYSSEUS_FPS : quels éléments changent d'une image à l'autre (nouveaux,
+/// ou contenu modifié), journalisé avec le compteur d'images
+fn trace_changes(elements: &[OdysseusElement], scale: f64) {
+    use smithay::backend::renderer::element::{Element, Id};
+    use smithay::backend::renderer::utils::CommitCounter;
+    use std::{collections::HashMap, sync::Mutex};
+    static LAST: Mutex<Option<HashMap<Id, CommitCounter>>> = Mutex::new(None);
+    static CHANGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = last.take().unwrap_or_default();
+    let mut now = HashMap::new();
+    let mut changed = CHANGED.lock().unwrap_or_else(|e| e.into_inner());
+    for e in elements {
+        let (id, commit) = (e.id().clone(), e.current_commit());
+        if previous.get(&id) != Some(&commit) {
+            let kind = match e {
+                OdysseusElement::Surface(_) => "surface",
+                OdysseusElement::Shadow(_) => "ombre/aplat",
+                OdysseusElement::Layer(_) => "couche",
+                OdysseusElement::Closing(_) => "fermeture",
+                OdysseusElement::Wallpaper(_) => "fond",
+                OdysseusElement::CursorTheme(_) => "curseur/étiquette/barre de titre",
+                _ => "autre",
+            };
+            let g = e.geometry(scale.into());
+            let label = format!("{kind} {}x{}@{},{}", g.size.w, g.size.h, g.loc.x, g.loc.y);
+            if !changed.contains(&label) && changed.len() < 12 {
+                changed.push(label);
+            }
+        }
+        now.insert(id, commit);
+    }
+    *last = Some(now);
+    if !changed.is_empty() && FRAMES_LOGGED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        tracing::info!("éléments changés : {}", changed.join(" ; "));
+        changed.clear();
+    }
+}
+
+/// Mis à vrai par le compteur d'images à chaque journalisation
+static FRAMES_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
