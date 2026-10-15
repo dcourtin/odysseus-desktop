@@ -145,7 +145,8 @@ lancer | sans-ecran)
         else
             gpu="-device virtio-vga-gl -display gtk,gl=on"
         fi
-        display="$gpu \
+        # Tablette virtuelle : le pointeur de la VM suit exactement celui de l'hôte
+        display="$gpu -device virtio-tablet-pci \
 -audiodev pipewire,id=son -device intel-hda -device hda-duplex,audiodev=son"
     else
         display="-display none -serial file:$DIR/console.log -daemonize"

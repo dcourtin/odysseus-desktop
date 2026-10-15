@@ -228,6 +228,22 @@ Mises à jour : curl et git ; la minuterie s'installe avec
 `cp veille/data/odysseus-veille.* ~/.config/systemd/user/ && systemctl --user enable --now odysseus-veille.timer`.
 Températures : `k10temp` (processeur AMD) et `amdgpu`.
 
+## Installation
+
+Sur une distribution courante (essayé sur Debian 13), après les paquets de
+compilation ci-dessous et Rust :
+
+    tools/installer.sh --tty1          # compile, installe dans /usr/local (sudo pour les copies)
+    tools/installer.sh --desinstaller  # retire tout ce qui a été posé
+
+Binaires dans `/usr/local/lib/odysseus`, session `/usr/local/bin/odysseus-session`
+(aussi proposée aux gestionnaires de connexion), polices et icônes dans
+`/usr/local/share/odysseus`, entrées du lanceur, services D-Bus, portails et PAM du
+verrouillage. `--tty1` lance la session à la connexion sur tty1. Paquets utiles à
+l'exécution (Debian) : `pipewire pipewire-pulse wireplumber foot wl-clipboard
+librsvg2-bin dbus-user-session xdg-desktop-portal xdg-desktop-portal-wlr
+adwaita-icon-theme fonts-noto-color-emoji` ; l'installateur signale ceux qui manquent.
+
 ## Portabilité
 
 Le bureau ne dépend plus de cette machine pour démarrer : polices livrées dans
