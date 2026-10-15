@@ -266,12 +266,12 @@ pub const SHADOW_ALPHA_FOCUSED: f32 = 0.55;
 pub const SHADOW_ALPHA: f32 = 0.30;
 
 /// Typographie
-pub const FONT_REGULAR: &str = "/usr/share/fonts/inter/Inter-Medium.ttf";
-pub const FONT_BOLD: &str = "/usr/share/fonts/inter/Inter-SemiBold.ttf";
+pub const FONT_REGULAR: &str = "Inter-Medium.ttf";
+pub const FONT_BOLD: &str = "Inter-SemiBold.ttf";
 pub const FONT_SIZE: f32 = 14.0;
 
 /// Icônes : police Lucide (ISC), un glyphe par icône
-pub const FONT_ICONS: &str = "/usr/share/fonts/lucide/lucide.ttf";
+pub const FONT_ICONS: &str = "lucide.ttf";
 
 /// Panneaux flottants : coins des panneaux et des tuiles qu'ils contiennent
 pub const PANEL_RADIUS: f32 = 4.0 * SPACE as f32;

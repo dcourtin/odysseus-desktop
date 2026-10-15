@@ -132,7 +132,8 @@ les valeurs par défaut sans fichier de réglages. Thèmes : Odyssée bleue (par
 sombre et claire. Une nouvelle définition d'écran revient d'elle-même à l'ancienne
 au bout de 15 s si on ne la garde pas.
 
-Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
+Échelle par défaut : déduite de la densité de l'écran (environ 110 points par pouce,
+au quart près). Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préféré, sinon le premier
 connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
 `nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
 
@@ -223,6 +224,18 @@ Notes : SQLite (bibliothèque système, liée par rusqlite).
 Mises à jour : curl et git ; la minuterie s'installe avec
 `cp veille/data/odysseus-veille.* ~/.config/systemd/user/ && systemctl --user enable --now odysseus-veille.timer`.
 Températures : `k10temp` (processeur AMD) et `amdgpu`.
+
+## Portabilité
+
+Le bureau ne dépend plus de cette machine pour démarrer : polices livrées dans
+`data/fonts` (Inter, JetBrains Mono, Lucide ; cherchées via `common::data` dans
+`$ODYSSEUS_DATA`, à côté des binaires, `/usr/share/odysseus`, puis le système),
+script de session qui trouve ses binaires à côté de lui, échelle et écran
+automatiques, curseur Bibata ou Adwaita. Essais sur une Debian neuve dans une
+machine virtuelle : `tools/vm.sh` (qemu + KVM, installation sans intervention).
+Compilation sur Debian 13 : `build-essential pkg-config libwayland-dev
+libxkbcommon-dev libudev-dev libinput-dev libgbm-dev libseat-dev libdrm-dev
+libegl-dev libgles-dev libdbus-1-dev libpam0g-dev libsqlite3-dev`, et Rust (rustup).
 
 ## Licence
 

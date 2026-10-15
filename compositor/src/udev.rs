@@ -1,7 +1,7 @@
 //! Backend DRM/KMS : le compositeur pilote directement l'écran depuis un tty.
 //! Session logind via libseat, entrées via libinput, un seul GPU, un écran.
 //! Variables : ODYSSEUS_OUTPUT (connecteur préféré, ex. HDMI-A-1 ; sinon le
-//! premier connecté), ODYSSEUS_SCALE (échelle, 1.5 par défaut).
+//! premier connecté), ODYSSEUS_SCALE (échelle ; sinon d'après la densité de l'écran).
 //! Écrans branchés à chaud : udev signale le changement, on réexamine les
 //! connecteurs (l'écran préféré revient dès qu'il est rebranché).
 //! Par IPC : `output scale 1.25`, `output mode 2560x1440@60`.
@@ -92,6 +92,8 @@ pub struct UdevData {
     /// Écran préféré (ODYSSEUS_OUTPUT) et échelle courante
     wanted: Option<String>,
     scale: f64,
+    /// Ni Réglages ni ODYSSEUS_SCALE : échelle déduite de la densité de chaque écran trouvé
+    auto_scale: bool,
 }
 
 pub fn init_udev(
@@ -159,13 +161,14 @@ pub fn init_udev(
     );
 
     data.state.mod_key = ModKey::Super;
-    // Échelle et mode : Réglages > Écran, sinon ODYSSEUS_SCALE et le mode préféré
-    let scale: f64 = data.state.settings.scale.unwrap_or_else(|| {
+    // Échelle et mode : Réglages > Écran, sinon ODYSSEUS_SCALE, sinon d'après
+    // la densité de l'écran (fixée quand il est trouvé) ; le mode préféré
+    let fixed_scale: Option<f64> = data.state.settings.scale.or_else(|| {
         std::env::var("ODYSSEUS_SCALE")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(1.5)
     });
+    let scale = fixed_scale.unwrap_or(1.0);
     data.state.pending_mode = data
         .state
         .settings
@@ -190,6 +193,7 @@ pub fn init_udev(
         paused: false,
         wanted: std::env::var("ODYSSEUS_OUTPUT").ok(),
         scale,
+        auto_scale: fixed_scale.is_none(),
     });
     scan_outputs(data);
     if data.udev.as_ref().is_some_and(|u| u.surfaces.is_empty()) {
@@ -403,6 +407,10 @@ fn scan_outputs(data: &mut CalloopData) {
         .unwrap_or(info.modes()[0]);
     let wl_mode = WlMode::from(drm_mode);
     let (w_mm, h_mm) = info.size().unwrap_or((0, 0));
+    if udev.auto_scale {
+        udev.scale = auto_scale(drm_mode.size().0 as u32, w_mm);
+        udev.cursor = Cursor::load((udev.cursor_size as f64 * udev.scale).round() as u32);
+    }
     let output = Output::new(
         name.clone(),
         PhysicalProperties {
@@ -864,4 +872,25 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
 
     state.after_frame(&output);
     layer_map_for_output(&output).cleanup();
+}
+
+/// Échelle conseillée d'après la densité de l'écran : environ 110 points
+/// logiques par pouce, au quart près (1 sans taille physique connue)
+pub fn auto_scale(width_px: u32, width_mm: u32) -> f64 {
+    if width_mm == 0 {
+        return 1.0;
+    }
+    let ppi = width_px as f64 / (width_mm as f64 / 25.4);
+    ((ppi / 110.0 * 4.0).round() / 4.0).clamp(1.0, 3.0)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn auto_scale() {
+        assert_eq!(super::auto_scale(3840, 600), 1.5);
+        assert_eq!(super::auto_scale(2560, 597), 1.0);
+        assert_eq!(super::auto_scale(1920, 344), 1.25);
+        assert_eq!(super::auto_scale(1280, 0), 1.0);
+    }
 }

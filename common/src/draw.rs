@@ -274,8 +274,11 @@ type Glyph = (Metrics, Vec<u8>);
 const GLYPH_CACHE: usize = 4096;
 
 impl Text {
+    /// Police d'après son chemin, ou son nom de fichier (cherché dans les
+    /// polices livrées avec odysseus, puis celles du système : common::data)
     pub fn load(path: &str) -> Result<Self, String> {
-        let data = std::fs::read(path).map_err(|e| format!("{path} : {e}"))?;
+        let path = crate::data::font(path);
+        let data = std::fs::read(&path).map_err(|e| format!("{} : {e}", path.display()))?;
         let font = Font::from_bytes(data, FontSettings::default())?;
         Ok(Self {
             font,

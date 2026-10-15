@@ -1,5 +1,5 @@
 //! Curseur dessiné par le compositeur (mode tty) : thème xcursor
-//! (XCURSOR_THEME, Bibata par défaut), ou la surface fournie par le client.
+//! (XCURSOR_THEME, Bibata par défaut, sinon Adwaita), ou la surface fournie par le client.
 
 use std::io::Read;
 
@@ -58,9 +58,12 @@ impl Cursor {
     }
 
     fn load_icon(icon: &str, size_px: u32) -> Option<(MemoryRenderBuffer, Point<i32, Physical>)> {
-        let name =
+        // Thème demandé, puis ceux qu'on trouve presque partout
+        let wanted =
             std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "Bibata-Modern-Classic".into());
-        let path = CursorTheme::load(&name).load_icon(icon)?;
+        let path = [wanted.as_str(), "Adwaita", "default"]
+            .iter()
+            .find_map(|name| CursorTheme::load(name).load_icon(icon))?;
         let mut data = Vec::new();
         std::fs::File::open(path)
             .ok()?
