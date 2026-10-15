@@ -6,7 +6,8 @@ use smithay::{
     input::{
         keyboard::{FilterResult, Keysym, ModifiersState},
         pointer::{
-            AxisFrame, ButtonEvent, Focus, GrabStartData as PointerGrabStartData, MotionEvent,
+            AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus,
+            GrabStartData as PointerGrabStartData, MotionEvent,
         },
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -14,7 +15,7 @@ use smithay::{
 };
 
 use crate::{
-    grabs::MoveSurfaceGrab,
+    grabs::{MoveSurfaceGrab, resize_grab::ResizeEdge},
     state::{ModKey, Odysseus},
 };
 
@@ -276,6 +277,20 @@ impl Odysseus {
                             // Mod + clic droit maintenu : redimensionner
                             self.start_mod_resize(window, button, serial);
                         }
+                    } else if button == BTN_LEFT
+                        && let Some((window, edges)) = self.edge_under(pointer.current_location())
+                    {
+                        // Bord d'une fenêtre : la redimensionner
+                        self.space.raise_element(&window, true);
+                        keyboard.set_focus(
+                            self,
+                            Some(window.toplevel().unwrap().wl_surface().clone()),
+                            serial,
+                        );
+                        self.space.elements().for_each(|window| {
+                            window.toplevel().unwrap().send_pending_configure();
+                        });
+                        self.start_resize(window, edges, button, serial);
                     } else {
                         self.space.elements().for_each(|window| {
                             window.set_activated(false);
@@ -436,6 +451,7 @@ impl Odysseus {
         } else {
             self.surface_under(pos)
         };
+        self.update_edge_cursor(pos, under.is_none());
         pointer.motion(
             self,
             under,
@@ -446,6 +462,39 @@ impl Odysseus {
             },
         );
         pointer.frame(self);
+    }
+
+    /// Au bord d'une fenêtre, le curseur montre dans quel sens on peut la
+    /// redimensionner ; il reste tel quel pendant le redimensionnement.
+    fn update_edge_cursor(&mut self, pos: Point<f64, Logical>, nothing_under: bool) {
+        let pointer = self.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() {
+            return;
+        }
+        let edge = (nothing_under && self.selection.is_none() && !self.is_locked())
+            .then(|| self.edge_under(pos))
+            .flatten()
+            .map(|(_, e)| e);
+        match edge {
+            Some(edges) => {
+                let icon = if edges == ResizeEdge::TOP_LEFT || edges == ResizeEdge::BOTTOM_RIGHT {
+                    CursorIcon::NwseResize
+                } else if edges == ResizeEdge::TOP_RIGHT || edges == ResizeEdge::BOTTOM_LEFT {
+                    CursorIcon::NeswResize
+                } else if edges.intersects(ResizeEdge::LEFT | ResizeEdge::RIGHT) {
+                    CursorIcon::EwResize
+                } else {
+                    CursorIcon::NsResize
+                };
+                self.cursor_status = CursorImageStatus::Named(icon);
+                self.edge_cursor = true;
+            }
+            None if self.edge_cursor => {
+                self.edge_cursor = false;
+                self.cursor_status = CursorImageStatus::default_named();
+            }
+            None => {}
+        }
     }
 
     /// Coin actif en haut à droite, comme sur macOS : le centre de

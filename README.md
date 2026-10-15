@@ -77,7 +77,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Dossier | Rôle | État |
 |---|---|---|
 | `common/` | Thème (couleurs, grille de 4 px, typographie) et dessin logiciel partagé (`draw`) | base |
-| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, partage d'écran (ext-image-copy-capture et ext-foreign-toplevel-list : un écran ou une fenêtre, image copiée seulement quand elle change, rien pendant le verrouillage), lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
+| `compositor/` | Compositeur Smithay : fenêtres arrondies + ombres, animations (ouverture, fermeture, glissement entre bureaux, trajets d'aimantation), aimantation des fenêtres, redimensionnement par les bords (curseur assorti), bureaux 1–9, coin actif (haut droit : notifications), glisser-déposer entre applications, presse-papiers accessible en ligne de commande (data-control), captures d'écran, partage d'écran (ext-image-copy-capture et ext-foreign-toplevel-list : un écran ou une fenêtre, image copiée seulement quand elle change, rien pendant le verrouillage), lumière de nuit, IPC compatible sway, backends winit et DRM | fonctionne (imbriqué et sur tty) |
 | `shell-bar/` | Barre du haut : bureaux (clic, molette) ; à droite les icônes des applications (zone de notification StatusNotifierItem : la barre tient le registre, clic gauche pour l'action de l'application, clic droit pour son menu dbusmenu, clic du milieu pour l'action secondaire), puis le témoin « Partage » (écran partagé ; un clic arrête le partage), Assistant, moniteur (jauge colorée selon la charge), centre de contrôle, cloche des notifications (point : non vues), date et heure ; l'icône du panneau ouvert est en surbrillance | fonctionne sous sway et odysseus |
 | `notify/` | `odysseus-notify` : notifications (D-Bus standard), bannières, centre de notifications avec calendrier (cloche, heure ou coin actif), « Ne pas déranger », indicateur de volume ; backend « odysseus » de xdg-desktop-portal pour les réglages d'apparence (Firefox et GTK suivent le thème clair ou sombre) ; demandes de mot de passe du trousseau (interface CliPrompter d'oo7) | fonctionne |
 | `control/` | `odysseus-control` : centre de contrôle ; `odysseus-raccourcis` : aide-mémoire des raccourcis ; (Wi-Fi via iwd, Bluetooth via BlueZ, Ethernet, lumière de nuit, son via PipeWire, accès aux Réglages, veille, verrouiller, redémarrer, éteindre) | fonctionne |
@@ -102,7 +102,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | Mod+Espace | lanceur |
 | Mod+q | fermer la fenêtre |
 | Mod+glisser | déplacer la fenêtre |
-| Mod+clic droit glissé | redimensionner |
+| bord ou coin d'une fenêtre glissé (juste à l'extérieur), ou Mod+clic droit glissé | redimensionner |
 | Mod+f | agrandir / restaurer |
 | Mod+Tab | fenêtre suivante |
 | glisser une fenêtre contre un bord | aimantation : moitié (gauche/droite), plein (haut), quart (coins) ; la décrocher lui rend sa taille |

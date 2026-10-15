@@ -21,10 +21,15 @@ use smithay::{
 };
 use xcursor::{CursorTheme, parser::parse_xcursor};
 
+/// Images du thème chargées en plus de « default » (redimensionnement)
+const NAMED: [&str; 4] = ["ew-resize", "ns-resize", "nwse-resize", "nesw-resize"];
+
 pub struct Cursor {
     buffer: MemoryRenderBuffer,
     /// Point chaud, en pixels de l'image
     hotspot: Point<i32, Physical>,
+    /// Autres images, par nom
+    named: Vec<(&'static str, MemoryRenderBuffer, Point<i32, Physical>)>,
     /// Croix de visée (capture d'écran)
     crosshair: Option<(MemoryRenderBuffer, Point<i32, Physical>)>,
 }
@@ -40,9 +45,14 @@ impl Cursor {
     /// Charge l'image « default » du thème, à la taille la plus proche de `size_px`.
     pub fn load(size_px: u32) -> Option<Self> {
         let (buffer, hotspot) = Self::load_icon("default", size_px)?;
+        let named = NAMED
+            .iter()
+            .filter_map(|n| Self::load_icon(n, size_px).map(|(b, h)| (*n, b, h)))
+            .collect();
         Some(Self {
             buffer,
             hotspot,
+            named,
             crosshair: Self::load_icon("crosshair", size_px),
         })
     }
@@ -101,12 +111,17 @@ impl Cursor {
         }
         match status {
             CursorImageStatus::Hidden => None,
-            CursorImageStatus::Named(_) => {
-                let loc = pos.to_physical(scale) - self.hotspot.to_f64();
+            CursorImageStatus::Named(icon) => {
+                let (buffer, hotspot) = self
+                    .named
+                    .iter()
+                    .find(|(n, ..)| *n == icon.name())
+                    .map_or((&self.buffer, self.hotspot), |(_, b, h)| (b, *h));
+                let loc = pos.to_physical(scale) - hotspot.to_f64();
                 MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     loc,
-                    &self.buffer,
+                    buffer,
                     None,
                     None,
                     None,

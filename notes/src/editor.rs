@@ -1236,5 +1236,4 @@ mod tests {
         assert!(s[3].bold && s[3].italic);
         assert!(s[20].strike && s[20].italic);
     }
-
 }

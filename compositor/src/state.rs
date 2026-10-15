@@ -93,9 +93,12 @@ pub struct Odysseus {
     pub mod_key: ModKey,
     /// Image du curseur demandée par le client sous le pointeur
     pub cursor_status: CursorImageStatus,
-    /// Glisser-déposer entre clients : image qui suit le pointeur
+    /// Curseur de redimensionnement posé par le compositeur (pointeur au bord
+    /// d'une fenêtre)
+    pub edge_cursor: bool,
     /// Coin actif (haut à droite) déclenché, en attente que le pointeur s'éloigne
     pub hot_corner_used: bool,
+    /// Glisser-déposer entre clients : image qui suit le pointeur
     pub dnd_icon: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
     /// Session logind (mode tty) : changement de terminal virtuel
     pub session: Option<LibSeatSession>,
@@ -264,6 +267,7 @@ impl Odysseus {
             // Le backend winit tourne toujours dans un autre compositeur
             mod_key: ModKey::Alt,
             cursor_status: CursorImageStatus::default_named(),
+            edge_cursor: false,
             dnd_icon: None,
             hot_corner_used: false,
             session: None,

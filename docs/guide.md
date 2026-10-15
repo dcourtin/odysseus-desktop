@@ -14,7 +14,7 @@ lit aussi (documentation « guide ») : on peut lui demander « comment je fais�
 | ouvrir un terminal | Super+Entrée |
 | fermer la fenêtre | Super+Q |
 | déplacer une fenêtre | glisser sa barre d'outils, ou Super+glisser n'importe où |
-| redimensionner une fenêtre | Super+clic droit glissé |
+| redimensionner une fenêtre | saisir un bord ou un coin, juste à l'extérieur ; ou Super+clic droit glissé |
 | ranger une fenêtre en moitié, quart, plein écran | la glisser contre un bord ou un coin ; ou Super+flèches |
 | changer de bureau | Super+1…9 ; Super+Maj+1…9 y envoie la fenêtre |
 | faire une capture | Impr. écran (zone), puis Espace pour une fenêtre ; Maj+Impr. écran (écran entier) |
@@ -44,8 +44,10 @@ Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifi
   rend sa taille d'avant.
 - **Clavier** : Super+← / → (moitiés), Super+↑ (agrandir), Super+↓ (restaurer),
   Super+F (agrandir / restaurer), Super+Tab (fenêtre suivante).
-- **Redimensionner** : Super+clic droit maintenu, puis glisser. Les bords des
-  fenêtres ne se saisissent pas encore.
+- **Redimensionner** : approcher le pointeur d'un bord ou d'un coin, juste à
+  l'extérieur de la fenêtre ; le curseur change de forme, il suffit alors de
+  glisser. Ou, n'importe où dans la fenêtre : Super+clic droit maintenu, puis
+  glisser (depuis le coin le plus proche).
 - **Neuf bureaux** : Super+1…9 pour y aller, Super+Maj+1…9 pour y envoyer la
   fenêtre active.
 

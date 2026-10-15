@@ -1,5 +1,5 @@
 //! Gestion des fenêtres : focus, agrandir / plein écran (et restauration),
-//! redimensionnement au Mod+clic droit, passage d'une fenêtre à l'autre.
+//! redimensionnement par les bords ou au Mod+clic droit, passage d'une fenêtre à l'autre.
 
 use smithay::{
     desktop::Window,
@@ -7,13 +7,18 @@ use smithay::{
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State, wayland_server::Resource,
     },
-    utils::{Logical, Rectangle, SERIAL_COUNTER, Serial},
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
 };
 
 use crate::{
     Odysseus,
     grabs::{ResizeSurfaceGrab, resize_grab::ResizeEdge},
 };
+
+/// Bande de saisie autour d'une fenêtre, à l'extérieur, et longueur des coins
+/// le long des côtés (pixels logiques)
+const EDGE_GRAB: f64 = 10.0;
+const EDGE_CORNER: f64 = 24.0;
 
 /// État demandé par un client avant que sa fenêtre soit placée
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +256,65 @@ impl Odysseus {
 
     /// Mod+clic droit glissé : redimensionner depuis le coin le plus proche du pointeur.
     pub fn start_mod_resize(&mut self, window: Window, button: u32, serial: Serial) {
+        let Some(loc) = self.space.element_location(&window) else {
+            return;
+        };
+        let rect = Rectangle::new(loc, window.geometry().size);
+        let pos = self.seat.get_pointer().unwrap().current_location();
+        let center = rect.to_f64().loc + rect.to_f64().size.downscale(2.0);
+        let horizontal = if pos.x < center.x {
+            ResizeEdge::LEFT
+        } else {
+            ResizeEdge::RIGHT
+        };
+        let vertical = if pos.y < center.y {
+            ResizeEdge::TOP
+        } else {
+            ResizeEdge::BOTTOM
+        };
+        self.start_resize(window, horizontal | vertical, button, serial);
+    }
+
+    /// Fenêtre dont un bord (ou un coin) est sous le pointeur, juste à
+    /// l'extérieur : pas sur une fenêtre, ni sur une fenêtre agrandie
+    pub fn edge_under(&self, pos: Point<f64, Logical>) -> Option<(Window, ResizeEdge)> {
+        if self.space.element_under(pos).is_some() || self.top_is_fullscreen() {
+            return None;
+        }
+        // Du dessus vers le dessous : la première fenêtre dont la bande contient le pointeur
+        self.space.elements().rev().find_map(|window| {
+            if self.is_maximized_or_fullscreen(window) {
+                return None;
+            }
+            let loc = self.space.element_location(window)?;
+            let r = Rectangle::new(loc, window.geometry().size).to_f64();
+            let (left, top) = (r.loc.x, r.loc.y);
+            let (right, bottom) = (left + r.size.w, top + r.size.h);
+            let inside_band = pos.x >= left - EDGE_GRAB
+                && pos.x < right + EDGE_GRAB
+                && pos.y >= top - EDGE_GRAB
+                && pos.y < bottom + EDGE_GRAB;
+            if !inside_band {
+                return None;
+            }
+            // Près d'un coin (moins de EDGE_CORNER), les deux côtés ; sinon un seul
+            let mut edges = ResizeEdge::empty();
+            if pos.x < left + EDGE_CORNER {
+                edges |= ResizeEdge::LEFT;
+            } else if pos.x >= right - EDGE_CORNER {
+                edges |= ResizeEdge::RIGHT;
+            }
+            if pos.y < top + EDGE_CORNER {
+                edges |= ResizeEdge::TOP;
+            } else if pos.y >= bottom - EDGE_CORNER {
+                edges |= ResizeEdge::BOTTOM;
+            }
+            (!edges.is_empty()).then(|| (window.clone(), edges))
+        })
+    }
+
+    /// Redimensionne `window` par ses bords `edges`, tant que le bouton est tenu
+    pub fn start_resize(&mut self, window: Window, edges: ResizeEdge, button: u32, serial: Serial) {
         let Some(toplevel) = window.toplevel().cloned() else {
             return;
         };
@@ -263,17 +327,6 @@ impl Odysseus {
         let rect = Rectangle::new(loc, window.geometry().size);
         let pointer = self.seat.get_pointer().unwrap();
         let pos = pointer.current_location();
-        let center = rect.to_f64().loc + rect.to_f64().size.downscale(2.0);
-        let horizontal = if pos.x < center.x {
-            ResizeEdge::LEFT
-        } else {
-            ResizeEdge::RIGHT
-        };
-        let vertical = if pos.y < center.y {
-            ResizeEdge::TOP
-        } else {
-            ResizeEdge::BOTTOM
-        };
 
         toplevel.with_pending_state(|s| {
             s.states.set(State::Resizing);
@@ -285,7 +338,7 @@ impl Odysseus {
             button,
             location: pos,
         };
-        let grab = ResizeSurfaceGrab::start(start_data, window, horizontal | vertical, rect);
+        let grab = ResizeSurfaceGrab::start(start_data, window, edges, rect);
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 }
