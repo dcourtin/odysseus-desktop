@@ -298,7 +298,7 @@ fn main() {
         .insert(event_loop.handle())
         .expect("source Wayland");
 
-    // Thème ou réglages changés : couleurs, taille et masquage suivent
+    // Thème, réglages ou favoris changés : couleurs, taille, masquage, cases suivent
     if let Some(fd) = theme::watch() {
         let _ = event_loop.handle().insert_source(
             Generic::new(fd, Interest::READ, Mode::Level),
@@ -306,6 +306,8 @@ fn main() {
                 theme::drain(fd.as_fd());
                 theme::reload();
                 dock.settings = Settings::load();
+                // Favoris modifiés à la main (~/.config/odysseus/dock) : suivis aussi
+                dock.pinned = load_pinned(&dock.apps);
                 dock.rebuild();
                 Ok(PostAction::Continue)
             },
