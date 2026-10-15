@@ -5,7 +5,7 @@
 #
 #   tools/vm.sh installer     installe la base (sans écran, ~15 min, réseau)
 #   tools/vm.sh neuf          repart d'une Debian neuve (copie jetable effacée)
-#   tools/vm.sh lancer        démarre l'essai dans une fenêtre (affichage accéléré)
+#   tools/vm.sh lancer        démarre l'essai dans une fenêtre
 #   tools/vm.sh sans-ecran    démarre l'essai sans fenêtre (piloté par ssh)
 #   tools/vm.sh ssh [cmd]     se connecte à l'essai (utilisateur odysseus)
 #   tools/vm.sh arreter       éteint l'essai proprement
@@ -135,8 +135,10 @@ lancer | sans-ecran)
     running && { echo "vm.sh : l'essai tourne déjà" >&2; exit 1; }
     [ -f essai.qcow2 ] || "$0" neuf
     if [ "$1" = lancer ]; then
-        # Fenêtre accélérée (virgl) et son par PipeWire : dans la session graphique
-        display="-device virtio-vga-gl -display gtk,gl=on \
+        # Fenêtre et son par PipeWire, dans la session graphique. Sans
+        # accélération : virgl demande l'OpenGL de bureau (libGL), que la Mesa
+        # Wayland seule de cette machine n'a pas ; le rendu se fait par le processeur.
+        display="-device virtio-vga -display gtk \
 -audiodev pipewire,id=son -device intel-hda -device hda-duplex,audiodev=son"
     else
         display="-display none -serial file:$DIR/console.log -daemonize"
