@@ -149,6 +149,10 @@ de volume affichent un indicateur.
   fenêtre, il y est déposé (un terminal reçoit les chemins). Des fichiers venant
   d'une autre application (ou d'une autre fenêtre Fichiers) sont copiés dans le
   dossier visé, ou dans le dossier affiché.
+- **Annuler** : Ctrl+Z défait la dernière opération, puis la précédente (jusqu'à
+  30) : mise à la corbeille, renommage, déplacement, collage, copie, duplication,
+  nouveau dossier, archive. Une copie défaite part à la corbeille ; rien n'est
+  jamais écrasé.
 - **Dupliquer** : Ctrl+D ou clic droit > Dupliquer (« nom copie » à côté).
 - **Compresser** : clic droit > Compresser ; « nom.zip » pour un élément,
   « Archive.zip » pour plusieurs.
@@ -158,7 +162,7 @@ de volume affichent un indicateur.
 - **Raccourcis** : Espace, Ctrl+O ou Ctrl+↓ (ouvrir ; une image s'ouvre dans
   l'Aperçu), Entrée ou F2 (renommer), Ctrl+↑ (dossier parent), Suppr
   (corbeille), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
-  Ctrl+V (copier, couper, coller), Ctrl+Z (annuler la mise à la corbeille),
+  Ctrl+V (copier, couper, coller), Ctrl+Z (annuler),
   Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).

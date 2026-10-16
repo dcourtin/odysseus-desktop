@@ -148,6 +148,10 @@ impl Files {
         }
         match std::fs::rename(&r.path, &target) {
             Ok(()) => {
+                self.record(crate::undo::Op::Renamed {
+                    from: r.path.clone(),
+                    to: target.clone(),
+                });
                 self.browser.reload();
                 if let Some(i) = self.browser.entries.iter().position(|e| e.path == target) {
                     self.browser.select(i);
@@ -204,6 +208,7 @@ impl Files {
         let path = free_name(&self.browser.cwd, "Nouveau dossier");
         match std::fs::create_dir(&path) {
             Ok(()) => {
+                self.record(crate::undo::Op::Created(vec![path.clone()]));
                 self.browser.reload();
                 if let Some(i) = self.browser.entries.iter().position(|e| e.path == path) {
                     self.browser.select(i);

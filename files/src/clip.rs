@@ -11,7 +11,7 @@ use std::{
 
 use smithay_client_toolkit::data_device_manager::{WritePipe, data_source::CopyPasteSource};
 
-use crate::{Files, dnd, info};
+use crate::{Files, dnd, info, undo::Op};
 
 const URI_LIST: &str = "text/uri-list";
 const GNOME: &str = "x-special/gnome-copied-files";
@@ -25,8 +25,14 @@ pub struct Clip {
     pub cut: bool,
 }
 
-/// Collage fini : dossier, éléments créés, message pour la barre d'état
-pub type Pasted = (PathBuf, Vec<PathBuf>, String);
+/// Collage (ou copie, archive) fini : dossier, éléments créés, message pour
+/// la barre d'état, opération à défaire
+pub struct Pasted {
+    pub dir: PathBuf,
+    pub created: Vec<PathBuf>,
+    pub message: String,
+    pub op: Option<Op>,
+}
 
 impl Clip {
     /// Données demandées par l'application qui colle
@@ -144,7 +150,16 @@ impl Files {
     }
 
     /// Collage fini : les éléments collés deviennent la sélection
-    pub fn pasted(&mut self, (dir, created, message): Pasted) {
+    pub fn pasted(&mut self, done: Pasted) {
+        let Pasted {
+            dir,
+            created,
+            message,
+            op,
+        } = done;
+        if let Some(op) = op {
+            self.record(op);
+        }
         if self.browser.cwd == dir {
             self.browser.reload();
             let picked: std::collections::HashSet<PathBuf> = created.into_iter().collect();
@@ -223,6 +238,7 @@ pub fn copy_name(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
 /// `verb` : participe du message (« collé », « dupliqué »…)
 pub fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path, verb: &str) -> Pasted {
     let mut created = Vec::new();
+    let mut moved = Vec::new();
     let mut errors = Vec::new();
     for src in paths {
         let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
@@ -237,7 +253,10 @@ pub fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path, verb: &str) -> Paste
                 continue;
             }
             match dnd::move_path(src, dir, false) {
-                Ok(()) => created.push(dir.join(&name)),
+                Ok(()) => {
+                    created.push(dir.join(&name));
+                    moved.push((src.clone(), dir.join(&name)));
+                }
                 Err(e) => errors.push(e),
             }
             continue;
@@ -272,7 +291,17 @@ pub fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path, verb: &str) -> Paste
         ),
         (n, None) => format!("{n} éléments {verb}s"),
     };
-    (dir.to_path_buf(), created, message)
+    let op = if cut {
+        Op::Moved(moved)
+    } else {
+        Op::Created(created.clone())
+    };
+    Pasted {
+        dir: dir.to_path_buf(),
+        created,
+        message,
+        op: Some(op),
+    }
 }
 
 #[cfg(test)]

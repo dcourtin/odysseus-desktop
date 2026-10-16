@@ -138,7 +138,7 @@ connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@6
 `nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
 
 Fichiers et Aperçu : Espace (Fichiers : ouvrir, une image dans l'Aperçu), Entrée (Fichiers : renommer), Suppr (corbeille, au
-format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
+format freedesktop), Ctrl+Z (annuler ; dans Fichiers, aussi un renommage, un déplacement, un collage, une copie, un nouveau dossier). Fichiers : clic sur un en-tête (trier,
 second clic pour inverser), clic sur un élément (panneau d'informations : copier
 le chemin, copier l'image, ouvrir, décompresser, terminal, demander à l'Assistant, corbeille), Ctrl+Maj+C (copier
 le chemin), Ctrl+C / Ctrl+X / Ctrl+V (copier, couper, coller des fichiers), F2 (renommer), Ctrl+Maj+N (nouveau dossier), clic droit (menu), glisser depuis le vide (zone de sélection), Ctrl+I (panneau), Ctrl+T (terminal dans le dossier affiché), double-clic sur

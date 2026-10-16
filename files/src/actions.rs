@@ -212,7 +212,12 @@ fn zip(dir: &Path, entries: &[(String, bool)], dest: &Path) -> Pasted {
     } else {
         Vec::new()
     };
-    (dir.to_path_buf(), created, message)
+    Pasted {
+        dir: dir.to_path_buf(),
+        op: Some(crate::undo::Op::Created(created.clone())),
+        created,
+        message,
+    }
 }
 
 #[cfg(test)]

@@ -187,8 +187,15 @@ impl Files {
             }
         }
         let n = moved.len();
+        if !to_trash {
+            let pairs = moved
+                .iter()
+                .filter_map(|m| Some((m.clone(), dir.join(m.file_name()?))))
+                .collect();
+            self.record(crate::undo::Op::Moved(pairs));
+        }
         let done = if to_trash {
-            self.last_trashed = moved;
+            self.record(crate::undo::Op::Trashed(moved));
             format!("{n} éléments mis à la corbeille — Ctrl+Z pour annuler")
         } else {
             format!("{n} éléments déplacés dans {}", dir.display())
@@ -212,7 +219,7 @@ impl Files {
         let message = if to_trash {
             match common::trash::trash(source) {
                 Ok(()) => {
-                    self.last_trashed = vec![source.to_path_buf()];
+                    self.record(crate::undo::Op::Trashed(vec![source.to_path_buf()]));
                     format!("« {name} » mis à la corbeille — Ctrl+Z pour annuler")
                 }
                 Err(e) => e,
@@ -229,6 +236,10 @@ impl Files {
                 .output()
             {
                 Ok(out) if out.status.success() => {
+                    self.record(crate::undo::Op::Moved(vec![(
+                        source.to_path_buf(),
+                        dir.join(&name),
+                    )]));
                     format!("« {name} » déplacé dans {}", dir.display())
                 }
                 Ok(out) => format!(

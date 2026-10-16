@@ -21,6 +21,7 @@ mod edit;
 mod field;
 mod info;
 mod model;
+mod undo;
 
 use std::os::fd::AsFd;
 use std::{
@@ -184,7 +185,8 @@ struct Files {
     last_click: Option<(Instant, usize)>,
     typed: (String, Instant),
     /// Derniers éléments mis à la corbeille (Ctrl+Z les remet)
-    last_trashed: Vec<PathBuf>,
+    /// Opérations à défaire (Ctrl+Z), la dernière en fin
+    undo: Vec<undo::Op>,
     /// Clic sans touche sur un élément d'une sélection multiple : elle se
     /// réduit à lui au relâchement, sauf si l'appui devient un glisser
     collapse: Option<usize>,
@@ -414,7 +416,7 @@ fn main() {
         hits: Vec::new(),
         last_click: None,
         typed: (String::new(), Instant::now()),
-        last_trashed: Vec::new(),
+        undo: Vec::new(),
         collapse: None,
         chrome: common::chrome::Chrome::default(),
         last_toolbar_click: None,
@@ -647,7 +649,7 @@ impl Files {
             Keysym::BackSpace => self.browser.back(),
             Keysym::F5 => self.browser.reload(),
             Keysym::Delete | Keysym::KP_Delete => return self.trash_selected(),
-            Keysym::z if ctrl => return self.undo_trash(),
+            Keysym::z if ctrl => return self.undo(),
             Keysym::h if ctrl => self.browser.toggle_hidden(),
             Keysym::C | Keysym::c if ctrl && self.modifiers.shift => return self.copy_path(),
             Keysym::c if ctrl => return self.clip_selection(false),
@@ -1015,9 +1017,7 @@ impl Files {
             }
         }
         let count = trashed.len();
-        if count > 0 {
-            self.last_trashed = trashed;
-        }
+        self.record(undo::Op::Trashed(trashed));
         self.browser.reload();
         self.browser.message = Some(match (count, error) {
             (_, Some(e)) if count == 0 => e,
@@ -1028,41 +1028,6 @@ impl Files {
             ),
             (n, None) => format!("{n} éléments mis à la corbeille — Ctrl+Z pour annuler"),
         });
-        self.navigated();
-    }
-
-    fn undo_trash(&mut self) {
-        let originals = std::mem::take(&mut self.last_trashed);
-        if originals.is_empty() {
-            return;
-        }
-        let items = common::trash::list();
-        let mut restored = 0;
-        let mut error = None;
-        for original in &originals {
-            match items.iter().find(|i| &i.original == original) {
-                Some(item) => match common::trash::restore(item) {
-                    Ok(()) => restored += 1,
-                    Err(e) => error = Some(e),
-                },
-                None => error = Some("Introuvable dans la corbeille".into()),
-            }
-        }
-        self.browser.message = Some(match error {
-            Some(e) if restored == 0 => e,
-            Some(e) => format!("{restored} élément(s) remis en place ; {e}"),
-            None if restored == 1 => format!(
-                "« {} » remis en place",
-                originals[0]
-                    .file_name()
-                    .map(|n| n.to_string_lossy())
-                    .unwrap_or_default()
-            ),
-            None => format!("{restored} éléments remis en place"),
-        });
-        let keep = self.browser.message.take();
-        self.browser.reload();
-        self.browser.message = keep;
         self.navigated();
     }
 
