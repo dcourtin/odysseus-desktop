@@ -201,18 +201,31 @@ pub fn restore(item: &Item) -> Result<(), String> {
 
 /// Vide la corbeille personnelle (suppression définitive).
 pub fn empty() -> Result<usize, String> {
-    let items = list();
-    let n = items.len();
-    for item in items {
-        let meta = item.path.symlink_metadata().map_err(|e| e.to_string())?;
-        if meta.is_dir() {
-            std::fs::remove_dir_all(&item.path).map_err(|e| e.to_string())?;
-        } else {
-            std::fs::remove_file(&item.path).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    let mut failed = None;
+    // Un élément qui résiste n'empêche pas de supprimer les autres
+    for item in list() {
+        let removed = match item.path.symlink_metadata() {
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&item.path),
+            Ok(_) => std::fs::remove_file(&item.path),
+            // Fichier déjà parti : il ne reste que sa fiche
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        };
+        match removed {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&item.info);
+                n += 1;
+            }
+            Err(e) => {
+                failed.get_or_insert_with(|| format!("« {} » : {e}", item.path.display()));
+            }
         }
-        let _ = std::fs::remove_file(&item.info);
     }
-    Ok(n)
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(n),
+    }
 }
 
 /// Dossier des fichiers de la corbeille personnelle (pour l'afficher dans Fichiers)

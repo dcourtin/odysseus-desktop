@@ -1493,7 +1493,61 @@ impl Files {
                 .icon(&mut c, glyph, bx + button / 2.0, mid, 14.0 * s, color);
             hit(bx, mid - button / 2.0, button, button, Hit::View(view));
         }
-        let buttons_left = view_x;
+        let mut buttons_left = view_x;
+        // Corbeille : « Remettre » et « Vider » (second clic pour confirmer), à
+        // gauche des boutons de la barre
+        if common::trash::files_dir().is_some_and(|t| self.browser.cwd == t)
+            && !self.browser.entries.is_empty()
+        {
+            let armed = self
+                .empty_armed
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(4));
+            let label = if armed {
+                "Confirmer ?"
+            } else {
+                "Vider la corbeille"
+            };
+            let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
+            let bx = view_x - 8.0 * s - lw;
+            let bh = 28.0 * s;
+            let bg = if armed {
+                theme::palette().danger
+            } else {
+                theme::palette().subtle
+            };
+            let fg = if armed {
+                theme::palette().on_accent
+            } else {
+                theme::palette().text
+            };
+            c.fill_rounded(bx, mid - bh / 2.0, lw, bh, 8.0 * s, bg);
+            self.regular.draw_in(
+                &mut c,
+                label,
+                bx + 12.0 * s,
+                mid - bh / 2.0,
+                bh,
+                13.0 * s,
+                fg,
+            );
+            hit(bx, mid - bh / 2.0, lw, bh, Hit::EmptyTrash);
+            // « Remettre » : l'élément sélectionné retourne à son emplacement
+            let rl = "Remettre";
+            let rw = self.regular.measure(rl, 13.0 * s) + 24.0 * s;
+            let rx = bx - rw - 8.0 * s;
+            c.fill_rounded(rx, mid - bh / 2.0, rw, bh, 8.0 * s, theme::palette().subtle);
+            self.regular.draw_in(
+                &mut c,
+                rl,
+                rx + 12.0 * s,
+                mid - bh / 2.0,
+                bh,
+                13.0 * s,
+                theme::palette().text,
+            );
+            hit(rx, mid - bh / 2.0, rw, bh, Hit::Restore);
+            buttons_left = rx;
+        }
         let search_w = if self.search.is_some() {
             (240.0 * s).min((right - x0) * 0.35)
         } else {
@@ -1609,58 +1663,6 @@ impl Files {
                 theme::palette().text,
             );
             hit(tx, mid - size / 2.0, size, size, what);
-        }
-        // Corbeille : bouton « Vider » à droite (second clic pour confirmer)
-        if common::trash::files_dir().is_some_and(|t| self.browser.cwd == t)
-            && !self.browser.entries.is_empty()
-        {
-            let armed = self
-                .empty_armed
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(4));
-            let label = if armed {
-                "Confirmer ?"
-            } else {
-                "Vider la corbeille"
-            };
-            let lw = self.regular.measure(label, 13.0 * s) + 24.0 * s;
-            let bx = right - lw - 56.0 * s;
-            let bh = 28.0 * s;
-            let bg = if armed {
-                theme::palette().danger
-            } else {
-                theme::palette().subtle
-            };
-            let fg = if armed {
-                theme::palette().on_accent
-            } else {
-                theme::palette().text
-            };
-            c.fill_rounded(bx, mid - bh / 2.0, lw, bh, 8.0 * s, bg);
-            self.regular.draw_in(
-                &mut c,
-                label,
-                bx + 12.0 * s,
-                mid - bh / 2.0,
-                bh,
-                13.0 * s,
-                fg,
-            );
-            hit(bx, mid - bh / 2.0, lw, bh, Hit::EmptyTrash);
-            // « Remettre » : l'élément sélectionné retourne à son emplacement
-            let rl = "Remettre";
-            let rw = self.regular.measure(rl, 13.0 * s) + 24.0 * s;
-            let rx = bx - rw - 8.0 * s;
-            c.fill_rounded(rx, mid - bh / 2.0, rw, bh, 8.0 * s, theme::palette().subtle);
-            self.regular.draw_in(
-                &mut c,
-                rl,
-                rx + 12.0 * s,
-                mid - bh / 2.0,
-                bh,
-                13.0 * s,
-                theme::palette().text,
-            );
-            hit(rx, mid - bh / 2.0, rw, bh, Hit::Restore);
         }
         c.fill_rounded(
             x0,
