@@ -14,6 +14,7 @@
 //! le panneau, Échap le ferme.
 
 mod archive;
+mod clip;
 mod dnd;
 mod edit;
 mod info;
@@ -121,6 +122,8 @@ enum Hit {
     AskAgent,
     /// Renommer l'élément (panneau d'informations)
     Rename,
+    /// Nouveau dossier (barre d'outils)
+    NewFolder,
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -157,6 +160,12 @@ struct Files {
     thumbs: channel::Sender<(PathBuf, Option<Image>)>,
     /// Fin d'une décompression (fil) : ce qui a été créé, ou l'erreur
     extracts: channel::Sender<Result<PathBuf, String>>,
+    /// Copier-coller de fichiers : ce que cette fenêtre a mis dans le
+    /// presse-papiers, fin d'un collage (fil), dernier numéro d'événement
+    /// (clavier ou clic) pour prendre le presse-papiers
+    clip: Option<clip::Clip>,
+    pastes: channel::Sender<clip::Pasted>,
+    serial: u32,
     loop_handle: LoopHandle<'static, Files>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -302,6 +311,15 @@ fn main() {
     // Vignettes du panneau d'informations, décodées dans un fil
     let (thumbs, thumb_rx) = channel::channel::<(PathBuf, Option<Image>)>();
     let (extracts, extract_rx) = channel::channel::<Result<PathBuf, String>>();
+    let (pastes, paste_rx) = channel::channel::<clip::Pasted>();
+    event_loop
+        .handle()
+        .insert_source(paste_rx, |event, _, files| {
+            if let ChannelEvent::Msg(done) = event {
+                files.pasted(done);
+            }
+        })
+        .expect("canal des collages");
     event_loop
         .handle()
         .insert_source(extract_rx, |event, _, files| {
@@ -374,6 +392,9 @@ fn main() {
         done: None,
         thumbs,
         extracts,
+        clip: None,
+        pastes,
+        serial: 0,
         loop_handle: event_loop.handle(),
         keyboard: None,
         pointer: None,
@@ -623,7 +644,10 @@ impl Files {
                 return;
             }
             Keysym::h if ctrl => self.browser.toggle_hidden(),
-            Keysym::c if ctrl => return self.copy_path(),
+            Keysym::C | Keysym::c if ctrl && self.modifiers.shift => return self.copy_path(),
+            Keysym::c if ctrl => return self.clip_selection(false),
+            Keysym::x if ctrl => return self.clip_selection(true),
+            Keysym::v if ctrl => return self.paste(),
             Keysym::t if ctrl => {
                 let dir = self.browser.cwd.clone();
                 return self.open_terminal(&dir);
@@ -735,6 +759,7 @@ impl Files {
             Some(Hit::Extract) => self.extract_selected(),
             Some(Hit::AskAgent) => self.ask_agent(),
             Some(Hit::Rename) => self.start_rename(),
+            Some(Hit::NewFolder) => self.new_folder(),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -945,6 +970,7 @@ impl Files {
                     | Hit::Extract
                     | Hit::AskAgent
                     | Hit::Rename
+                    | Hit::NewFolder
             )
         });
         if hover != self.hover {
@@ -1394,11 +1420,15 @@ impl Files {
                 cx += sep_w;
             }
         }
-        // Terminal dans le dossier affiché, à droite de la barre d'outils (Ctrl+T)
-        {
+        // À droite de la barre d'outils : nouveau dossier (Ctrl+Maj+N), et
+        // terminal dans le dossier affiché (Ctrl+T)
+        let mut buttons = vec![(icon::TERMINAL, Hit::Terminal(self.browser.cwd.clone()))];
+        if common::trash::files_dir().is_none_or(|t| self.browser.cwd != t) {
+            buttons.push((icon::FOLDER_PLUS, Hit::NewFolder));
+        }
+        for (i, (glyph, what)) in buttons.into_iter().enumerate() {
             let size = 28.0 * s;
-            let tx = right - 16.0 * s - size;
-            let what = Hit::Terminal(self.browser.cwd.clone());
+            let tx = right - 16.0 * s - size - i as f32 * (size + 8.0 * s);
             let bg = if self.done.as_ref().is_some_and(|(h, _)| *h == what) {
                 theme::palette().success.with_alpha(0.25)
             } else if self.hover.as_ref() == Some(&what) {
@@ -1409,7 +1439,7 @@ impl Files {
             c.fill_rounded(tx, mid - size / 2.0, size, size, 8.0 * s, bg);
             self.icons.icon(
                 &mut c,
-                icon::TERMINAL,
+                glyph,
                 tx + size / 2.0,
                 mid,
                 15.0 * s,
@@ -2313,9 +2343,10 @@ impl KeyboardHandler for Files {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: u32,
+        serial: u32,
         event: KeyEvent,
     ) {
+        self.serial = serial;
         self.key(event);
     }
     fn release_key(
@@ -2359,6 +2390,7 @@ impl PointerHandler for Files {
                     serial,
                     ..
                 } => {
+                    self.serial = serial;
                     // Menu ouvert : choisir une ligne, ou le fermer
                     if let Some(menu) = self.menu.as_ref() {
                         let item = menu.item_at(x, y).map(|i| menu.items[i].1);
@@ -2411,8 +2443,11 @@ impl PointerHandler for Files {
                     }
                 }
                 PointerEventKind::Press {
-                    button: BTN_RIGHT, ..
+                    button: BTN_RIGHT,
+                    serial,
+                    ..
                 } => {
+                    self.serial = serial;
                     if self.rename.is_some() {
                         self.commit_rename();
                     }

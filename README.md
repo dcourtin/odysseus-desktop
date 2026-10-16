@@ -93,7 +93,7 @@ la barre, l'icône du panneau ouvert est en surbrillance.*
 | `lock/` | `odysseus-lock` : écran de verrouillage (ext-session-lock, PAM) | fonctionne |
 | `launcher/` | Lanceur façon Spotlight (Mod+Espace) ; « ? question » ou dernière ligne : demander à l'Assistant | fonctionne |
 | `sysmon/` | `odysseus-moniteur` : moniteur système (icône jauge de la barre, colorée selon la charge) — processeur (charge, cœurs, fréquence, température), mémoire, disques (place, débits), carte graphique AMD (charge, mémoire vidéo, température, consommation), réseau, processus les plus actifs (arrêt en deux clics) ; courbes sur 60 s | fonctionne |
-| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions selon le type — décompresser une archive, terminal dans un dossier —, glisser-déposer vers d'autres fenêtres ou dans un dossier, renommage sur place — F2 ou clic droit —, menu du clic droit, nouveau dossier, sélection multiple — zone de sélection à la souris, Ctrl+clic, Maj+clic, Ctrl+A — et actions par lot) | fonctionne |
+| `files/` | Fichiers : explorateur (favoris, corbeille, appareils USB avec éjection, chemin cliquable, tri par nom · taille · date, panneau d'informations avec vignette et actions selon le type — décompresser une archive, terminal dans un dossier —, glisser-déposer vers d'autres fenêtres ou dans un dossier, renommage sur place — F2 ou clic droit —, menu du clic droit, nouveau dossier, copier · couper · coller — Ctrl+C, Ctrl+X, Ctrl+V, compatibles avec les autres explorateurs —, sélection multiple — zone de sélection à la souris, Ctrl+clic, Maj+clic, Ctrl+A — et actions par lot) | fonctionne |
 | `preview/` | `apercu` : visionneuse d'images (dossier parcouru aux flèches, zoom vers le pointeur, rotation, recadrage, infos EXIF, corbeille) | fonctionne |
 
 ## Raccourcis (Mod = Super sur tty, Alt dans une fenêtre sway)
@@ -140,8 +140,8 @@ connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@6
 Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
 second clic pour inverser), clic sur un élément (panneau d'informations : copier
-le chemin, copier l'image, ouvrir, décompresser, terminal, demander à l'Assistant, corbeille), Ctrl+C (copier
-le chemin), F2 (renommer), Ctrl+Maj+N (nouveau dossier), clic droit (menu), glisser depuis le vide (zone de sélection), Ctrl+I (panneau), Ctrl+T (terminal dans le dossier affiché), double-clic sur
+le chemin, copier l'image, ouvrir, décompresser, terminal, demander à l'Assistant, corbeille), Ctrl+Maj+C (copier
+le chemin), Ctrl+C / Ctrl+X / Ctrl+V (copier, couper, coller des fichiers), F2 (renommer), Ctrl+Maj+N (nouveau dossier), clic droit (menu), glisser depuis le vide (zone de sélection), Ctrl+I (panneau), Ctrl+T (terminal dans le dossier affiché), double-clic sur
 une archive (décompression à côté : zip, tar, gz, xz, bz2, zst), glisser un élément vers une autre fenêtre (un terminal reçoit son
 chemin) ou sur un dossier (déplacement). Aperçu : ← → (image précédente / suivante),
 molette (zoom), 0 / 1 (ajuster / taille réelle), R (pivoter), C puis Entrée

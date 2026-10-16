@@ -67,6 +67,9 @@ pub enum MenuItem {
     NewFolder,
     Terminal,
     ToggleHidden,
+    Copy,
+    Cut,
+    Paste,
 }
 
 pub struct Menu {
@@ -399,6 +402,10 @@ impl Files {
             if !multiple && !trash {
                 items.push(("Renommer", MenuItem::Rename));
             }
+            if !trash {
+                items.push(("Copier", MenuItem::Copy));
+                items.push(("Couper", MenuItem::Cut));
+            }
             items.push((
                 if multiple {
                     "Copier les chemins"
@@ -416,6 +423,9 @@ impl Files {
         } else {
             if !trash {
                 items.push(("Nouveau dossier", MenuItem::NewFolder));
+                if self.can_paste() {
+                    items.push(("Coller", MenuItem::Paste));
+                }
             }
             items.push(("Terminal ici", MenuItem::Terminal));
             items.push((
@@ -458,6 +468,9 @@ impl Files {
                 let dir = self.browser.cwd.clone();
                 self.open_terminal(&dir);
             }
+            MenuItem::Copy => self.clip_selection(false),
+            MenuItem::Cut => self.clip_selection(true),
+            MenuItem::Paste => self.paste(),
             MenuItem::ToggleHidden => {
                 self.browser.toggle_hidden();
                 self.navigated();

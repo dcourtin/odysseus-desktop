@@ -120,8 +120,13 @@ de volume affichent un indicateur.
   demander à l'Assistant, décompresser, corbeille ; pour toute la sélection si
   l'élément en fait partie), ou dans le vide (nouveau dossier, terminal ici,
   fichiers cachés).
-- **Nouveau dossier** : clic droit dans le vide, ou Ctrl+Maj+N ; il est créé
-  puis tout de suite proposé au renommage.
+- **Nouveau dossier** : bouton à droite de la barre d'outils, clic droit dans le
+  vide, ou Ctrl+Maj+N ; il est créé puis tout de suite proposé au renommage.
+- **Copier, couper, coller** : Ctrl+C / Ctrl+X sur la sélection, puis Ctrl+V dans
+  le dossier voulu (aussi au clic droit). Un fichier collé là où son nom existe
+  devient « nom copie.ext » ; couper puis coller déplace. Les éléments collés
+  restent sélectionnés. Fonctionne entre fenêtres de Fichiers et avec les
+  autres explorateurs ; collé dans un terminal, cela donne les chemins.
 - **Sélection multiple** :
   - zone de sélection : glisser depuis un espace vide, ou depuis les colonnes
     taille et date d'une ligne (glisser depuis le nom déplace l'élément) ; avec
@@ -143,8 +148,9 @@ de volume affichent un indicateur.
   (liste, favoris, chemin) le déplace ; vers une autre fenêtre, il y est déposé (un
   terminal reçoit les chemins).
 - **Raccourcis** : Entrée (ouvrir), Espace (aperçu d'une image), Suppr
-  (corbeille), F2 (renommer), Ctrl+Maj+N (nouveau dossier), Ctrl+Z (annuler la
-  mise à la corbeille), Ctrl+C (copier le chemin),
+  (corbeille), F2 (renommer), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
+  Ctrl+V (copier, couper, coller), Ctrl+Z (annuler la mise à la corbeille),
+  Ctrl+Maj+C (copier le chemin),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).
 - **Clés USB et disques externes** : sous « Appareils », avec un bouton d'éjection.

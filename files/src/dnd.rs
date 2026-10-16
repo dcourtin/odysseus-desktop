@@ -219,7 +219,7 @@ impl Files {
 }
 
 /// Déplace un élément dans `dir` (ou à la corbeille), sans rien écraser
-fn move_path(source: &Path, dir: &Path, to_trash: bool) -> Result<(), String> {
+pub fn move_path(source: &Path, dir: &Path, to_trash: bool) -> Result<(), String> {
     let name = source
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -337,6 +337,9 @@ impl DataSourceHandler for Files {
         mime: String,
         mut fd: WritePipe,
     ) {
+        if let Some(clip) = self.clip.as_ref().filter(|c| c.source.inner() == source) {
+            return clip.send(&mime, fd);
+        }
         let Some(drag) = self.drag.as_ref().filter(|d| d.source.inner() == source) else {
             return;
         };
@@ -354,7 +357,16 @@ impl DataSourceHandler for Files {
         let _ = fd.write_all(data.as_bytes());
     }
 
-    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {
+    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
+        // Presse-papiers repris par une autre application
+        if self
+            .clip
+            .as_ref()
+            .is_some_and(|c| c.source.inner() == source)
+        {
+            self.clip = None;
+            return;
+        }
         self.end_drag();
     }
 
