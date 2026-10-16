@@ -13,7 +13,7 @@ use common::{
 use smithay_client_toolkit::seat::keyboard::KeyEvent;
 
 use crate::{
-    Files, ROW_H,
+    Files,
     field::{Field, Outcome},
 };
 
@@ -250,32 +250,34 @@ impl Files {
         });
     }
 
-    /// La zone s'étend : les lignes qu'elle touche sont sélectionnées
+    /// La zone s'étend : les lignes (ou tuiles) qu'elle touche sont sélectionnées
     pub fn move_band(&mut self, x: f64, y: f64) {
         let Some(band) = self.band.as_mut() else {
             return;
         };
         band.now = (x, y);
+        let (x0, x1) = (band.start.0.min(x), band.start.0.max(x));
         let (y0, y1) = (band.start.1.min(y), band.start.1.max(y));
-        let top = self.rows_top;
-        let first = self.browser.scroll as f64;
-        let row = |yy: f64| first + ((yy - top) / ROW_H as f64).floor();
-        let n = self.browser.entries.len();
-        let (a, b) = (row(y0).max(0.0) as usize, row(y1).max(-1.0));
         let mut set = band.base.clone();
-        if b >= 0.0 {
-            for i in a..=(b as usize).min(n.saturating_sub(1)) {
-                if let Some(e) = self.browser.entries.get(i) {
-                    set.insert(e.path.clone());
-                }
+        let mut touched = Vec::new();
+        for (i, (rx, ry, rw, rh)) in &self.item_rects {
+            if *rx < x1 && rx + rw > x0 && *ry < y1 && ry + rh > y0 {
+                touched.push(*i);
             }
         }
+        for i in &touched {
+            if let Some(e) = self.browser.entries.get(*i) {
+                set.insert(e.path.clone());
+            }
+        }
+        // Curseur du côté où va le pointeur
         let cursor = if y >= band.start.1 {
-            b.max(0.0) as usize
+            touched.last()
         } else {
-            a
+            touched.first()
         };
-        self.browser.pick_set(set, cursor.min(n.saturating_sub(1)));
+        let cursor = cursor.copied().unwrap_or(self.browser.selected);
+        self.browser.pick_set(set, cursor);
         self.draw();
     }
 

@@ -19,6 +19,7 @@ mod clip;
 mod dnd;
 mod edit;
 mod field;
+mod grid;
 mod info;
 mod model;
 mod search;
@@ -81,6 +82,8 @@ const TOOLBAR_H: f32 = 52.0;
 const CHROME_Y: f32 = TOOLBAR_H / 2.0;
 const HEADER_H: f32 = 28.0;
 const ROW_H: f32 = 30.0;
+/// Vue en icônes : marge entre la barre d'outils et la première rangée
+const GRID_TOP: f32 = 12.0;
 const STATUS_H: f32 = 28.0;
 const SIZE_COL_W: f32 = 96.0;
 const DATE_COL_W: f32 = 168.0;
@@ -130,6 +133,8 @@ enum Hit {
     NewFolder,
     /// Champ du chemin tapé
     Goto,
+    /// Liste ou icônes
+    View(grid::View),
     /// Bouton de recherche, son champ, sa portée (sous-dossiers ou non)
     Search,
     SearchField,
@@ -205,6 +210,11 @@ struct Files {
     goto: Option<field::Field>,
     /// Recherche (Ctrl+F), et lots de résultats du fil des sous-dossiers
     search: Option<search::Search>,
+    /// Liste ou icônes ; vignettes de la grille ; tuiles ou lignes affichées
+    /// (pixels logiques), pour la sélection par zone
+    view: grid::View,
+    tiles: grid::Thumbs,
+    item_rects: Vec<grid::ItemRect>,
     found: channel::Sender<search::Found>,
     band: Option<edit::Band>,
     menu: Option<edit::Menu>,
@@ -329,6 +339,16 @@ fn main() {
     let (extracts, extract_rx) = channel::channel::<Result<PathBuf, String>>();
     let (pastes, paste_rx) = channel::channel::<clip::Pasted>();
     let (found, found_rx) = channel::channel::<search::Found>();
+    let (tile_tx, tile_rx) = channel::channel::<(PathBuf, Option<Image>)>();
+    event_loop
+        .handle()
+        .insert_source(tile_rx, |event, _, files| {
+            if let ChannelEvent::Msg((path, image)) = event {
+                files.tiles.store(path, image);
+                files.draw();
+            }
+        })
+        .expect("canal des vignettes de la grille");
     event_loop
         .handle()
         .insert_source(found_rx, |event, _, files| {
@@ -440,6 +460,9 @@ fn main() {
         rename: None,
         goto: None,
         search: None,
+        view: grid::View::load(),
+        tiles: grid::Thumbs::new(tile_tx),
+        item_rects: Vec::new(),
         found,
         band: None,
         menu: None,
@@ -476,20 +499,55 @@ impl Files {
         self.window.set_title(format!("{name} — Fichiers"));
     }
 
+    /// Rangées entièrement visibles (lignes de la liste, ou rangées de tuiles)
     fn visible_rows(&self) -> usize {
-        let list_h = self.height as f32 - TOOLBAR_H - HEADER_H - STATUS_H;
-        (list_h / ROW_H).floor().max(1.0) as usize
+        match self.view {
+            grid::View::List => {
+                let list_h = self.height as f32 - TOOLBAR_H - HEADER_H - STATUS_H;
+                (list_h / ROW_H).floor().max(1.0) as usize
+            }
+            grid::View::Icons => {
+                let list_h = self.height as f32 - TOOLBAR_H - GRID_TOP - STATUS_H;
+                (list_h / grid::TILE_H).floor().max(1.0) as usize
+            }
+        }
     }
 
-    /// Faire défiler pour que la sélection reste visible.
+    /// Éléments par rangée : 1 en liste, les colonnes de la grille sinon
+    fn grid_cols(&self) -> usize {
+        match self.view {
+            grid::View::List => 1,
+            grid::View::Icons => {
+                let info = if self.info_visible() { INFO_W } else { 0.0 };
+                grid::columns(self.width as f32 - SIDEBAR_W - info - 32.0)
+            }
+        }
+    }
+
+    /// Faire défiler pour que la sélection reste visible (par rangées).
     fn follow_selection(&mut self) {
         let rows = self.visible_rows();
+        let cols = self.grid_cols();
         let b = &mut self.browser;
-        if b.selected < b.scroll {
-            b.scroll = b.selected;
-        } else if b.selected >= b.scroll + rows {
-            b.scroll = b.selected + 1 - rows;
+        let (row, first) = (b.selected / cols, b.scroll / cols);
+        let first = if row < first {
+            row
+        } else if row >= first + rows {
+            row + 1 - rows
+        } else {
+            first
+        };
+        b.scroll = first * cols;
+    }
+
+    /// Ctrl+1 : icônes, Ctrl+2 : liste (comme Cmd+1 / Cmd+2 du Finder)
+    fn set_view(&mut self, view: grid::View) {
+        if self.view != view {
+            self.view = view;
+            view.save();
         }
+        self.follow_selection();
+        self.draw();
     }
 
     fn navigated(&mut self) {
@@ -629,15 +687,30 @@ impl Files {
         {
             return self.new_folder();
         }
+        // Touches 1 et 2 de la rangée des chiffres (codes evdev), quelle que
+        // soit la disposition
+        if self.modifiers.ctrl && matches!(event.raw_code, 2 | 3) {
+            let view = if event.raw_code == 2 {
+                grid::View::Icons
+            } else {
+                grid::View::List
+            };
+            return self.set_view(view);
+        }
         let n = self.browser.entries.len();
-        let page = self.visible_rows().saturating_sub(1).max(1);
+        let cols = self.grid_cols();
+        let grid = self.view == grid::View::Icons;
+        let page = self.visible_rows().saturating_sub(1).max(1) * cols;
         let alt = self.modifiers.alt;
         let ctrl = self.modifiers.ctrl;
         let cur = self.browser.selected;
-        // Déplacement : Maj étend la sélection
+        // Déplacement : Maj étend la sélection ; dans la grille, ← → d'une
+        // case, ↑ ↓ d'une rangée
         let goto = match event.keysym {
-            Keysym::Down if n > 0 && !alt && !ctrl => Some((cur + 1).min(n - 1)),
-            Keysym::Up if !alt && !ctrl => Some(cur.saturating_sub(1)),
+            Keysym::Down if n > 0 && !alt && !ctrl => Some((cur + cols).min(n - 1)),
+            Keysym::Up if !alt && !ctrl => Some(cur.saturating_sub(cols)),
+            Keysym::Right if grid && n > 0 && !alt && !ctrl => Some((cur + 1).min(n - 1)),
+            Keysym::Left if grid && !alt && !ctrl => Some(cur.saturating_sub(1)),
             Keysym::Next if n > 0 => Some((cur + page).min(n - 1)),
             Keysym::Prior => Some(cur.saturating_sub(page)),
             Keysym::Home => Some(0),
@@ -748,7 +821,11 @@ impl Files {
                 if !(double && self.browser.multiple()) {
                     self.browser.select(i);
                 }
-                self.info = true;
+                // En liste, un clic montre le panneau d'informations ; pas dans
+                // la grille, qui changerait de colonnes sous le pointeur
+                if self.view == grid::View::List {
+                    self.info = true;
+                }
                 self.last_click = Some((Instant::now(), i));
                 if double {
                     self.last_click = None;
@@ -793,6 +870,7 @@ impl Files {
             Some(Hit::NewFolder) => self.new_folder(),
             Some(Hit::Goto) => {}
             Some(Hit::Search) => self.start_search(),
+            Some(Hit::View(view)) => self.set_view(view),
             Some(Hit::SearchField) => self.draw(),
             Some(Hit::Scope(deep)) => self.set_scope(deep),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
@@ -1167,6 +1245,9 @@ impl Files {
         // Bord droit de la liste (le panneau d'informations prend la suite)
         let right = w as f32 - info_px;
         let rows = self.visible_rows();
+        // Le défilement tombe sur le début d'une rangée (la largeur a pu changer)
+        let cols = self.grid_cols();
+        self.browser.scroll -= self.browser.scroll % cols;
         let Ok((buffer, data)) =
             self.pool
                 .create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
@@ -1373,6 +1454,46 @@ impl Files {
         }
         let button = 28.0 * s;
         let buttons_left = right - 16.0 * s - buttons.len() as f32 * (button + 8.0 * s) + 8.0 * s;
+        // Liste | icônes, à gauche des boutons
+        let view_w = 2.0 * button + 4.0 * s;
+        let view_x = buttons_left - 8.0 * s - view_w;
+        c.fill_rounded(
+            view_x,
+            mid - button / 2.0,
+            view_w,
+            button,
+            8.0 * s,
+            theme::palette().subtle,
+        );
+        for (i, (glyph, view)) in [
+            (icon::LIST, grid::View::List),
+            (icon::LAYOUT_GRID, grid::View::Icons),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bx = view_x + 2.0 * s + i as f32 * button;
+            let active = self.view == view;
+            if active {
+                c.fill_rounded(
+                    bx,
+                    mid - button / 2.0 + 2.0 * s,
+                    button,
+                    button - 4.0 * s,
+                    6.0 * s,
+                    theme::palette().tile_hover(),
+                );
+            }
+            let color = if active {
+                theme::palette().text
+            } else {
+                theme::palette().text_dim
+            };
+            self.icons
+                .icon(&mut c, glyph, bx + button / 2.0, mid, 14.0 * s, color);
+            hit(bx, mid - button / 2.0, button, button, Hit::View(view));
+        }
+        let buttons_left = view_x;
         let search_w = if self.search.is_some() {
             (240.0 * s).min((right - x0) * 0.35)
         } else {
@@ -1557,44 +1678,50 @@ impl Files {
         let size_x = date_x - SIZE_COL_W * s - 16.0 * s;
         let header_y = TOOLBAR_H * s;
         let sort = self.browser.sort;
-        for (label, x, key, col_w) in [
-            (
-                "Nom",
-                list_x + 36.0 * s,
-                SortKey::Name,
-                size_x - list_x - 52.0 * s,
-            ),
-            ("Taille", size_x, SortKey::Size, SIZE_COL_W * s),
-            ("Modifié", date_x, SortKey::Modified, DATE_COL_W * s),
-        ] {
-            let active = sort.key == key;
-            let (font, color) = if active {
-                (&self.bold, theme::palette().text)
-            } else {
-                (&self.regular, theme::palette().text_dim)
-            };
-            font.draw_in(&mut c, label, x, header_y, HEADER_H * s, 12.0 * s, color);
-            if active {
-                let lw = font.measure(label, 12.0 * s);
-                let glyph = if sort.descending {
-                    icon::CHEVRON_DOWN
+        // En-têtes : seulement en liste
+        if self.view == grid::View::List {
+            for (label, x, key, col_w) in [
+                (
+                    "Nom",
+                    list_x + 36.0 * s,
+                    SortKey::Name,
+                    size_x - list_x - 52.0 * s,
+                ),
+                ("Taille", size_x, SortKey::Size, SIZE_COL_W * s),
+                ("Modifié", date_x, SortKey::Modified, DATE_COL_W * s),
+            ] {
+                let active = sort.key == key;
+                let (font, color) = if active {
+                    (&self.bold, theme::palette().text)
                 } else {
-                    icon::CHEVRON_UP
+                    (&self.regular, theme::palette().text_dim)
                 };
-                self.icons.icon(
-                    &mut c,
-                    glyph,
-                    x + lw + 10.0 * s,
-                    header_y + HEADER_H * s / 2.0,
-                    12.0 * s,
-                    color,
-                );
+                font.draw_in(&mut c, label, x, header_y, HEADER_H * s, 12.0 * s, color);
+                if active {
+                    let lw = font.measure(label, 12.0 * s);
+                    let glyph = if sort.descending {
+                        icon::CHEVRON_DOWN
+                    } else {
+                        icon::CHEVRON_UP
+                    };
+                    self.icons.icon(
+                        &mut c,
+                        glyph,
+                        x + lw + 10.0 * s,
+                        header_y + HEADER_H * s / 2.0,
+                        12.0 * s,
+                        color,
+                    );
+                }
+                hit(x - 6.0 * s, header_y, col_w, HEADER_H * s, Hit::SortBy(key));
             }
-            hit(x - 6.0 * s, header_y, col_w, HEADER_H * s, Hit::SortBy(key));
         }
 
         // Liste
-        let top = header_y + HEADER_H * s;
+        let top = match self.view {
+            grid::View::List => header_y + HEADER_H * s,
+            grid::View::Icons => header_y + GRID_TOP * s,
+        };
         let b = &self.browser;
         if b.entries.is_empty() && b.message.is_none() {
             let msg = match self.search.as_ref() {
@@ -1615,111 +1742,137 @@ impl Files {
             );
         }
         let mut name_ends = Vec::new();
-        for (row, idx) in (b.scroll..b.entries.len().min(b.scroll + rows)).enumerate() {
-            let e = &b.entries[idx];
-            let ry = top + row as f32 * ROW_H * s;
-            let rh = ROW_H * s;
-            if e.is_dir && self.drop_target.as_ref() == Some(&e.path) {
-                let a = theme::palette().accent.with_alpha(0.45);
-                c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, a);
-            } else if b.is_picked(idx) {
-                let mut sel = theme::palette().accent;
-                sel.a = 0.25;
-                c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, sel);
-            }
-            if e.is_dir {
-                draw_folder_icon(
-                    &mut c,
-                    list_x + 6.0 * s,
-                    ry + 7.0 * s,
-                    16.0 * s,
-                    theme::palette().accent,
-                );
-            } else {
-                draw_file_icon(
-                    &mut c,
-                    list_x + 8.0 * s,
-                    ry + 6.0 * s,
-                    13.0 * s,
-                    theme::palette().text_dim,
-                );
-            }
-            let name_max = size_x - (list_x + 36.0 * s) - 16.0 * s;
-            let name = self.regular.truncate(&e.name, 14.0 * s, name_max);
-            let renaming = self.rename.as_ref().filter(|r| r.path == e.path);
-            if let Some(r) = renaming {
-                Files::draw_rename_field(
-                    &self.regular,
-                    r,
-                    &mut c,
-                    list_x + 36.0 * s,
-                    ry,
-                    name_max,
-                    rh,
-                    s,
-                );
-            } else {
-                self.regular.draw_in(
-                    &mut c,
-                    &name,
-                    list_x + 36.0 * s,
-                    ry,
-                    rh,
-                    14.0 * s,
-                    theme::palette().text,
-                );
-            }
-            let name_end = if renaming.is_some() {
-                list_x + 36.0 * s + name_max
-            } else {
-                list_x + 36.0 * s + self.regular.measure(&name, 14.0 * s)
+        let mut item_rects = Vec::new();
+        let mut missing = Vec::new();
+        if self.view == grid::View::Icons {
+            let tiles = grid::Tiles {
+                regular: &self.regular,
+                bold: &self.bold,
+                browser: b,
+                thumbs: &self.tiles,
+                rename: self.rename.as_ref(),
+                drop_target: self.drop_target.as_ref(),
             };
-            // Recherche dans les sous-dossiers : où se trouve l'élément
-            if let Some(place) = e.place.as_ref().filter(|_| renaming.is_none()) {
-                let label = if place.is_empty() {
-                    "ici"
-                } else {
-                    place.as_str()
-                };
-                let room = size_x - 16.0 * s - (name_end + 12.0 * s);
-                if room > 40.0 * s {
-                    let text = self.regular.truncate(label, 12.0 * s, room);
-                    self.regular.draw_in(
+            let bottom = h as f32 - STATUS_H * s;
+            (item_rects, missing) = tiles.draw(&mut c, x0, top, right, bottom, s, &mut hit);
+            // Toute la tuile se saisit (glisser), pas seulement le nom
+            name_ends.extend(item_rects.iter().map(|(i, _)| (*i, f64::INFINITY)));
+        } else {
+            for (row, idx) in (b.scroll..b.entries.len().min(b.scroll + rows)).enumerate() {
+                let e = &b.entries[idx];
+                let ry = top + row as f32 * ROW_H * s;
+                let rh = ROW_H * s;
+                if e.is_dir && self.drop_target.as_ref() == Some(&e.path) {
+                    let a = theme::palette().accent.with_alpha(0.45);
+                    c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, a);
+                } else if b.is_picked(idx) {
+                    let mut sel = theme::palette().accent;
+                    sel.a = 0.25;
+                    c.fill_rounded(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, 8.0 * s, sel);
+                }
+                if e.is_dir {
+                    draw_folder_icon(
                         &mut c,
-                        &text,
-                        name_end + 12.0 * s,
-                        ry,
-                        rh,
-                        12.0 * s,
+                        list_x + 6.0 * s,
+                        ry + 7.0 * s,
+                        16.0 * s,
+                        theme::palette().accent,
+                    );
+                } else {
+                    draw_file_icon(
+                        &mut c,
+                        list_x + 8.0 * s,
+                        ry + 6.0 * s,
+                        13.0 * s,
                         theme::palette().text_dim,
                     );
                 }
+                let name_max = size_x - (list_x + 36.0 * s) - 16.0 * s;
+                let name = self.regular.truncate(&e.name, 14.0 * s, name_max);
+                let renaming = self.rename.as_ref().filter(|r| r.path == e.path);
+                if let Some(r) = renaming {
+                    Files::draw_rename_field(
+                        &self.regular,
+                        r,
+                        &mut c,
+                        list_x + 36.0 * s,
+                        ry,
+                        name_max,
+                        rh,
+                        s,
+                    );
+                } else {
+                    self.regular.draw_in(
+                        &mut c,
+                        &name,
+                        list_x + 36.0 * s,
+                        ry,
+                        rh,
+                        14.0 * s,
+                        theme::palette().text,
+                    );
+                }
+                let name_end = if renaming.is_some() {
+                    list_x + 36.0 * s + name_max
+                } else {
+                    list_x + 36.0 * s + self.regular.measure(&name, 14.0 * s)
+                };
+                // Recherche dans les sous-dossiers : où se trouve l'élément
+                if let Some(place) = e.place.as_ref().filter(|_| renaming.is_none()) {
+                    let label = if place.is_empty() {
+                        "ici"
+                    } else {
+                        place.as_str()
+                    };
+                    let room = size_x - 16.0 * s - (name_end + 12.0 * s);
+                    if room > 40.0 * s {
+                        let text = self.regular.truncate(label, 12.0 * s, room);
+                        self.regular.draw_in(
+                            &mut c,
+                            &text,
+                            name_end + 12.0 * s,
+                            ry,
+                            rh,
+                            12.0 * s,
+                            theme::palette().text_dim,
+                        );
+                    }
+                }
+                name_ends.push((idx, (name_end / s) as f64));
+                let size = if e.is_dir {
+                    "—".to_string()
+                } else {
+                    format_size(e.size)
+                };
+                self.regular.draw_in(
+                    &mut c,
+                    &size,
+                    size_x,
+                    ry,
+                    rh,
+                    13.0 * s,
+                    theme::palette().text_dim,
+                );
+                self.regular.draw_in(
+                    &mut c,
+                    &format_date(e.modified),
+                    date_x,
+                    ry,
+                    rh,
+                    13.0 * s,
+                    theme::palette().text_dim,
+                );
+                hit(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, Hit::Row(idx));
+                item_rects.push((
+                    idx,
+                    (
+                        (x0 / s + 8.0) as f64,
+                        (ry / s) as f64,
+                        ((right - x0) / s - 16.0) as f64,
+                        ROW_H as f64,
+                    ),
+                ));
             }
-            name_ends.push((idx, (name_end / s) as f64));
-            let size = if e.is_dir {
-                "—".to_string()
-            } else {
-                format_size(e.size)
-            };
-            self.regular.draw_in(
-                &mut c,
-                &size,
-                size_x,
-                ry,
-                rh,
-                13.0 * s,
-                theme::palette().text_dim,
-            );
-            self.regular.draw_in(
-                &mut c,
-                &format_date(e.modified),
-                date_x,
-                ry,
-                rh,
-                13.0 * s,
-                theme::palette().text_dim,
-            );
-            hit(x0 + 8.0 * s, ry, right - x0 - 16.0 * s, rh, Hit::Row(idx));
         }
 
         // Barre d'état
@@ -1859,6 +2012,8 @@ impl Files {
             );
         }
         self.name_ends = name_ends;
+        self.item_rects = item_rects;
+        self.tiles.want(missing);
         self.rows_top = (top / s) as f64;
         if let Some(band) = self.band.as_ref() {
             Files::draw_band(band, &mut c, s);
@@ -2640,12 +2795,12 @@ impl PointerHandler for Files {
                     self.collapse = None;
                 }
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
-                    let max = self
-                        .browser
-                        .entries
-                        .len()
-                        .saturating_sub(self.visible_rows());
-                    let step = if vertical.absolute > 0.0 { 3isize } else { -3 };
+                    // Par rangées : trois lignes de la liste, une rangée de tuiles
+                    let cols = self.grid_cols();
+                    let rows = self.browser.entries.len().div_ceil(cols);
+                    let max = rows.saturating_sub(self.visible_rows()) * cols;
+                    let unit = if cols > 1 { cols } else { 3 } as isize;
+                    let step = if vertical.absolute > 0.0 { unit } else { -unit };
                     self.browser.scroll =
                         (self.browser.scroll as isize + step).clamp(0, max as isize) as usize;
                     self.draw();

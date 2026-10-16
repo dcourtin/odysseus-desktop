@@ -382,6 +382,7 @@ pub mod icon {
     pub const FOLDER: char = '\u{e0d7}';
     pub const FOLDER_PLUS: char = '\u{e0d9}';
     pub const PENCIL: char = '\u{e1f9}';
+    pub const LAYOUT_GRID: char = '\u{e0ff}';
     pub const FOLDER_INPUT: char = '\u{e334}';
     pub const NOTEBOOK: char = '\u{e595}';
     pub const NOTEBOOK_PEN: char = '\u{e596}';

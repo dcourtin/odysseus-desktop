@@ -110,6 +110,10 @@ de volume affichent un indicateur.
   pour revenir ou avancer, Alt+↑ pour le dossier parent. Taper les premières
   lettres d'un nom saute dessus.
 - **Trier** : clic sur un en-tête (nom, taille, date), second clic pour inverser.
+- **Liste ou icônes** : le sélecteur à droite de la barre d'outils, ou Ctrl+1
+  (icônes) et Ctrl+2 (liste) ; le choix est gardé. En icônes, les images
+  montrent leur vignette, ← → passent d'une case à l'autre, ↑ ↓ d'une rangée ;
+  le panneau d'informations s'ouvre avec Ctrl+I.
 - **Panneau d'informations** (clic sur un élément, Ctrl+I) : vignette, détails, et
   actions selon le type (ouvrir, décompresser, terminal dans ce dossier, copier le
   chemin ou l'image, demander à l'Assistant, corbeille).
@@ -168,7 +172,7 @@ de volume affichent un indicateur.
   l'Aperçu), Entrée ou F2 (renommer), Ctrl+↑ (dossier parent), Suppr
   (corbeille), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
   Ctrl+V (copier, couper, coller), Ctrl+Z (annuler),
-  Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin), Ctrl+F (rechercher),
+  Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin), Ctrl+F (rechercher), Ctrl+1 / Ctrl+2 (icônes, liste),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).
 - **Clés USB et disques externes** : sous « Appareils », avec un bouton d'éjection.
