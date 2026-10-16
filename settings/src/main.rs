@@ -280,6 +280,10 @@ enum Hit {
     UpdatePrepare(usize),
     UpdateIgnore(usize),
     Theme(usize),
+    /// Thème personnalisé : base sombre (vrai) ou claire, accent, fond
+    CustomBase(bool),
+    CustomAccent(u32),
+    CustomBg(u32),
     Fond(usize),
     FondUni,
     /// Croix sur une de vos images : la mettre à la corbeille
@@ -362,6 +366,8 @@ struct App {
     /// Accueil en cours : étape (index dans WIZARD)
     wizard: Option<usize>,
     settings: Settings,
+    /// Thème personnalisé (Apparence), tel qu'enregistré
+    custom: theme::Custom,
     /// Agent du bureau : ~/.config/odysseus/agent.json (modifiable à la main)
     agent: common::agent::AgentConfig,
     screen: Option<Screen>,
@@ -547,6 +553,7 @@ fn main() {
         page,
         wizard: std::env::args().any(|a| a == "--accueil").then_some(0),
         settings: Settings::load(),
+        custom: theme::Custom::load(),
         agent: common::agent::AgentConfig::load(),
         screen: system::screen(),
         night: system::night_mode(),
@@ -943,6 +950,14 @@ impl App {
         );
     }
 
+    /// Enregistre le thème personnalisé et le met en vigueur
+    fn set_custom(&mut self, c: theme::Custom) {
+        self.custom = c;
+        if let Err(e) = theme::set_custom(&c) {
+            self.toast(format!("Thème : {e}"));
+        }
+    }
+
     fn set_wallpaper(&mut self, value: Option<String>) {
         self.settings.wallpaper = value;
         self.save();
@@ -1084,10 +1099,34 @@ impl App {
                     }
                 }
             }
+            Hit::Theme(i) if i == theme::THEMES.len() => self.set_custom(self.custom),
             Hit::Theme(i) => {
                 if let Err(e) = theme::set(theme::THEMES[i].id) {
                     self.toast(format!("Thème : {e}"));
                 }
+            }
+            Hit::CustomBase(dark) => {
+                let mut c = self.custom;
+                if c.dark != dark {
+                    // Changer de base change de fond : le premier de la gamme
+                    c.dark = dark;
+                    c.background = custom_backgrounds(dark)[0].0;
+                }
+                self.set_custom(c);
+            }
+            Hit::CustomAccent(accent) => {
+                let c = theme::Custom {
+                    accent,
+                    ..self.custom
+                };
+                self.set_custom(c);
+            }
+            Hit::CustomBg(background) => {
+                let c = theme::Custom {
+                    background,
+                    ..self.custom
+                };
+                self.set_custom(c);
             }
             Hit::Fond(i) => {
                 if let Some(f) = self.fonds.get(i).filter(|f| f.path.exists()) {
@@ -1555,10 +1594,14 @@ impl App {
     fn page_apparence(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
         let p = theme::palette();
         let mut y = ui.section(x, y, "Thème");
-        let gap = 16.0;
-        let cw = (w - 2.0 * gap) / 3.0;
+        let gap = 14.0;
+        let n = theme::THEMES.len() + 1;
+        let cw = (w - gap * (n - 1) as f32) / n as f32;
         let ch = cw * 0.62;
-        for (i, t) in theme::THEMES.iter().enumerate() {
+        // Les thèmes d'odysseus, puis le vôtre
+        let custom = self.custom.palette();
+        let themes = theme::THEMES.iter().chain(std::iter::once(&custom));
+        for (i, t) in themes.enumerate() {
             let tx = x + i as f32 * (cw + gap);
             let selected = t.id == p.id;
             mockup(
@@ -1590,6 +1633,82 @@ impl App {
             w,
             "Le thème s'applique aussitôt à tout le bureau : barre, panneaux, Fichiers, Aperçu et liserés des fenêtres. Le fond d'écran se choisit à part.",
         );
+
+        // Le vôtre : base, accent, fond ; toucher un choix le met en vigueur
+        y = ui.section(x, y + 12.0, "Thème personnalisé");
+        let c = self.custom;
+        let row = 56.0;
+        ui.card(x, y, w, 3.0 * row);
+        let label_w = 110.0;
+        ui.text("Base", x + 18.0, y, row, 13.0, p.text);
+        ui.segmented(
+            x + label_w,
+            y + (row - 34.0) / 2.0,
+            220.0,
+            &["Sombre", "Claire"],
+            Some(if c.dark { 0 } else { 1 }),
+            |i| Hit::CustomBase(i == 0),
+        );
+        let swatches = |ui: &mut Ui,
+                        y: f32,
+                        label: &str,
+                        colors: &[(u32, &str)],
+                        current: u32,
+                        hit: &dyn Fn(u32) -> Hit| {
+            ui.rect(x + 16.0, y, w - 32.0, 1.0, p.ink(0.06));
+            ui.text(label, x + 18.0, y, row, 13.0, p.text);
+            for (k, (color, _)) in colors.iter().enumerate() {
+                let cx = x + label_w + 15.0 + k as f32 * 36.0;
+                let cy = y + row / 2.0;
+                let h = hit(*color);
+                if *color == current {
+                    ui.circle(cx, cy, 15.0, p.accent);
+                    ui.circle(cx, cy, 13.0, p.background);
+                } else if ui.hover == Some(h.clone()) {
+                    ui.circle(cx, cy, 15.0, p.ink(0.25));
+                }
+                ui.circle(cx, cy, 11.0, theme::Rgba::hex(*color, 1.0));
+                // Liseré : un fond proche de celui de la carte reste visible
+                ui.stroke(cx - 11.0, cy - 11.0, 22.0, 22.0, 11.0, p.ink(0.18));
+                ui.hit((cx - 16.0, cy - 16.0, 32.0, 32.0), h);
+            }
+        };
+        swatches(
+            ui,
+            y + row,
+            "Accent",
+            CUSTOM_ACCENTS,
+            c.accent,
+            &Hit::CustomAccent,
+        );
+        swatches(
+            ui,
+            y + 2.0 * row,
+            "Fond",
+            custom_backgrounds(c.dark),
+            c.background,
+            &Hit::CustomBg,
+        );
+        y += 3.0 * row + 12.0;
+        // Nom de la couleur survolée, ou celles en vigueur
+        let named = |list: &[(u32, &'static str)], v: u32| {
+            list.iter().find(|(c, _)| *c == v).map_or("", |(_, n)| *n)
+        };
+        let hovered = match ui.hover {
+            Some(Hit::CustomAccent(v)) => Some(format!("Accent : {}", named(CUSTOM_ACCENTS, v))),
+            Some(Hit::CustomBg(v)) => {
+                Some(format!("Fond : {}", named(custom_backgrounds(c.dark), v)))
+            }
+            _ => None,
+        };
+        let text = hovered.unwrap_or_else(|| {
+            format!(
+                "Accent {} sur fond {}. Le texte, les panneaux, la barre latérale et les liserés s'accordent d'eux-mêmes ; toucher un choix met ce thème en vigueur.",
+                lower_first(named(CUSTOM_ACCENTS, c.accent)),
+                lower_first(named(custom_backgrounds(c.dark), c.background))
+            )
+        });
+        y = ui.note(x, y, w, &text);
         y
     }
 
@@ -3453,3 +3572,49 @@ delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
 delegate_data_device!(App);
 delegate_registry!(App);
+
+/// Accents du thème personnalisé : teintes de la Méditerranée
+const CUSTOM_ACCENTS: &[(u32, &str)] = &[
+    (0xd97757, "Terre cuite"),
+    (0xe3a24f, "Ocre"),
+    (0xc8a26b, "Sable"),
+    (0x8fa35a, "Olivier"),
+    (0x4eb39a, "Lagune"),
+    (0x5b9bd5, "Mer Égée"),
+    (0x8087e8, "Lavande"),
+    (0xb07cd9, "Pourpre"),
+    (0xd9779c, "Laurier-rose"),
+    (0xc4473a, "Rouge pompéien"),
+];
+
+/// Fonds du thème personnalisé, selon la base
+fn custom_backgrounds(dark: bool) -> &'static [(u32, &'static str)] {
+    if dark {
+        &[
+            (0x262624, "Graphite"),
+            (0x1e1e2e, "Nuit"),
+            (0x1f2528, "Ardoise"),
+            (0x2a221e, "Brun de Sienne"),
+            (0x1e2420, "Maquis"),
+            (0x141414, "Encre"),
+        ]
+    } else {
+        &[
+            (0xfaf9f5, "Ivoire"),
+            (0xf3eee3, "Lin"),
+            (0xeef1f4, "Brume"),
+            (0xf6efe6, "Poudre"),
+            (0xedf1ea, "Sauge"),
+            (0xffffff, "Blanc"),
+        ]
+    }
+}
+
+/// « Mer Égée » → « mer Égée » : seule l'initiale passe en minuscule
+fn lower_first(s: &str) -> String {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .map(|c| c.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
+}

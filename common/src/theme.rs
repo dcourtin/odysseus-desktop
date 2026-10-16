@@ -5,8 +5,8 @@ use std::{
     os::fd::{BorrowedFd, OwnedFd},
     path::PathBuf,
     sync::{
-        Once,
-        atomic::{AtomicUsize, Ordering},
+        Mutex, Once,
+        atomic::{AtomicPtr, Ordering},
     },
 };
 
@@ -102,7 +102,7 @@ impl Palette {
     }
 }
 
-pub const THEMES: [Palette; 3] = [
+pub static THEMES: [Palette; 3] = [
     Palette {
         id: "bleue",
         name: "Odyssée bleue",
@@ -160,7 +160,127 @@ pub const THEMES: [Palette; 3] = [
     },
 ];
 
-static CURRENT: AtomicUsize = AtomicUsize::new(0);
+/// Thème personnalisé : son identifiant dans `~/.config/odysseus/theme`
+pub const CUSTOM_ID: &str = "perso";
+
+/// Thème personnalisé (Réglages > Apparence) : base sombre ou claire, accent
+/// et fond ; le reste de la palette s'en déduit. Gardé dans
+/// `~/.config/odysseus/theme-perso`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Custom {
+    pub dark: bool,
+    pub accent: u32,
+    pub background: u32,
+}
+
+impl Default for Custom {
+    fn default() -> Self {
+        Self {
+            dark: true,
+            accent: 0xd97757,
+            background: 0x262624,
+        }
+    }
+}
+
+impl Custom {
+    fn path() -> Option<PathBuf> {
+        Some(config_path()?.with_file_name("theme-perso"))
+    }
+
+    /// Lignes « base=sombre|claire », « accent=#rrggbb », « fond=#rrggbb »
+    pub fn load() -> Self {
+        let mut c = Self::default();
+        let text = Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let color = u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok();
+            match (key.trim(), color) {
+                ("base", _) => c.dark = value.trim() != "claire",
+                ("accent", Some(v)) => c.accent = v & 0xffffff,
+                ("fond", Some(v)) => c.background = v & 0xffffff,
+                _ => {}
+            }
+        }
+        c
+    }
+
+    fn save(&self) -> std::io::Result<()> {
+        let path = Self::path().ok_or_else(|| std::io::Error::other("HOME inconnu"))?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let base = if self.dark { "sombre" } else { "claire" };
+        let text = format!(
+            "base={base}\naccent=#{:06x}\nfond=#{:06x}\n",
+            self.accent, self.background
+        );
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &path)
+    }
+
+    /// Palette complète tirée des trois choix
+    pub fn palette(&self) -> Palette {
+        let bg = Rgba::hex(self.background, 1.0);
+        let accent = Rgba::hex(self.accent, 1.0);
+        let black = Rgba::hex(0x000000, 1.0);
+        let shade = |t: f32, a: f32| bg.mix(black, t).with_alpha(a);
+        // Texte sur l'accent : sombre si l'accent est clair
+        let lum = 0.2126 * accent.r + 0.7152 * accent.g + 0.0722 * accent.b;
+        let (text, ink, danger, success, sidebar, surface, subtle) = if self.dark {
+            let text = Rgba::hex(0xf5f4ef, 1.0);
+            (
+                text,
+                0xffffff,
+                Rgba::hex(0xff6b80, 1.0),
+                Rgba::hex(0x4eba65, 1.0),
+                shade(0.18, 1.0),
+                shade(0.18, 0.90),
+                bg.mix(text, 0.10).with_alpha(0.9),
+            )
+        } else {
+            let text = Rgba::hex(0x141413, 1.0);
+            (
+                text,
+                0x000000,
+                Rgba::hex(0xab2b3f, 1.0),
+                Rgba::hex(0x2c7a39, 1.0),
+                shade(0.04, 1.0),
+                shade(0.04, 0.92),
+                bg.mix(text, 0.09).with_alpha(0.95),
+            )
+        };
+        Palette {
+            id: CUSTOM_ID,
+            name: "Personnalisé",
+            background: bg,
+            surface,
+            text,
+            text_dim: text.mix(bg, if self.dark { 0.38 } else { 0.48 }),
+            accent,
+            on_accent: Rgba::hex(if lum > 0.62 { 0x141413 } else { 0xffffff }, 1.0),
+            urgent: accent,
+            danger,
+            success,
+            subtle,
+            panel: bg.with_alpha(if self.dark { 0.95 } else { 0.96 }),
+            sidebar,
+            content: bg,
+            ink,
+        }
+    }
+}
+
+/// Palette en vigueur : un thème de THEMES, ou le thème personnalisé (gardé
+/// à vie, une copie par modification : quelques centaines d'octets)
+static ACTIVE: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
+/// Réglages du thème personnalisé en vigueur, s'il l'est
+static ACTIVE_CUSTOM: Mutex<Option<Custom>> = Mutex::new(None);
 static LOADED: Once = Once::new();
 
 /// Palette du thème choisi (lu dans `~/.config/odysseus/theme` au premier appel,
@@ -169,7 +289,12 @@ pub fn palette() -> &'static Palette {
     LOADED.call_once(|| {
         reload();
     });
-    &THEMES[CURRENT.load(Ordering::Relaxed)]
+    let p = ACTIVE.load(Ordering::Acquire);
+    if p.is_null() {
+        return &THEMES[0];
+    }
+    // Pointe vers THEMES ou vers une palette laissée en mémoire : jamais libérée
+    unsafe { &*p }
 }
 
 /// Fichier qui contient le nom du thème choisi
@@ -180,13 +305,35 @@ pub fn config_path() -> Option<PathBuf> {
     Some(base.join("odysseus/theme"))
 }
 
-/// Relit le thème choisi ; vrai s'il a changé.
+/// Relit le thème choisi (et le thème personnalisé) ; vrai s'il a changé.
 pub fn reload() -> bool {
     let id = config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
-    let index = THEMES.iter().position(|t| t.id == id.trim()).unwrap_or(0);
-    CURRENT.swap(index, Ordering::Relaxed) != index
+    let mut active = ACTIVE_CUSTOM.lock().unwrap_or_else(|e| e.into_inner());
+    if id.trim() == CUSTOM_ID {
+        let custom = Custom::load();
+        if *active == Some(custom) && !ACTIVE.load(Ordering::Acquire).is_null() {
+            return false;
+        }
+        *active = Some(custom);
+        let leaked: &'static Palette = Box::leak(Box::new(custom.palette()));
+        ACTIVE.store(leaked as *const Palette as *mut Palette, Ordering::Release);
+        return true;
+    }
+    *active = None;
+    let theme = THEMES
+        .iter()
+        .find(|t| t.id == id.trim())
+        .unwrap_or(&THEMES[0]);
+    let ptr = theme as *const Palette as *mut Palette;
+    ACTIVE.swap(ptr, Ordering::AcqRel) != ptr
+}
+
+/// Enregistre le thème personnalisé et le met en vigueur
+pub fn set_custom(custom: &Custom) -> std::io::Result<()> {
+    custom.save()?;
+    set(CUSTOM_ID)
 }
 
 /// Choisit un thème pour toute la session (les applications ouvertes le suivent).

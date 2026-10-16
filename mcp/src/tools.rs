@@ -264,7 +264,7 @@ const TOOLS: &[Tool] = &[
         description: "Change un ou plusieurs réglages : thème (bleue, sombre, claire), fond d'écran (« uni », nom d'un fond d'odysseus comme « Mer Égée », ou chemin d'une image), lumière de nuit (off, auto, on), échelle de l'écran (1 à 2).",
         schema: || {
             json!({"type": "object", "properties": {
-                "theme": {"type": "string", "enum": ["bleue", "sombre", "claire"]},
+                "theme": {"type": "string", "enum": ["bleue", "sombre", "claire", "perso"]},
                 "fond": {"type": "string"},
                 "lumiere_nuit": {"type": "string", "enum": ["off", "auto", "on"]},
                 "echelle": {"type": "number", "minimum": 1, "maximum": 2}
@@ -1219,11 +1219,17 @@ fn adjust(args: &Value) -> Outcome {
     let mut settings = Settings::load();
     let mut save = false;
     if let Some(t) = args.get("theme").and_then(Value::as_str) {
-        let id = theme::THEMES
-            .iter()
-            .find(|p| p.id == t || p.name.to_lowercase().ends_with(&t.to_lowercase()))
-            .map(|p| p.id)
-            .ok_or_else(|| format!("Thème inconnu : {t} (bleue, sombre, claire)"))?;
+        let wanted = t.to_lowercase();
+        let id = if wanted.starts_with("perso") {
+            // Le thème composé dans Réglages > Apparence
+            theme::CUSTOM_ID
+        } else {
+            theme::THEMES
+                .iter()
+                .find(|p| p.id == t || p.name.to_lowercase().ends_with(&wanted))
+                .map(|p| p.id)
+                .ok_or_else(|| format!("Thème inconnu : {t} (bleue, sombre, claire, perso)"))?
+        };
         theme::set(id).map_err(|e| e.to_string())?;
         done.push(format!("thème {}", theme::palette().name));
     }
