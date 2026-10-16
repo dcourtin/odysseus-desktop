@@ -145,13 +145,21 @@ de volume affichent un indicateur.
 - **Toujours à jour** : un fichier qui arrive dans le dossier affiché (capture
   d'écran, téléchargement) ou qui en part apparaît ou disparaît aussitôt.
 - **Glisser-déposer** : glisser un élément, ou toute la sélection, sur un dossier
-  (liste, favoris, chemin) le déplace ; vers une autre fenêtre, il y est déposé (un
-  terminal reçoit les chemins).
+  (liste, favoris, chemin) le déplace, avec Ctrl il le copie ; vers une autre
+  fenêtre, il y est déposé (un terminal reçoit les chemins). Des fichiers venant
+  d'une autre application (ou d'une autre fenêtre Fichiers) sont copiés dans le
+  dossier visé, ou dans le dossier affiché.
+- **Dupliquer** : Ctrl+D ou clic droit > Dupliquer (« nom copie » à côté).
+- **Compresser** : clic droit > Compresser ; « nom.zip » pour un élément,
+  « Archive.zip » pour plusieurs.
+- **Aller à un chemin** : Ctrl+L remplace le chemin par un champ ; Tab complète
+  le nom, « ~ » et « .. » sont compris ; Entrée y va (un fichier : son dossier,
+  lui sélectionné), Échap annule.
 - **Raccourcis** : Espace, Ctrl+O ou Ctrl+↓ (ouvrir ; une image s'ouvre dans
   l'Aperçu), Entrée ou F2 (renommer), Ctrl+↑ (dossier parent), Suppr
   (corbeille), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
   Ctrl+V (copier, couper, coller), Ctrl+Z (annuler la mise à la corbeille),
-  Ctrl+Maj+C (copier le chemin),
+  Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).
 - **Clés USB et disques externes** : sous « Appareils », avec un bouton d'éjection.

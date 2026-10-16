@@ -109,7 +109,7 @@ impl Files {
             self.browser.message = Some("Collage…".into());
             self.draw();
             std::thread::spawn(move || {
-                let _ = tx.send(paste_into(&paths, cut, &dir));
+                let _ = tx.send(paste_into(&paths, cut, &dir, "collé"));
             });
             return;
         }
@@ -139,7 +139,7 @@ impl Files {
             let mut text = String::new();
             let _ = std::fs::File::from(fd).read_to_string(&mut text);
             let (paths, cut) = parse(&text, mime == GNOME);
-            let _ = tx.send(paste_into(&paths, cut, &dir));
+            let _ = tx.send(paste_into(&paths, cut, &dir, "collé"));
         });
     }
 
@@ -163,7 +163,7 @@ impl Files {
 }
 
 /// Liste d'URI (ou format de GNOME : « copy » / « cut » en première ligne)
-fn parse(text: &str, gnome: bool) -> (Vec<PathBuf>, bool) {
+pub fn parse(text: &str, gnome: bool) -> (Vec<PathBuf>, bool) {
     let lines: Vec<&str> = text
         .lines()
         .map(str::trim)
@@ -203,7 +203,7 @@ fn unescape(s: &str) -> std::ffi::OsString {
 }
 
 /// « photo.png » déjà là : « photo copie.png », puis « photo copie 2.png »…
-fn copy_name(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
+pub fn copy_name(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
@@ -220,7 +220,8 @@ fn copy_name(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
 }
 
 /// Copie (cp -a) ou déplace chaque élément dans `dir`
-fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path) -> Pasted {
+/// `verb` : participe du message (« collé », « dupliqué »…)
+pub fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path, verb: &str) -> Pasted {
     let mut created = Vec::new();
     let mut errors = Vec::new();
     for src in paths {
@@ -257,7 +258,7 @@ fn paste_into(paths: &[PathBuf], cut: bool, dir: &Path) -> Pasted {
         }
     }
     let n = created.len();
-    let verb = if cut { "déplacé" } else { "collé" };
+    let verb = if cut { "déplacé" } else { verb };
     let message = match (n, errors.first()) {
         (0, Some(e)) => e.clone(),
         (_, Some(e)) => format!("{n} élément(s) {verb}(s) ; {e}"),

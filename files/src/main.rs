@@ -13,10 +13,12 @@
 //! pour déplacer la fenêtre. Ctrl+C copie le chemin, Ctrl+I montre ou masque
 //! le panneau, Échap le ferme.
 
+mod actions;
 mod archive;
 mod clip;
 mod dnd;
 mod edit;
+mod field;
 mod info;
 mod model;
 
@@ -124,6 +126,8 @@ enum Hit {
     Rename,
     /// Nouveau dossier (barre d'outils)
     NewFolder,
+    /// Champ du chemin tapé
+    Goto,
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -190,6 +194,8 @@ struct Files {
     last_toolbar_click: Option<Instant>,
     /// Renommage sur place, sélection par zone, menu du clic droit (edit.rs)
     rename: Option<edit::Rename>,
+    /// Chemin tapé (Ctrl+L), à la place du fil d'Ariane
+    goto: Option<field::Field>,
     band: Option<edit::Band>,
     menu: Option<edit::Menu>,
     /// Haut de la première ligne, et fin du nom de chaque ligne affichée
@@ -413,6 +419,7 @@ fn main() {
         chrome: common::chrome::Chrome::default(),
         last_toolbar_click: None,
         rename: None,
+        goto: None,
         band: None,
         menu: None,
         rows_top: 0.0,
@@ -466,6 +473,7 @@ impl Files {
 
     fn navigated(&mut self) {
         self.menu = None;
+        self.goto = None;
         self.watch_cwd();
         self.update_title();
         self.follow_selection();
@@ -584,7 +592,7 @@ impl Files {
     }
 
     fn key(&mut self, event: KeyEvent) {
-        if self.rename_key(&event) {
+        if self.rename_key(&event) || self.goto_key(&event) {
             return;
         }
         if self.menu.take().is_some() && event.keysym == Keysym::Escape {
@@ -645,6 +653,8 @@ impl Files {
             Keysym::c if ctrl => return self.clip_selection(false),
             Keysym::x if ctrl => return self.clip_selection(true),
             Keysym::v if ctrl => return self.paste(),
+            Keysym::d if ctrl => return self.duplicate(),
+            Keysym::l if ctrl => return self.start_goto(),
             Keysym::t if ctrl => {
                 let dir = self.browser.cwd.clone();
                 return self.open_terminal(&dir);
@@ -757,6 +767,7 @@ impl Files {
             Some(Hit::AskAgent) => self.ask_agent(),
             Some(Hit::Rename) => self.start_rename(),
             Some(Hit::NewFolder) => self.new_folder(),
+            Some(Hit::Goto) => {}
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -1374,7 +1385,23 @@ impl Files {
             first += 1;
         }
         let mut cx = crumb_x0;
-        if first > 0 {
+        if let Some(field) = self.goto.as_ref() {
+            let fh = 30.0 * s;
+            let fw = avail + 40.0 * s;
+            field.draw(
+                &self.regular,
+                &mut c,
+                crumb_x0 - 8.0 * s,
+                mid - fh / 2.0,
+                fw,
+                fh,
+                s,
+                "",
+            );
+            hit(crumb_x0 - 8.0 * s, mid - fh / 2.0, fw, fh, Hit::Goto);
+            first = crumbs.len();
+        }
+        if first > 0 && first < crumbs.len() {
             self.regular.draw_in(
                 &mut c,
                 "…  ›  ",
@@ -1729,6 +1756,19 @@ impl Files {
             );
         }
 
+        // Dépôt dans le dossier affiché : la liste entière est entourée
+        if self.drop_target.as_ref() == Some(&self.browser.cwd) {
+            let a = theme::palette().accent;
+            c.stroke_rounded(
+                x0 + 6.0 * s,
+                top,
+                right - x0 - 12.0 * s,
+                h as f32 - top - STATUS_H * s - 4.0 * s,
+                10.0 * s,
+                2.0 * s,
+                a,
+            );
+        }
         self.name_ends = name_ends;
         self.rows_top = (top / s) as f64;
         if let Some(band) = self.band.as_ref() {
@@ -2401,9 +2441,14 @@ impl PointerHandler for Files {
                             continue;
                         }
                     }
-                    // Renommage en cours : un clic ailleurs le valide
+                    // Renommage en cours : un clic ailleurs le valide ; un chemin
+                    // en cours de saisie est abandonné
                     if self.rename.is_some() {
                         self.commit_rename();
+                    }
+                    if self.goto.is_some() && self.hit_at(x, y) != Some(Hit::Goto) {
+                        self.goto = None;
+                        self.draw();
                     }
                     if let Some(b) = self.chrome.press(x as f32, y as f32, CHROME_Y) {
                         self.chrome_action(b);

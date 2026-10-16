@@ -110,32 +110,48 @@ impl Files {
         }
     }
 
-    /// Dossier sous le pointeur où déposer l'élément glissé, s'il peut y aller
+    /// Dossier sous le pointeur où déposer ce qui est glissé : un dossier de
+    /// la liste, un favori, un segment du chemin, ou le dossier affiché quand
+    /// on lâche ailleurs dans la liste
     fn drop_target_at(&self, x: f64, y: f64) -> Option<std::path::PathBuf> {
-        let dragged = &self.drag.as_ref()?.paths;
-        let target = match self.hit_at(x, y)? {
-            Hit::Row(i) => self
-                .browser
-                .entries
-                .get(i)
-                .filter(|e| e.is_dir)
-                .map(|e| e.path.clone())?,
-            Hit::Place(p) | Hit::Crumb(p) => p,
+        let in_list = y >= self.rows_top && x > crate::SIDEBAR_W as f64;
+        let target = match self.hit_at(x, y) {
+            Some(Hit::Row(i)) => match self.browser.entries.get(i) {
+                Some(e) if e.is_dir => e.path.clone(),
+                _ => self.browser.cwd.clone(),
+            },
+            Some(Hit::Place(p) | Hit::Crumb(p)) => p,
+            _ if in_list => self.browser.cwd.clone(),
             _ => return None,
         };
-        // Ni sur lui-même, ni dans son propre dossier, ni dans un de ses sous-dossiers
-        let pointless = dragged
-            .iter()
-            .any(|d| target.starts_with(d) || d.parent() == Some(target.as_path()));
+        if self.in_trash() && target == self.browser.cwd {
+            return None;
+        }
+        let Some(drag) = self.drag.as_ref() else {
+            // Fichiers venant d'une autre application : copiés ici
+            return Some(target);
+        };
+        // Ni sur lui-même ni dans un de ses sous-dossiers ; dans son propre
+        // dossier, seulement pour une copie (Ctrl)
+        let pointless = drag.paths.iter().any(|d| {
+            target.starts_with(d) || (!self.modifiers.ctrl && d.parent() == Some(target.as_path()))
+        });
         (!pointless).then_some(target)
     }
 
     fn update_drop(&mut self, device: &WlDataDevice, x: f64, y: f64) {
         let target = self.drop_target_at(x, y);
         if let Some(offer) = drag_offer(device) {
-            if target.is_some() {
+            let files = offer.with_mime_types(|m| m.iter().any(|t| t == MIMES[0]));
+            if target.is_some() && files {
                 offer.accept_mime_type(offer.serial, Some(MIMES[0].into()));
-                offer.set_actions(DndAction::Move, DndAction::Move);
+                // Glisser interne : déplacer, Ctrl copie ; d'une autre appli : copier
+                let action = if self.drag.is_some() && !self.modifiers.ctrl {
+                    DndAction::Move
+                } else {
+                    DndAction::Copy
+                };
+                offer.set_actions(DndAction::Copy | DndAction::Move, action);
             } else {
                 offer.accept_mime_type(offer.serial, None);
             }
@@ -144,6 +160,16 @@ impl Files {
             self.drop_target = target;
             self.draw();
         }
+    }
+
+    /// Ctrl+dépôt : copie au lieu de déplacer
+    fn copy_into(&mut self, sources: Vec<std::path::PathBuf>, dir: std::path::PathBuf) {
+        let tx = self.pastes.clone();
+        self.browser.message = Some("Copie…".into());
+        self.draw();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::clip::paste_into(&sources, false, &dir, "copié"));
+        });
     }
 
     /// Dépôt de plusieurs éléments : chacun est déplacé ; le message résume
@@ -288,12 +314,34 @@ impl DataDeviceHandler for Files {
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
         let target = self.drop_target.take();
         let sources = self.drag.as_ref().map(|d| d.paths.clone());
-        if let Some(offer) = drag_offer(device) {
-            offer.finish();
-            offer.destroy();
-        }
+        let Some(offer) = drag_offer(device) else {
+            return self.draw();
+        };
+        // Fichiers d'une autre application : la liste d'URI est lue dans un fil
+        let external = match (&sources, &target) {
+            (None, Some(_)) => offer.receive(MIMES[0].into()).ok(),
+            _ => None,
+        };
+        offer.finish();
+        offer.destroy();
         match (sources, target) {
+            (Some(sources), Some(dir)) if self.modifiers.ctrl => self.copy_into(sources, dir),
             (Some(sources), Some(dir)) => self.move_into(&sources, &dir),
+            (None, Some(dir)) => {
+                if let Some(pipe) = external {
+                    let fd = std::os::fd::OwnedFd::from(pipe);
+                    let tx = self.pastes.clone();
+                    self.browser.message = Some("Copie…".into());
+                    std::thread::spawn(move || {
+                        let mut text = String::new();
+                        let _ =
+                            std::io::Read::read_to_string(&mut std::fs::File::from(fd), &mut text);
+                        let (paths, _) = crate::clip::parse(&text, false);
+                        let _ = tx.send(crate::clip::paste_into(&paths, false, &dir, "copié"));
+                    });
+                }
+                self.draw();
+            }
             _ => self.draw(),
         }
     }

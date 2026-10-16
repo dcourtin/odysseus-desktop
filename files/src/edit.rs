@@ -10,41 +10,17 @@ use common::{
     draw::{Canvas, Text},
     theme::{self, Rgba},
 };
-use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
+use smithay_client_toolkit::seat::keyboard::KeyEvent;
 
-use crate::{Files, ROW_H};
+use crate::{
+    Files, ROW_H,
+    field::{Field, Outcome},
+};
 
 /// Nom en cours de modification, dans sa ligne
 pub struct Rename {
     pub path: PathBuf,
-    pub text: String,
-    /// Curseur et début de la sélection (octets)
-    pub cursor: usize,
-    pub anchor: usize,
-}
-
-impl Rename {
-    fn selection(&self) -> (usize, usize) {
-        (self.cursor.min(self.anchor), self.cursor.max(self.anchor))
-    }
-
-    fn insert(&mut self, s: &str) {
-        let (a, b) = self.selection();
-        self.text.replace_range(a..b, s);
-        self.cursor = a + s.len();
-        self.anchor = self.cursor;
-    }
-
-    fn prev(&self, i: usize) -> usize {
-        self.text[..i].char_indices().last().map_or(0, |(p, _)| p)
-    }
-
-    fn next(&self, i: usize) -> usize {
-        self.text[i..]
-            .chars()
-            .next()
-            .map_or(i, |c| i + c.len_utf8())
-    }
+    pub field: Field,
 }
 
 /// Rectangle de sélection en cours (pixels logiques de la fenêtre)
@@ -67,6 +43,8 @@ pub enum MenuItem {
     NewFolder,
     Terminal,
     ToggleHidden,
+    Duplicate,
+    Compress,
     Copy,
     Cut,
     Paste,
@@ -131,11 +109,11 @@ impl Files {
         } else {
             text.rfind('.').filter(|i| *i > 0).unwrap_or(text.len())
         };
+        let mut field = Field::new(&text);
+        field.select(0, stem_end);
         self.rename = Some(Rename {
             path: e.path.clone(),
-            text,
-            cursor: stem_end,
-            anchor: 0,
+            field,
         });
         self.menu = None;
         self.follow_selection();
@@ -147,7 +125,7 @@ impl Files {
         let Some(r) = self.rename.take() else {
             return;
         };
-        let name = r.text.trim();
+        let name = r.field.text.trim();
         let old = r
             .path
             .file_name()
@@ -188,76 +166,15 @@ impl Files {
 
     /// Clavier pendant le renommage ; vrai si la touche a servi
     pub fn rename_key(&mut self, event: &KeyEvent) -> bool {
-        let ctrl = self.modifiers.ctrl;
-        let shift = self.modifiers.shift;
+        let (ctrl, shift) = (self.modifiers.ctrl, self.modifiers.shift);
         let Some(r) = self.rename.as_mut() else {
             return false;
         };
-        match event.keysym {
-            Keysym::Return | Keysym::KP_Enter => {
-                self.commit_rename();
-                return true;
-            }
-            Keysym::Escape => {
-                self.cancel_rename();
-                return true;
-            }
-            Keysym::BackSpace => {
-                if r.cursor == r.anchor {
-                    r.anchor = r.prev(r.cursor);
-                }
-                r.insert("");
-            }
-            Keysym::Delete | Keysym::KP_Delete => {
-                if r.cursor == r.anchor {
-                    r.anchor = r.next(r.cursor);
-                }
-                r.insert("");
-            }
-            Keysym::Left => {
-                r.cursor = if !shift && r.cursor != r.anchor {
-                    r.selection().0
-                } else {
-                    r.prev(r.cursor)
-                };
-                if !shift {
-                    r.anchor = r.cursor;
-                }
-            }
-            Keysym::Right => {
-                r.cursor = if !shift && r.cursor != r.anchor {
-                    r.selection().1
-                } else {
-                    r.next(r.cursor)
-                };
-                if !shift {
-                    r.anchor = r.cursor;
-                }
-            }
-            Keysym::Home => {
-                r.cursor = 0;
-                if !shift {
-                    r.anchor = 0;
-                }
-            }
-            Keysym::End => {
-                r.cursor = r.text.len();
-                if !shift {
-                    r.anchor = r.cursor;
-                }
-            }
-            Keysym::a if ctrl => {
-                r.anchor = 0;
-                r.cursor = r.text.len();
-            }
-            _ => match event.utf8.as_deref() {
-                Some(t) if !ctrl && !t.is_empty() && t.chars().all(|c| !c.is_control()) => {
-                    r.insert(t)
-                }
-                _ => {}
-            },
+        match r.field.key(event, ctrl, shift) {
+            Outcome::Submit => self.commit_rename(),
+            Outcome::Cancel => self.cancel_rename(),
+            _ => self.draw(),
         }
-        self.draw();
         true
     }
 
@@ -273,42 +190,9 @@ impl Files {
         h: f32,
         s: f32,
     ) {
-        let p = theme::palette();
-        let px = 14.0 * s;
-        let pad = 6.0 * s;
-        c.fill_rounded(
-            x - pad,
-            y + 3.0 * s,
-            w + pad,
-            h - 6.0 * s,
-            6.0 * s,
-            p.content,
-        );
-        c.stroke_rounded(
-            x - pad,
-            y + 3.0 * s,
-            w + pad,
-            h - 6.0 * s,
-            6.0 * s,
-            s,
-            p.accent,
-        );
-        let (a, b) = r.selection();
-        let xa = x + font.measure(&r.text[..a], px);
-        let xb = x + font.measure(&r.text[..b], px);
-        if b > a {
-            c.fill_rounded(
-                xa,
-                y + 7.0 * s,
-                xb - xa,
-                h - 14.0 * s,
-                2.0 * s,
-                p.accent.with_alpha(0.6),
-            );
-        }
-        font.draw_in(c, &r.text, x, y, h, px, p.text);
-        let xc = x + font.measure(&r.text[..r.cursor], px);
-        c.fill_rounded(xc, y + 7.0 * s, s.max(1.5), h - 14.0 * s, 0.0, p.text);
+        let pad = 8.0 * s;
+        r.field
+            .draw(font, c, x - pad, y + 3.0 * s, w + pad, h - 6.0 * s, s, "");
     }
 
     // --- Nouveau dossier ----------------------------------------------------------
@@ -405,6 +289,8 @@ impl Files {
             if !trash {
                 items.push(("Copier", MenuItem::Copy));
                 items.push(("Couper", MenuItem::Cut));
+                items.push(("Dupliquer", MenuItem::Duplicate));
+                items.push(("Compresser", MenuItem::Compress));
             }
             items.push((
                 if multiple {
@@ -468,6 +354,8 @@ impl Files {
                 let dir = self.browser.cwd.clone();
                 self.open_terminal(&dir);
             }
+            MenuItem::Duplicate => self.duplicate(),
+            MenuItem::Compress => self.compress(),
             MenuItem::Copy => self.clip_selection(false),
             MenuItem::Cut => self.clip_selection(true),
             MenuItem::Paste => self.paste(),
