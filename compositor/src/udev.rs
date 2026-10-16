@@ -96,6 +96,10 @@ pub struct UdevData {
     auto_scale: bool,
     /// Couches d'un écran retiré (barre, Dock…), en attente du prochain écran
     orphans: Vec<smithay::desktop::LayerSurface>,
+    /// Écrans branchés au dernier choix (None : pas encore choisi)
+    known: Option<std::collections::HashSet<String>>,
+    /// Attente que les événements d'écran se calment
+    settle: Option<smithay::reexports::calloop::RegistrationToken>,
 }
 
 pub fn init_udev(
@@ -197,6 +201,8 @@ pub fn init_udev(
         scale,
         auto_scale: fixed_scale.is_none(),
         orphans: Vec::new(),
+        known: None,
+        settle: None,
     });
     scan_outputs(data);
     if data.udev.as_ref().is_some_and(|u| u.surfaces.is_empty()) {
@@ -208,8 +214,24 @@ pub fn init_udev(
     event_loop
         .handle()
         .insert_source(udev_backend, |event, _, data| {
-            if let UdevEvent::Changed { .. } | UdevEvent::Added { .. } = event {
-                scan_outputs(data);
+            if let UdevEvent::Changed { .. } | UdevEvent::Added { .. } = event
+                && let Some(udev) = data.udev.as_mut()
+            {
+                // Un écran qui se réveille s'annonce en rafale : on attend que
+                // ça se calme avant de choisir (chaque événement relance l'attente)
+                if let Some(token) = udev.settle.take() {
+                    udev.handle.remove(token);
+                }
+                udev.settle = udev
+                    .handle
+                    .insert_source(Timer::from_duration(SETTLE), |_, _, data| {
+                        if let Some(udev) = data.udev.as_mut() {
+                            udev.settle = None;
+                        }
+                        scan_outputs(data);
+                        TimeoutAction::Drop
+                    })
+                    .ok();
             }
         })?;
 
@@ -340,12 +362,43 @@ pub fn init_udev(
     Ok(())
 }
 
+/// Délai sans événement d'écran avant de choisir
+const SETTLE: Duration = Duration::from_millis(1500);
+
+/// Mode préféré d'un connecteur (sinon le premier)
+fn preferred_mode(info: &connector::Info) -> Option<smithay::reexports::drm::control::Mode> {
+    info.modes()
+        .iter()
+        .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .or_else(|| info.modes().first())
+        .copied()
+}
+
+/// Meilleur écran : fluide d'abord (50 Hz au moins : un téléviseur 4K à 30 Hz
+/// passe après un écran à 60 Hz), puis la plus grande définition, puis la fréquence
+fn best<'a>(list: impl Iterator<Item = &'a connector::Info>) -> Option<&'a connector::Info> {
+    list.max_by_key(|i| {
+        preferred_mode(i).map_or((false, 0, 0), |m| {
+            (
+                m.vrefresh() >= 50,
+                m.size().0 as u64 * m.size().1 as u64,
+                m.vrefresh(),
+            )
+        })
+    })
+}
+
+/// Dernier écran utilisé (choisi au démarrage s'il est branché)
+fn last_output_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/state/odysseus/ecran"))
+}
+
 fn connector_name(info: &connector::Info) -> String {
     format!("{}-{}", info.interface().as_str(), info.interface_id())
 }
 
-/// Réexamine les connecteurs : garde l'écran actuel s'il est toujours là,
-/// sinon passe à l'écran préféré (ou au premier connecté).
+/// Réexamine les connecteurs et choisit l'écran (voir la règle plus bas).
 fn scan_outputs(data: &mut CalloopData) {
     let CalloopData {
         state,
@@ -367,17 +420,42 @@ fn scan_outputs(data: &mut CalloopData) {
         .filter_map(|h| udev.manager.device().get_connector(*h, true).ok())
         .filter(|i| i.state() == connector::State::Connected && !i.modes().is_empty())
         .collect();
-    // Écran voulu (ODYSSEUS_OUTPUT), sinon celui déjà utilisé s'il est toujours
-    // branché (un écran qui se réveille peut faire apparaître et disparaître
-    // plusieurs sorties : on ne saute pas de l'une à l'autre), sinon le premier
+    // Choix de l'écran, sans réglage : ODYSSEUS_OUTPUT s'il est donné ; sinon un
+    // écran qu'on vient de brancher (il passe devant) ; sinon celui déjà
+    // utilisé s'il est toujours là ; au démarrage, le dernier utilisé ; sinon
+    // le meilleur. « Vient de brancher » : absent au choix précédent (les
+    // rafales du réveil sont déjà passées, voir SETTLE).
     let current = udev.surfaces.values().map(|s| s.connector).next();
+    let names: std::collections::HashSet<String> = connected.iter().map(connector_name).collect();
+    let starting = udev.known.is_none();
+    let fresh: Vec<&connector::Info> = match &udev.known {
+        Some(known) => connected
+            .iter()
+            .filter(|i| !known.contains(&connector_name(i)))
+            .collect(),
+        None => Vec::new(),
+    };
+    udev.known = Some(names);
+    let remembered = starting
+        .then(|| last_output_path().and_then(|p| std::fs::read_to_string(p).ok()))
+        .flatten()
+        .map(|n| n.trim().to_string());
     let chosen = connected
         .iter()
         .find(|i| udev.wanted.as_deref() == Some(connector_name(i).as_str()))
+        .or_else(|| best(fresh.iter().copied()))
         .or_else(|| connected.iter().find(|i| Some(i.handle()) == current))
-        .or_else(|| connected.first());
+        .or_else(|| {
+            connected
+                .iter()
+                .find(|i| remembered.as_deref() == Some(connector_name(i).as_str()))
+        })
+        .or_else(|| best(connected.iter()));
     if chosen.map(|i| i.handle()) == current && current.is_some() {
         return;
+    }
+    if let (Some(info), Some(path)) = (chosen, last_output_path()) {
+        let _ = std::fs::write(path, connector_name(info) + "\n");
     }
 
     // Écran précédent débranché (ou remplacé par l'écran préféré) ; ses couches
