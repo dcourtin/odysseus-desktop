@@ -272,14 +272,10 @@ thread_local! {
 
 struct Fonts {
     bold: Text,
-    icons: Text,
 }
 
 thread_local! {
-    static FONTS: Option<Fonts> = Text::load(theme::FONT_BOLD)
-        .ok()
-        .zip(Text::load(theme::FONT_ICONS).ok())
-        .map(|(bold, icons)| Fonts { bold, icons });
+    static FONTS: Option<Fonts> = Text::load(theme::FONT_BOLD).ok().map(|bold| Fonts { bold });
 }
 
 /// Barre de titre d'une fenêtre, posée sur `rect` (pixels logiques)
@@ -366,16 +362,7 @@ fn draw_bar(key: &BarKey, s: f32) -> Option<MemoryRenderBuffer> {
             Some(TitlePart::Maximize) => Some(chrome::Button::Maximize),
             _ => None,
         };
-        chrome::draw(
-            &mut c,
-            &fonts.icons,
-            0.0,
-            cy,
-            s,
-            key.focused,
-            hover.is_some(),
-            hover,
-        );
+        chrome::draw(&mut c, 0.0, cy, s, key.focused, hover.is_some(), hover);
         // Titre centré, tronqué entre les boutons et le bord
         let px = 12.5 * s;
         let room = wf - 2.0 * chrome::WIDTH * s;

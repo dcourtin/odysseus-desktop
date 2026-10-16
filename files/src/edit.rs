@@ -303,7 +303,7 @@ impl Files {
                 xb - xa,
                 h - 14.0 * s,
                 2.0 * s,
-                p.accent.with_alpha(0.35),
+                p.accent.with_alpha(0.6),
             );
         }
         font.draw_in(c, &r.text, x, y, h, px, p.text);

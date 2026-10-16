@@ -113,8 +113,8 @@ de volume affichent un indicateur.
 - **Panneau d'informations** (clic sur un élément, Ctrl+I) : vignette, détails, et
   actions selon le type (ouvrir, décompresser, terminal dans ce dossier, copier le
   chemin ou l'image, demander à l'Assistant, corbeille).
-- **Renommer** : clic droit > Renommer, « Renommer » dans le panneau
-  d'informations, ou F2. Le nom s'édite sur place, extension mise de côté ;
+- **Renommer** : Entrée (comme sur macOS), F2, clic droit > Renommer, ou
+  « Renommer » dans le panneau d'informations. Le nom s'édite sur place, extension mise de côté ;
   Entrée valide, Échap annule, un clic ailleurs valide aussi.
 - **Menu du clic droit** : sur un élément (ouvrir, renommer, copier le chemin,
   demander à l'Assistant, décompresser, corbeille ; pour toute la sélection si
@@ -147,8 +147,9 @@ de volume affichent un indicateur.
 - **Glisser-déposer** : glisser un élément, ou toute la sélection, sur un dossier
   (liste, favoris, chemin) le déplace ; vers une autre fenêtre, il y est déposé (un
   terminal reçoit les chemins).
-- **Raccourcis** : Entrée (ouvrir), Espace (aperçu d'une image), Suppr
-  (corbeille), F2 (renommer), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
+- **Raccourcis** : Espace, Ctrl+O ou Ctrl+↓ (ouvrir ; une image s'ouvre dans
+  l'Aperçu), Entrée ou F2 (renommer), Ctrl+↑ (dossier parent), Suppr
+  (corbeille), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
   Ctrl+V (copier, couper, coller), Ctrl+Z (annuler la mise à la corbeille),
   Ctrl+Maj+C (copier le chemin),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).

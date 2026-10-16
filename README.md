@@ -137,7 +137,7 @@ au quart près). Écran : branché à chaud (ODYSSEUS_OUTPUT est l'écran préf�
 connecté). Par IPC (`SWAYSOCK`) : `output scale 1.25`, `output mode 2560x1440@60`,
 `nightlight on|off|auto|toggle` (auto : 21 h → 7 h, `ODYSSEUS_NIGHT_FROM/TO/TEMP`).
 
-Fichiers et Aperçu : Espace (aperçu rapide d'une image), Suppr (corbeille, au
+Fichiers et Aperçu : Espace (Fichiers : ouvrir, une image dans l'Aperçu), Entrée (Fichiers : renommer), Suppr (corbeille, au
 format freedesktop), Ctrl+Z (annuler). Fichiers : clic sur un en-tête (trier,
 second clic pour inverser), clic sur un élément (panneau d'informations : copier
 le chemin, copier l'image, ouvrir, décompresser, terminal, demander à l'Assistant, corbeille), Ctrl+Maj+C (copier

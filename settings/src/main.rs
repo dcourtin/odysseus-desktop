@@ -1420,7 +1420,7 @@ impl App {
 
         match step {
             Some(i) => {
-                self.chrome.draw(ui.c, ui.icons, CHROME_Y, s);
+                self.chrome.draw(ui.c, CHROME_Y, s);
                 self.wizard_footer(&mut ui, i, cx, cw);
             }
             None => self.sidebar(&mut ui),
@@ -1469,7 +1469,7 @@ impl App {
             .collect::<String>()
             .to_uppercase();
         let s = ui.s;
-        self.chrome.draw(ui.c, ui.icons, CHROME_Y, s);
+        self.chrome.draw(ui.c, CHROME_Y, s);
         let t = SIDE_TOP;
         ui.circle(40.0, 44.0 + t, 20.0, p.accent);
         ui.centered(&initials, 40.0, 34.0 + t, 20.0, 14.0, true, p.on_accent);

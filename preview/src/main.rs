@@ -924,7 +924,7 @@ impl Apercu {
             theme::palette().panel_border(),
         );
         let cy = TOOLBAR_H / 2.0;
-        self.chrome.draw(c, &self.icons, cy, s);
+        self.chrome.draw(c, cy, s);
 
         // Gauche, après les boutons de la fenêtre : précédente / suivante, nom, position
         let mut x = common::chrome::WIDTH;

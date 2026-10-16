@@ -5,8 +5,8 @@
 //! d'odysseus (dans leur barre latérale ou leur barre d'outils).
 
 use crate::{
-    draw::{Canvas, Text},
-    theme::{self, icon},
+    draw::Canvas,
+    theme::{self, Rgba},
 };
 
 /// Centres des boutons depuis le bord gauche de la fenêtre (pixels logiques)
@@ -46,7 +46,6 @@ pub fn over_row(x: f32, dy: f32) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     c: &mut Canvas,
-    icons: &Text,
     x0: f32,
     cy: f32,
     s: f32,
@@ -55,13 +54,7 @@ pub fn draw(
     hover: Option<Button>,
 ) {
     let p = theme::palette();
-    for (button, (cx, glyph)) in
-        ALL.into_iter().zip(
-            CENTERS
-                .iter()
-                .zip([icon::CLOSE, icon::MINUS, icon::MAXIMIZE_2]),
-        )
-    {
+    for (button, cx) in ALL.into_iter().zip(CENTERS) {
         let cx = x0 + cx * s;
         let hovered = hover == Some(button);
         let fill = if hovered && button == Button::Close {
@@ -80,7 +73,30 @@ pub fn draw(
             } else {
                 p.text
             };
-            icons.icon(c, glyph, cx, cy, 9.0 * s, color);
+            symbol(c, button, cx, cy, s, color);
+        }
+    }
+}
+
+/// Symbole tracé en vectoriel, centré exactement sur le rond (les glyphes
+/// d'une police, calés au pixel entier, s'en écartaient d'un demi-pixel)
+fn symbol(c: &mut Canvas, button: Button, cx: f32, cy: f32, s: f32, color: Rgba) {
+    let w = 1.2 * s;
+    match button {
+        Button::Close => {
+            let d = 2.3 * s;
+            c.line(cx - d, cy - d, cx + d, cy + d, w, color);
+            c.line(cx - d, cy + d, cx + d, cy - d, w, color);
+        }
+        Button::Minimize => {
+            let d = 3.0 * s;
+            c.line(cx - d, cy, cx + d, cy, w, color);
+        }
+        Button::Maximize => {
+            // Deux triangles vers les coins opposés
+            let (d, k) = (2.8 * s, 1.2 * s);
+            c.fill_triangle((cx - d, cy - d), (cx + k, cy - d), (cx - d, cy + k), color);
+            c.fill_triangle((cx + d, cy + d), (cx - k, cy + d), (cx + d, cy - k), color);
         }
     }
 }
@@ -128,16 +144,7 @@ impl Chrome {
     }
 
     /// Dessine la rangée ; `cy` en pixels logiques, `s` : échelle
-    pub fn draw(&self, c: &mut Canvas, icons: &Text, cy: f32, s: f32) {
-        draw(
-            c,
-            icons,
-            0.0,
-            cy * s,
-            s,
-            self.focused,
-            self.row_hover,
-            self.hover,
-        );
+    pub fn draw(&self, c: &mut Canvas, cy: f32, s: f32) {
+        draw(c, 0.0, cy * s, s, self.focused, self.row_hover, self.hover);
     }
 }

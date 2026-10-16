@@ -1901,7 +1901,7 @@ impl Notes {
             push_hit(hits, s, rx, y, rw, row_h, hit);
         };
 
-        self.chrome.draw(c, &self.icons, CHROME_Y, s);
+        self.chrome.draw(c, CHROME_Y, s);
         let mut y = TOOLBAR_H * s + 4.0 * s;
         row(
             c,

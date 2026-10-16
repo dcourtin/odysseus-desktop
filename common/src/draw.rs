@@ -156,6 +156,64 @@ impl Canvas<'_> {
         }
     }
 
+    /// Trait anticrénelé de (x0, y0) à (x1, y1), bouts arrondis (distance au
+    /// segment, mesurée au centre de chaque pixel).
+    #[allow(clippy::too_many_arguments)]
+    pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, c: Rgba) {
+        let r = width / 2.0;
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len2 = (dx * dx + dy * dy).max(1e-6);
+        let (left, right) = (
+            (x0.min(x1) - r - 1.0).floor() as i32,
+            (x0.max(x1) + r + 1.0).ceil() as i32,
+        );
+        let (top, bottom) = (
+            (y0.min(y1) - r - 1.0).floor() as i32,
+            (y0.max(y1) + r + 1.0).ceil() as i32,
+        );
+        for py in top..bottom {
+            for px in left..right {
+                let (qx, qy) = (px as f32 + 0.5 - x0, py as f32 + 0.5 - y0);
+                let t = ((qx * dx + qy * dy) / len2).clamp(0.0, 1.0);
+                let dist = (qx - t * dx).hypot(qy - t * dy) - r;
+                self.blend(px, py, c, (0.5 - dist).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Triangle plein anticrénelé (4 × 4 échantillons par pixel)
+    pub fn fill_triangle(&mut self, a: (f32, f32), b: (f32, f32), c3: (f32, f32), c: Rgba) {
+        let edge = |p: (f32, f32), q: (f32, f32), x: f32, y: f32| {
+            (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0)
+        };
+        let area = edge(a, b, c3.0, c3.1);
+        if area.abs() < 1e-6 {
+            return;
+        }
+        let xs = [a.0, b.0, c3.0];
+        let ys = [a.1, b.1, c3.1];
+        let min = |v: [f32; 3]| v.iter().copied().fold(f32::MAX, f32::min);
+        let max = |v: [f32; 3]| v.iter().copied().fold(f32::MIN, f32::max);
+        for py in min(ys).floor() as i32..max(ys).ceil() as i32 {
+            for px in min(xs).floor() as i32..max(xs).ceil() as i32 {
+                let mut hits = 0;
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let (x, y) = (
+                            px as f32 + (sx as f32 + 0.5) / 4.0,
+                            py as f32 + (sy as f32 + 0.5) / 4.0,
+                        );
+                        let (w0, w1, w2) = (edge(b, c3, x, y), edge(c3, a, x, y), edge(a, b, x, y));
+                        if (w0 * area >= 0.0) && (w1 * area >= 0.0) && (w2 * area >= 0.0) {
+                            hits += 1;
+                        }
+                    }
+                }
+                self.blend(px, py, c, hits as f32 / 16.0);
+            }
+        }
+    }
+
     /// Disque plein centré en (cx, cy).
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, c: Rgba) {
         self.fill_rounded(

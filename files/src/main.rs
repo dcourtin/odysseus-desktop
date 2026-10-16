@@ -606,8 +606,8 @@ impl Files {
         let cur = self.browser.selected;
         // Déplacement : Maj étend la sélection
         let goto = match event.keysym {
-            Keysym::Down if n > 0 && !alt => Some((cur + 1).min(n - 1)),
-            Keysym::Up if !alt => Some(cur.saturating_sub(1)),
+            Keysym::Down if n > 0 && !alt && !ctrl => Some((cur + 1).min(n - 1)),
+            Keysym::Up if !alt && !ctrl => Some(cur.saturating_sub(1)),
             Keysym::Next if n > 0 => Some((cur + page).min(n - 1)),
             Keysym::Prior => Some(cur.saturating_sub(page)),
             Keysym::Home => Some(0),
@@ -623,9 +623,15 @@ impl Files {
             return self.navigated();
         }
         match event.keysym {
-            Keysym::Up if alt => self.browser.parent(),
+            // Alt+↑, ou Ctrl+↑ comme Cmd+↑ sur macOS : dossier parent
+            Keysym::Up if alt || ctrl => self.browser.parent(),
             Keysym::a if ctrl => self.browser.select_all(),
-            Keysym::Return | Keysym::KP_Enter => return self.open_selected(),
+            // Comme sur macOS : Entrée renomme, Espace ouvre (aperçu d'une
+            // image), Ctrl+O ou Ctrl+↓ ouvrent aussi
+            Keysym::Return | Keysym::KP_Enter if self.in_trash() => return self.open_selected(),
+            Keysym::Return | Keysym::KP_Enter => return self.start_rename(),
+            Keysym::o | Keysym::Down if ctrl => return self.open_selected(),
+            Keysym::space => return self.open_selected(),
             Keysym::Left if alt => self.browser.back(),
             Keysym::Right if alt => self.browser.forward(),
             // Comme Cmd+Suppr sur macOS : remettre à sa place depuis la corbeille
@@ -634,15 +640,6 @@ impl Files {
             Keysym::F5 => self.browser.reload(),
             Keysym::Delete | Keysym::KP_Delete => return self.trash_selected(),
             Keysym::z if ctrl => return self.undo_trash(),
-            // Espace : aperçu rapide d'une image
-            Keysym::space => {
-                if let Some(entry) = self.browser.entries.get(self.browser.selected)
-                    && is_image_path(&entry.path)
-                {
-                    spawn_sibling("apercu", &entry.path.clone());
-                }
-                return;
-            }
             Keysym::h if ctrl => self.browser.toggle_hidden(),
             Keysym::C | Keysym::c if ctrl && self.modifiers.shift => return self.copy_path(),
             Keysym::c if ctrl => return self.clip_selection(false),
@@ -1198,7 +1195,7 @@ impl Files {
         let sw = SIDEBAR_W * s;
         c.fill_rounded(0.0, 0.0, sw, h as f32, 0.0, theme::palette().sidebar);
         c.fill_rounded(sw - s, 0.0, s, h as f32, 0.0, theme::palette().ink(0.06));
-        self.chrome.draw(&mut c, &self.icons, CHROME_Y, s);
+        self.chrome.draw(&mut c, CHROME_Y, s);
         self.regular.draw_in(
             &mut c,
             "FAVORIS",
