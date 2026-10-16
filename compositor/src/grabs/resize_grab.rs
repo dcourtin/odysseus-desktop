@@ -163,23 +163,8 @@ impl PointerGrab<Odysseus> for ResizeSurfaceGrab {
         // Bouton qui a lancé le redimensionnement (gauche via le client,
         // droit via Mod+clic droit)
         if !handle.current_pressed().contains(&self.start_data.button) {
-            // No more buttons are pressed, release the grab.
+            // Plus de bouton tenu : fin du redimensionnement (voir `unset`)
             handle.unset_grab(self, data, event.serial, event.time, true);
-
-            let xdg = self.window.toplevel().unwrap();
-            xdg.with_pending_state(|state| {
-                state.states.unset(xdg_toplevel::State::Resizing);
-                state.size = Some(self.last_window_size);
-            });
-
-            xdg.send_pending_configure();
-
-            ResizeSurfaceState::with(xdg.wl_surface(), |state| {
-                *state = ResizeSurfaceState::WaitingForLastCommit {
-                    edges: self.edges,
-                    initial_rect: self.initial_rect,
-                };
-            });
         }
     }
 
@@ -272,7 +257,28 @@ impl PointerGrab<Odysseus> for ResizeSurfaceGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut Odysseus) {}
+    /// Fin du redimensionnement, bouton relâché ou prise interrompue (autre
+    /// prise, fenêtre fermée) : sans l'état « Resizing » levé, un terminal
+    /// comme foot attendrait toujours la fin pour réagencer son texte.
+    fn unset(&mut self, _data: &mut Odysseus) {
+        let xdg = self.window.toplevel().unwrap();
+        if !xdg.alive() {
+            return;
+        }
+        xdg.with_pending_state(|state| {
+            state.states.unset(xdg_toplevel::State::Resizing);
+            state.size = Some(self.last_window_size);
+        });
+
+        xdg.send_pending_configure();
+
+        ResizeSurfaceState::with(xdg.wl_surface(), |state| {
+            *state = ResizeSurfaceState::WaitingForLastCommit {
+                edges: self.edges,
+                initial_rect: self.initial_rect,
+            };
+        });
+    }
 }
 
 /// State of the resize operation.
