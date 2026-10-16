@@ -318,6 +318,13 @@ impl Browser {
         self.normalize();
     }
 
+    /// Sélection fixée d'un bloc (zone de sélection), curseur sur `cursor`
+    pub fn pick_set(&mut self, set: HashSet<PathBuf>, cursor: usize) {
+        self.picked = set;
+        self.selected = cursor.min(self.entries.len().saturating_sub(1));
+        self.normalize();
+    }
+
     pub fn select_all(&mut self) {
         self.picked = self.entries.iter().map(|e| e.path.clone()).collect();
         self.normalize();

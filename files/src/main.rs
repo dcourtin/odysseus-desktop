@@ -15,6 +15,7 @@
 
 mod archive;
 mod dnd;
+mod edit;
 mod info;
 mod model;
 
@@ -86,6 +87,7 @@ const DRAG_START: f64 = 6.0;
 /// Durée de la confirmation d'une action sur son bouton
 const CONFIRM_TIME: Duration = Duration::from_millis(1500);
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 /// Zones cliquables, en coordonnées logiques de la fenêtre
 /// Au-delà, ouvrir toute une sélection d'un coup est refusé
@@ -117,6 +119,8 @@ enum Hit {
     Extract,
     /// Ouvrir l'Assistant avec l'élément en pièce jointe
     AskAgent,
+    /// Renommer l'élément (panneau d'informations)
+    Rename,
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -175,6 +179,14 @@ struct Files {
     /// la barre d'outils (double-clic : agrandir)
     chrome: common::chrome::Chrome,
     last_toolbar_click: Option<Instant>,
+    /// Renommage sur place, sélection par zone, menu du clic droit (edit.rs)
+    rename: Option<edit::Rename>,
+    band: Option<edit::Band>,
+    menu: Option<edit::Menu>,
+    /// Haut de la première ligne, et fin du nom de chaque ligne affichée
+    /// (pixels logiques) : glisser depuis le nom déplace, ailleurs sélectionne
+    rows_top: f64,
+    name_ends: Vec<(usize, f64)>,
     /// Dossier affiché surveillé (inotify) : la liste suit les fichiers qui
     /// arrivent (captures d'écran, téléchargements) ou s'en vont
     watched: Option<(PathBuf, RegistrationToken)>,
@@ -379,6 +391,11 @@ fn main() {
         collapse: None,
         chrome: common::chrome::Chrome::default(),
         last_toolbar_click: None,
+        rename: None,
+        band: None,
+        menu: None,
+        rows_top: 0.0,
+        name_ends: Vec::new(),
         watched: None,
         empty_armed: None,
         width: 960,
@@ -427,6 +444,7 @@ impl Files {
     }
 
     fn navigated(&mut self) {
+        self.menu = None;
         self.watch_cwd();
         self.update_title();
         self.follow_selection();
@@ -545,6 +563,21 @@ impl Files {
     }
 
     fn key(&mut self, event: KeyEvent) {
+        if self.rename_key(&event) {
+            return;
+        }
+        if self.menu.take().is_some() && event.keysym == Keysym::Escape {
+            return self.draw();
+        }
+        if event.keysym == Keysym::F2 {
+            return self.start_rename();
+        }
+        if self.modifiers.ctrl
+            && self.modifiers.shift
+            && matches!(event.keysym, Keysym::N | Keysym::n)
+        {
+            return self.new_folder();
+        }
         let n = self.browser.entries.len();
         let page = self.visible_rows().saturating_sub(1).max(1);
         let alt = self.modifiers.alt;
@@ -700,26 +733,8 @@ impl Files {
             Some(Hit::CopyImage) => self.copy_image(),
             Some(Hit::Terminal(dir)) => self.open_terminal(&dir),
             Some(Hit::Extract) => self.extract_selected(),
-            Some(Hit::AskAgent) => {
-                let paths = self.selected_paths();
-                if !paths.is_empty() {
-                    let exe = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")));
-                    let mut cmd = exe.map(std::process::Command::new);
-                    if let Some(cmd) = cmd.as_mut() {
-                        for path in &paths {
-                            cmd.arg("--joindre").arg(path);
-                        }
-                    }
-                    if let Some(mut cmd) = cmd
-                        && let Ok(mut child) = cmd.process_group(0).spawn()
-                    {
-                        std::thread::spawn(move || child.wait());
-                        self.confirm(Hit::AskAgent, Ok(()));
-                    }
-                }
-            }
+            Some(Hit::AskAgent) => self.ask_agent(),
+            Some(Hit::Rename) => self.start_rename(),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -763,6 +778,29 @@ impl Files {
             .entries
             .get(self.browser.selected)
             .map(|e| e.path.clone())
+    }
+
+    /// Ouvre l'Assistant avec la sélection en pièces jointes
+    fn ask_agent(&mut self) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")));
+        let mut cmd = exe.map(std::process::Command::new);
+        if let Some(cmd) = cmd.as_mut() {
+            for path in &paths {
+                cmd.arg("--joindre").arg(path);
+            }
+        }
+        if let Some(mut cmd) = cmd
+            && let Ok(mut child) = cmd.process_group(0).spawn()
+        {
+            std::thread::spawn(move || child.wait());
+            self.confirm(Hit::AskAgent, Ok(()));
+        }
     }
 
     /// Chemins des éléments sélectionnés, dans l'ordre de la liste
@@ -906,6 +944,7 @@ impl Files {
                     | Hit::Terminal(_)
                     | Hit::Extract
                     | Hit::AskAgent
+                    | Hit::Rename
             )
         });
         if hover != self.hover {
@@ -1499,6 +1538,7 @@ impl Files {
                 theme::palette().text_dim,
             );
         }
+        let mut name_ends = Vec::new();
         for (row, idx) in (b.scroll..b.entries.len().min(b.scroll + rows)).enumerate() {
             let e = &b.entries[idx];
             let ry = top + row as f32 * ROW_H * s;
@@ -1530,15 +1570,35 @@ impl Files {
             }
             let name_max = size_x - (list_x + 36.0 * s) - 16.0 * s;
             let name = self.regular.truncate(&e.name, 14.0 * s, name_max);
-            self.regular.draw_in(
-                &mut c,
-                &name,
-                list_x + 36.0 * s,
-                ry,
-                rh,
-                14.0 * s,
-                theme::palette().text,
-            );
+            let renaming = self.rename.as_ref().filter(|r| r.path == e.path);
+            if let Some(r) = renaming {
+                Files::draw_rename_field(
+                    &self.regular,
+                    r,
+                    &mut c,
+                    list_x + 36.0 * s,
+                    ry,
+                    name_max,
+                    rh,
+                    s,
+                );
+            } else {
+                self.regular.draw_in(
+                    &mut c,
+                    &name,
+                    list_x + 36.0 * s,
+                    ry,
+                    rh,
+                    14.0 * s,
+                    theme::palette().text,
+                );
+            }
+            let name_end = if renaming.is_some() {
+                list_x + 36.0 * s + name_max
+            } else {
+                list_x + 36.0 * s + self.regular.measure(&name, 14.0 * s)
+            };
+            name_ends.push((idx, (name_end / s) as f64));
             let size = if e.is_dir {
                 "—".to_string()
             } else {
@@ -1640,6 +1700,15 @@ impl Files {
                 s,
                 &mut hit,
             );
+        }
+
+        self.name_ends = name_ends;
+        self.rows_top = (top / s) as f64;
+        if let Some(band) = self.band.as_ref() {
+            Files::draw_band(band, &mut c, s);
+        }
+        if let Some(menu) = self.menu.as_ref() {
+            Files::draw_menu(&self.regular, menu, &mut c, s);
         }
 
         self.hits = hits;
@@ -1815,6 +1884,9 @@ fn draw_info(
             Hit::Terminal(d.path.clone()),
             p.text,
         ));
+    }
+    if !in_trash {
+        actions.push((icon::PENCIL, "Renommer", Hit::Rename, p.text));
     }
     actions.push((icon::COPY, "Copier le chemin", Hit::CopyPath, p.text));
     actions.push((icon::BOT, "Demander à l'Assistant", Hit::AskAgent, p.text));
@@ -2287,20 +2359,92 @@ impl PointerHandler for Files {
                     serial,
                     ..
                 } => {
+                    // Menu ouvert : choisir une ligne, ou le fermer
+                    if let Some(menu) = self.menu.as_ref() {
+                        let item = menu.item_at(x, y).map(|i| menu.items[i].1);
+                        let inside = menu.contains(x, y);
+                        self.menu = None;
+                        match item {
+                            Some(item) => self.menu_action(item),
+                            None => self.draw(),
+                        }
+                        if inside {
+                            continue;
+                        }
+                    }
+                    // Renommage en cours : un clic ailleurs le valide
+                    if self.rename.is_some() {
+                        self.commit_rename();
+                    }
                     if let Some(b) = self.chrome.press(x as f32, y as f32, CHROME_Y) {
                         self.chrome_action(b);
                         continue;
                     }
-                    // Un appui sur une ligne peut devenir un glisser
-                    self.press = match self.hit_at(x, y) {
-                        Some(Hit::Row(i)) => Some((x, y, i, serial)),
-                        _ => None,
+                    let hit = self.hit_at(x, y);
+                    // Hors du nom (vide, colonnes taille et date) : zone de sélection
+                    let on_name = |i: usize| {
+                        self.name_ends
+                            .iter()
+                            .find(|(r, _)| *r == i)
+                            .is_some_and(|(_, end)| x <= end + 8.0)
                     };
-                    self.click(x, y, serial);
+                    let in_list = y >= self.rows_top
+                        && y < (self.height as f32 - STATUS_H) as f64
+                        && x > SIDEBAR_W as f64;
+                    match hit {
+                        Some(Hit::Row(i)) if !on_name(i) => {
+                            if !self.modifiers.ctrl {
+                                self.browser.select(i);
+                            }
+                            self.start_band(x, y);
+                            self.draw();
+                        }
+                        None if in_list => self.start_band(x, y),
+                        _ => {
+                            // Un appui sur le nom d'une ligne peut devenir un glisser
+                            self.press = match hit {
+                                Some(Hit::Row(i)) => Some((x, y, i, serial)),
+                                _ => None,
+                            };
+                            self.click(x, y, serial);
+                        }
+                    }
+                }
+                PointerEventKind::Press {
+                    button: BTN_RIGHT, ..
+                } => {
+                    if self.rename.is_some() {
+                        self.commit_rename();
+                    }
+                    match self.hit_at(x, y) {
+                        Some(Hit::Row(i)) => {
+                            // L'élément cliqué rejoint la sélection (ou la remplace)
+                            if !self.browser.is_picked(i) {
+                                self.browser.select(i);
+                            }
+                            self.open_menu(x, y, true);
+                        }
+                        None if y >= self.rows_top && x > SIDEBAR_W as f64 => {
+                            self.open_menu(x, y, false)
+                        }
+                        _ => {}
+                    }
                 }
                 PointerEventKind::Motion { .. } => {
                     if self.chrome.motion(x as f32, y as f32, CHROME_Y) {
                         self.draw();
+                    }
+                    if self.band.is_some() {
+                        self.move_band(x, y);
+                        continue;
+                    }
+                    if let Some(menu) = self.menu.as_mut() {
+                        let hover = menu.item_at(x, y);
+                        if hover != menu.hover {
+                            menu.hover = hover;
+                            self.draw();
+                        }
+                        continue;
                     }
                     self.pointer_moved(x, y);
                     self.update_hover(x, y);
@@ -2314,6 +2458,9 @@ impl PointerHandler for Files {
                 PointerEventKind::Release {
                     button: BTN_LEFT, ..
                 } => {
+                    if self.end_band() {
+                        self.draw();
+                    }
                     if self.press.take().is_some()
                         && let Some(i) = self.collapse.take()
                     {

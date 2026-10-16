@@ -113,7 +113,19 @@ de volume affichent un indicateur.
 - **Panneau d'informations** (clic sur un élément, Ctrl+I) : vignette, détails, et
   actions selon le type (ouvrir, décompresser, terminal dans ce dossier, copier le
   chemin ou l'image, demander à l'Assistant, corbeille).
+- **Renommer** : clic droit > Renommer, « Renommer » dans le panneau
+  d'informations, ou F2. Le nom s'édite sur place, extension mise de côté ;
+  Entrée valide, Échap annule, un clic ailleurs valide aussi.
+- **Menu du clic droit** : sur un élément (ouvrir, renommer, copier le chemin,
+  demander à l'Assistant, décompresser, corbeille ; pour toute la sélection si
+  l'élément en fait partie), ou dans le vide (nouveau dossier, terminal ici,
+  fichiers cachés).
+- **Nouveau dossier** : clic droit dans le vide, ou Ctrl+Maj+N ; il est créé
+  puis tout de suite proposé au renommage.
 - **Sélection multiple** :
+  - zone de sélection : glisser depuis un espace vide, ou depuis les colonnes
+    taille et date d'une ligne (glisser depuis le nom déplace l'élément) ; avec
+    Ctrl, la zone s'ajoute à la sélection ;
   - Ctrl+clic ajoute ou retire un élément ;
   - Maj+clic, ou Maj+flèches, prend toute une plage ;
   - Ctrl+A sélectionne tout ; Échap revient à un seul élément.
@@ -131,7 +143,8 @@ de volume affichent un indicateur.
   (liste, favoris, chemin) le déplace ; vers une autre fenêtre, il y est déposé (un
   terminal reçoit les chemins).
 - **Raccourcis** : Entrée (ouvrir), Espace (aperçu d'une image), Suppr
-  (corbeille), Ctrl+Z (annuler la mise à la corbeille), Ctrl+C (copier le chemin),
+  (corbeille), F2 (renommer), Ctrl+Maj+N (nouveau dossier), Ctrl+Z (annuler la
+  mise à la corbeille), Ctrl+C (copier le chemin),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).
 - **Clés USB et disques externes** : sous « Appareils », avec un bouton d'éjection.
