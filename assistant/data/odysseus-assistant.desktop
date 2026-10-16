@@ -1,0 +1,11 @@
+[Desktop Entry]
+Icon=@ICONES@/odysseus-assistant.svg
+Type=Application
+Name=Assistant
+Name[fr]=Assistant
+Comment=Ask the agent chosen in Settings > Agent
+Comment[fr]=Poser une question à l'agent choisi dans Réglages > Agent
+Keywords=agent;ai;ia;question;claude;ollama;
+Exec=@BIN@/odysseus-assistant
+Terminal=false
+Categories=Utility;

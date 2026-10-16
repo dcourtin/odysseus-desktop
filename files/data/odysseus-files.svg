@@ -1,19 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <!-- Icône d'odysseus (tools/icones.py) : Fichiers ; symbole Lucide « folder-open », ISC -->
-  <defs>
-    <linearGradient id="fond" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5fa5dc"/>
-      <stop offset="1" stop-color="#2b67a6"/>
-    </linearGradient>
-    <linearGradient id="reflet" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
-      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond)"/>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#reflet)"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
-  <g transform="translate(26 26) scale(3.1667)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
-  </g>
+  <!-- Icône d'odysseus (tools/icones.py) : Fichiers, amphore -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#d97757"/>
+  <path d="M56 37C44 33 37 41 42 53M72 37C84 33 91 41 86 53" fill="none" stroke="#1d1916" stroke-width="6" stroke-linecap="round"/>
+  <rect x="49" y="26" width="30" height="7" rx="3.5" fill="#1d1916"/>
+  <path d="M57 33h14v10C86 47 93 57 93 69c0 13-10 23-21 29H56C45 92 35 82 35 69c0-12 7-22 22-26z" fill="#1d1916"/>
+  <rect x="54" y="98" width="20" height="6" rx="3" fill="#1d1916"/>
+  <path d="M44 68h40" stroke="#d97757" stroke-width="5" stroke-linecap="round"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.2"/>
 </svg>

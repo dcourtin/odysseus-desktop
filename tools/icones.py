@@ -1,50 +1,86 @@
 #!/usr/bin/env python3
-"""Icônes des applis d'odysseus, d'un même gabarit : carré arrondi, dégradé
-vertical d'une teinte tirée des fonds d'odysseus, reflet discret en haut,
-liseré sombre, symbole Lucide (ISC) blanc au même trait.
+"""Icônes des applis d'odysseus : céramique grecque, en formes modernes.
+Chaque appli est un objet de l'Odyssée réduit à une silhouette pleine, sur un
+fond uni tiré des vases antiques (terre cuite, fond blanc, noir, ocre). Les
+découpes prennent la couleur du fond ; un liseré sombre détache la tuile.
+
+  Fichiers   amphore (on y rangeait tout)
+  Notes      tablette de cire et stylet
+  Réglages   lyre (on l'accorde)
+  Aperçu     œil de proue (les trières en portaient un, pour voir)
+  Assistant  chouette d'Athéna, qui guide Ulysse
 
 Lancer depuis la racine du dépôt : python3 tools/icones.py
 """
 
 GABARIT = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <!-- Icône d'odysseus (tools/icones.py) : {nom} ; symbole Lucide « {lucide} », ISC -->
-  <defs>
-    <linearGradient id="fond" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="{haut}"/>
-      <stop offset="1" stop-color="{bas}"/>
-    </linearGradient>
-    <linearGradient id="reflet" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
-      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond)"/>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#reflet)"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
-  <g transform="translate(26 26) scale(3.1667)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-{trace}
-  </g>
+  <!-- Icône d'odysseus (tools/icones.py) : {nom}, {objet} -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="{fond}"/>
+{dessin}
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.2"/>
 </svg>
 """
 
-# Teintes : Mer Égée, Aube sur Ithaque, Marbre (graphite), Crépuscule
+NOIR = "#1d1916"
+TERRE = "#d97757"
+
+# Fonds : couleur de la tuile, couleur de la figure
+FONDS = {
+    "terre": (TERRE, NOIR),
+    "blanc": ("#f3eee3", NOIR),
+    "noir": ("#3a312c", TERRE),
+    "ocre": ("#e3a24f", NOIR),
+}
+
+
+def amphore(f, c):
+    return f"""  <path d="M56 37C44 33 37 41 42 53M72 37C84 33 91 41 86 53" fill="none" stroke="{f}" stroke-width="6" stroke-linecap="round"/>
+  <rect x="49" y="26" width="30" height="7" rx="3.5" fill="{f}"/>
+  <path d="M57 33h14v10C86 47 93 57 93 69c0 13-10 23-21 29H56C45 92 35 82 35 69c0-12 7-22 22-26z" fill="{f}"/>
+  <rect x="54" y="98" width="20" height="6" rx="3" fill="{f}"/>
+  <path d="M44 68h40" stroke="{c}" stroke-width="5" stroke-linecap="round"/>"""
+
+
+def tablette(f, c):
+    return f"""  <rect x="30" y="28" width="58" height="72" rx="12" fill="{f}"/>
+  <path d="M44 50h30M44 64h22" stroke="{c}" stroke-width="6" stroke-linecap="round"/>
+  <path d="M100 36L80 92" stroke="{c}" stroke-width="13" stroke-linecap="round"/>
+  <path d="M100 36L80 92" stroke="{f}" stroke-width="6" stroke-linecap="round"/>"""
+
+
+def lyre(f, c):
+    return f"""  <path d="M42 32v30a22 22 0 0 0 44 0V32" fill="none" stroke="{f}" stroke-width="10" stroke-linecap="round"/>
+  <path d="M36 44h56" stroke="{f}" stroke-width="7" stroke-linecap="round"/>
+  <path d="M56 44v38M64 44v40M72 44v38" stroke="{f}" stroke-width="3.5" stroke-linecap="round"/>
+  <rect x="52" y="90" width="24" height="8" rx="4" fill="{f}"/>"""
+
+
+def oeil(f, c):
+    return f"""  <path d="M22 64C34 42 50 34 64 34s30 8 42 30c-12 22-28 30-42 30S34 86 22 64z" fill="{f}"/>
+  <circle cx="64" cy="64" r="17" fill="{c}"/>
+  <circle cx="64" cy="64" r="9" fill="{f}"/>"""
+
+
+def chouette(f, c):
+    return f"""  <path d="M40 40l-2-12 14 8M88 40l2-12-14 8" fill="{f}" stroke="{f}" stroke-width="4" stroke-linejoin="round"/>
+  <ellipse cx="64" cy="70" rx="28" ry="32" fill="{f}"/>
+  <circle cx="52" cy="60" r="11.5" fill="{c}"/>
+  <circle cx="76" cy="60" r="11.5" fill="{c}"/>
+  <circle cx="53" cy="61" r="5.5" fill="{f}"/>
+  <circle cx="75" cy="61" r="5.5" fill="{f}"/>
+  <path d="M64 70l-4.5 4 4.5 6 4.5-6z" fill="{c}"/>"""
+
+
 ICONES = [
-    ("files/data/odysseus-files.svg", "Fichiers", "folder-open", "#5fa5dc", "#2b67a6",
-     ['<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>']),
-    ("notes/data/odysseus-notes.svg", "Notes", "notebook-pen", "#f2b95e", "#cc7a2b",
-     ['<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/>',
-      '<path d="M2 6h4"/>', '<path d="M2 10h4"/>', '<path d="M2 14h4"/>', '<path d="M2 18h4"/>',
-      '<path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/>']),
-    ("settings/data/odysseus-reglages.svg", "Réglages", "settings", "#9ba3b4", "#555c6d",
-     ['<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/>',
-      '<circle cx="12" cy="12" r="3"/>']),
-    ("preview/data/odysseus-apercu.svg", "Aperçu", "image", "#a98bdb", "#6549a8",
-     ['<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>', '<circle cx="9" cy="9" r="2"/>',
-      '<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>']),
+    ("files/data/odysseus-files.svg", "Fichiers", "amphore", "terre", amphore),
+    ("notes/data/odysseus-notes.svg", "Notes", "tablette de cire", "blanc", tablette),
+    ("settings/data/odysseus-reglages.svg", "Réglages", "lyre", "noir", lyre),
+    ("preview/data/odysseus-apercu.svg", "Aperçu", "œil de proue", "ocre", oeil),
+    ("assistant/data/odysseus-assistant.svg", "Assistant", "chouette d'Athéna", "blanc", chouette),
 ]
 
-for chemin, nom, lucide, haut, bas, trace in ICONES:
+for chemin, nom, objet, fond, dessin in ICONES:
+    tuile, figure = FONDS[fond]
     with open(chemin, "w") as f:
-        f.write(GABARIT.format(nom=nom, lucide=lucide, haut=haut, bas=bas,
-                               trace="\n".join("    " + t for t in trace)))
+        f.write(GABARIT.format(nom=nom, objet=objet, fond=tuile, dessin=dessin(figure, tuile)))
     print(chemin)
