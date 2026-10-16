@@ -452,6 +452,31 @@ fn scan_outputs(data: &mut CalloopData) {
         })
         .or_else(|| best(connected.iter()));
     if chosen.map(|i| i.handle()) == current && current.is_some() {
+        // Même écran, mais sa définition préférée a pu changer (fenêtre d'une
+        // machine virtuelle redimensionnée, écran passé sur une autre entrée) :
+        // on la suit à chaud, sauf si une définition est fixée dans Réglages
+        if let Some(info) = chosen
+            && let Some(m) = preferred_mode(info)
+            && let Some(screen) = state.screen.as_mut()
+        {
+            let want = (m.size().0 as i32, m.size().1 as i32, m.vrefresh() as i32);
+            if screen.preferred != want {
+                screen.preferred = want;
+                let mut modes: Vec<(i32, i32, i32)> = info
+                    .modes()
+                    .iter()
+                    .map(|m| (m.size().0 as i32, m.size().1 as i32, m.vrefresh() as i32))
+                    .collect();
+                modes.sort_by(|a, b| b.cmp(a));
+                modes.dedup();
+                screen.modes = modes;
+                if state.settings.mode.is_none() && screen.current != want {
+                    tracing::info!("nouvelle définition préférée : {}x{}", want.0, want.1);
+                    screen.current = want;
+                    state.pending_mode = Some((want.0, want.1, Some(want.2)));
+                }
+            }
+        }
         return;
     }
     if let (Some(info), Some(path)) = (chosen, last_output_path()) {
