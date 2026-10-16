@@ -55,5 +55,5 @@ fi
 
 # Au démarrage : l'affichage est transmis au bus de session (le démon de notifications
 # peut y être relancé à la demande, voir ~/.local/share/dbus-1/services), puis
-# démons de notifications et des automatismes, Dock et barre
-exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & $WELCOME exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
+# démons de notifications, des automatismes et de la réception de fichiers, Dock et barre
+exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-reception' 2>>'$LOGDIR/reception.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & $WELCOME exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1

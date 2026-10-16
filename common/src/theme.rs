@@ -481,6 +481,7 @@ pub mod icon {
     pub const ROTATE_CCW: char = '\u{e148}';
     pub const CROP: char = '\u{e0ab}';
     pub const INFO: char = '\u{e0f9}';
+    pub const INBOX: char = '\u{e0f7}';
     pub const TRASH: char = '\u{e18e}';
     pub const ZOOM_IN: char = '\u{e1b6}';
     pub const ZOOM_OUT: char = '\u{e1b7}';

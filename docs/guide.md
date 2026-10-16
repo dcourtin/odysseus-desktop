@@ -269,6 +269,21 @@ Quand un site de visioconférence demande l'écran, une fenêtre propose l'écra
 entier ou une fenêtre, en vignettes. Pendant le partage, un témoin s'allume dans la
 barre ; un clic dessus l'arrête.
 
+## Réception de fichiers (depuis un Mac, un iPhone…)
+
+Pour envoyer des fichiers à odysseus depuis un autre appareil du réseau local,
+façon AirDrop : installez LocalSend sur cet appareil (gratuit : App Store,
+Google Play, localsend.org), puis activez Réglages > Réception. odysseus apparaît
+alors, sous le nom de la machine, dans la liste des appareils de LocalSend ;
+glissez-y des fichiers ou un dossier.
+
+Chaque envoi s'annonce dans une notification : Accepter ou Refuser (sans réponse en
+90 secondes, c'est refusé). Les fichiers arrivent dans Téléchargements, sans jamais en
+remplacer un autre (« photo 2.jpg ») ; une jauge suit les gros envois, et un clic sur
+la notification de fin ouvre le dossier dans Fichiers. Un message texte envoyé par
+LocalSend s'affiche dans une notification, avec un bouton « Copier ». Les échanges
+sont chiffrés, et seuls les appareils du réseau local sont entendus.
+
 ## Trousseau
 
 Les applications y rangent leurs mots de passe et jetons, chiffrés. Il s'ouvre à la
@@ -314,7 +329,7 @@ quand on veut : Réglages > À propos > « Revoir l'accueil ».
 Apparence (trois thèmes d'odysseus, ou le vôtre : base sombre ou claire, accent et fond parmi des teintes méditerranéennes ; le texte, les panneaux et les liserés s'accordent d'eux-mêmes, et toucher un choix le met en vigueur sur tout le bureau), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
-Raccourcis, Dock, Automatismes, Trousseau, Mises à jour, Agent, À propos.
+Raccourcis, Dock, Réception (fichiers envoyés depuis vos autres appareils, voir plus haut), Automatismes, Trousseau, Mises à jour, Agent, À propos.
 
 ## Verrouillage et énergie
 

@@ -35,6 +35,8 @@ pub struct Settings {
     /// « toujours », « jamais ») et taille des icônes (pixels logiques)
     pub dock_hide: String,
     pub dock_size: u32,
+    /// Réception de fichiers depuis les autres appareils (LocalSend)
+    pub reception: bool,
 }
 
 impl Default for Settings {
@@ -54,6 +56,7 @@ impl Default for Settings {
             repeat_rate: 25,
             dock_hide: "intelligent".into(),
             dock_size: 48,
+            reception: false,
         }
     }
 }
@@ -95,6 +98,7 @@ impl Settings {
                     s.dock_hide = value.to_string()
                 }
                 "dock_taille" => s.dock_size = num().unwrap_or(48).clamp(32, 72),
+                "reception" => s.reception = value == "oui",
                 // Les clés agent_* ont rejoint agent.json (common::agent)
                 _ => {}
             }
@@ -134,6 +138,7 @@ impl Settings {
         line("repetition_vitesse", self.repeat_rate.to_string());
         line("dock_masquage", self.dock_hide.clone());
         line("dock_taille", self.dock_size.to_string());
+        line("reception", if self.reception { "oui" } else { "non" }.into());
         out
     }
 
@@ -196,6 +201,7 @@ mod tests {
             repeat_rate: 30,
             dock_hide: "toujours".into(),
             dock_size: 56,
+            reception: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         assert_eq!(Settings::parse(""), Settings::default());

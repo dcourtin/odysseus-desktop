@@ -190,6 +190,7 @@ enum Page {
     Energie,
     Raccourcis,
     Dock,
+    Reception,
     Automatismes,
     Trousseau,
     MisesAJour,
@@ -211,7 +212,7 @@ const WIZARD: [Option<Page>; 7] = [
 /// Pied de page de l'accueil (navigation)
 const FOOTER_H: f32 = 72.0;
 
-const PAGES: [Page; 12] = [
+const PAGES: [Page; 13] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
@@ -219,6 +220,7 @@ const PAGES: [Page; 12] = [
     Page::Energie,
     Page::Raccourcis,
     Page::Dock,
+    Page::Reception,
     Page::Automatismes,
     Page::Trousseau,
     Page::MisesAJour,
@@ -236,6 +238,7 @@ impl Page {
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
             Page::Dock => ("Dock", icon::APP),
+            Page::Reception => ("Réception", icon::INBOX),
             Page::Automatismes => ("Automatismes", icon::ZAP),
             Page::Trousseau => ("Trousseau", icon::LOCK),
             Page::MisesAJour => ("Mises à jour", icon::ARROW_DOWN_CIRCLE),
@@ -253,6 +256,7 @@ impl Page {
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
             "dock" => Page::Dock,
+            "reception" | "réception" | "localsend" => Page::Reception,
             "automatismes" => Page::Automatismes,
             "trousseau" | "secrets" => Page::Trousseau,
             "mises-a-jour" | "maj" => Page::MisesAJour,
@@ -301,6 +305,7 @@ enum Hit {
     Locale(usize),
     ScreenOff(u32),
     LockToggle,
+    ReceptionToggle,
     Suspend(u32),
     DockHide(&'static str),
     DockSize(u32),
@@ -1230,6 +1235,10 @@ impl App {
                 self.settings.lock_on_idle = !self.settings.lock_on_idle;
                 self.save();
             }
+            Hit::ReceptionToggle => {
+                self.settings.reception = !self.settings.reception;
+                self.save();
+            }
             Hit::Suspend(min) => {
                 self.settings.suspend_min = min;
                 self.save();
@@ -1487,6 +1496,7 @@ impl App {
             Page::Energie => self.page_energie(ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(ui, cx, top, cw),
             Page::Dock => self.page_dock(ui, cx, top, cw),
+            Page::Reception => self.page_reception(ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(ui, cx, top, cw),
             Page::Trousseau => self.page_trousseau(ui, cx, top, cw),
             Page::MisesAJour => self.page_maj(ui, cx, top, cw),
@@ -2200,6 +2210,46 @@ impl App {
             y,
             w,
             "Clic droit sur une icône : garder dans le Dock ou l'en retirer, nouvelle fenêtre, quitter. Une fenêtre réduite rentre dans l'icône de son appli (un anneau la signale) ; un clic la ramène.",
+        )
+    }
+
+    fn page_reception(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let p = theme::palette();
+        let mut y = ui.section(x, y, "Recevoir des fichiers");
+        ui.card(x, y, w, ROW_H);
+        ui.text(
+            "Accepter les envois des appareils du réseau local",
+            x + 18.0,
+            y,
+            ROW_H,
+            13.5,
+            p.text,
+        );
+        ui.switch(
+            x + w - 18.0 - 40.0,
+            y + 14.0,
+            self.settings.reception,
+            Hit::ReceptionToggle,
+        );
+        y += ROW_H + 12.0;
+        let name = std::fs::read_to_string("/etc/hostname")
+            .ok()
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "odysseus".into());
+        y = ui.note(
+            x,
+            y,
+            w,
+            &format!(
+                "Sur le Mac, l'iPhone ou un autre ordinateur, installez LocalSend (gratuit, sur l'App Store et localsend.org). «\u{a0}{name}\u{a0}» apparaît dans la liste de ses appareils : glissez-y des fichiers ou un dossier."
+            ),
+        ) + 12.0;
+        ui.note(
+            x,
+            y,
+            w,
+            "Chaque envoi vous est demandé dans une notification (Accepter ou Refuser) ; les fichiers arrivent dans Téléchargements, sans jamais en remplacer un autre. Un message texte s'affiche avec un bouton « Copier ». Les échanges sont chiffrés, et seuls les appareils du réseau local sont entendus.",
         )
     }
 
