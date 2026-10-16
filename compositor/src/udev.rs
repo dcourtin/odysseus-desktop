@@ -94,6 +94,8 @@ pub struct UdevData {
     scale: f64,
     /// Ni Réglages ni ODYSSEUS_SCALE : échelle déduite de la densité de chaque écran trouvé
     auto_scale: bool,
+    /// Couches d'un écran retiré (barre, Dock…), en attente du prochain écran
+    orphans: Vec<smithay::desktop::LayerSurface>,
 }
 
 pub fn init_udev(
@@ -194,6 +196,7 @@ pub fn init_udev(
         wanted: std::env::var("ODYSSEUS_OUTPUT").ok(),
         scale,
         auto_scale: fixed_scale.is_none(),
+        orphans: Vec::new(),
     });
     scan_outputs(data);
     if data.udev.as_ref().is_some_and(|u| u.surfaces.is_empty()) {
@@ -364,20 +367,33 @@ fn scan_outputs(data: &mut CalloopData) {
         .filter_map(|h| udev.manager.device().get_connector(*h, true).ok())
         .filter(|i| i.state() == connector::State::Connected && !i.modes().is_empty())
         .collect();
+    // Écran voulu (ODYSSEUS_OUTPUT), sinon celui déjà utilisé s'il est toujours
+    // branché (un écran qui se réveille peut faire apparaître et disparaître
+    // plusieurs sorties : on ne saute pas de l'une à l'autre), sinon le premier
+    let current = udev.surfaces.values().map(|s| s.connector).next();
     let chosen = connected
         .iter()
         .find(|i| udev.wanted.as_deref() == Some(connector_name(i).as_str()))
+        .or_else(|| connected.iter().find(|i| Some(i.handle()) == current))
         .or_else(|| connected.first());
-    let current = udev.surfaces.values().map(|s| s.connector).next();
     if chosen.map(|i| i.handle()) == current && current.is_some() {
         return;
     }
 
-    // Écran précédent débranché (ou remplacé par l'écran préféré)
+    // Écran précédent débranché (ou remplacé par l'écran préféré) ; ses couches
+    // (barre, Dock, fond…) passeront sur le nouvel écran, sinon elles restent
+    // rattachées à un écran disparu et ne s'affichent plus
     let old: Vec<crtc::Handle> = udev.surfaces.keys().copied().collect();
     for crtc in old {
         if let Some(surface) = udev.surfaces.remove(&crtc) {
             tracing::info!("écran {} retiré", surface.output.name());
+            let mut map = layer_map_for_output(&surface.output);
+            let layers: Vec<_> = map.layers().cloned().collect();
+            for layer in layers {
+                map.unmap_layer(&layer);
+                udev.orphans.push(layer);
+            }
+            drop(map);
             state.space.unmap_output(&surface.output);
             display_handle.remove_global::<crate::Odysseus>(surface.global);
         }
@@ -493,7 +509,15 @@ fn scan_outputs(data: &mut CalloopData) {
             blanked: false,
         },
     );
-    layer_map_for_output(&output).arrange();
+    {
+        let mut map = layer_map_for_output(&output);
+        for layer in std::mem::take(&mut udev.orphans) {
+            if let Err(e) = map.map_layer(&layer) {
+                tracing::warn!("couche non reprise sur {name} : {e}");
+            }
+        }
+        map.arrange();
+    }
     state.night.applied = None;
     // Fenêtres ramenées dans le nouvel écran si elles en dépassent
     state.fit_windows_to_output();
