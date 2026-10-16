@@ -183,19 +183,21 @@ impl Field {
         h: f32,
         s: f32,
         placeholder: &str,
+        focused: bool,
     ) {
         let p = theme::palette();
         let px = 14.0 * s;
         let pad = 8.0 * s;
         c.fill_rounded(x, y, w, h, 7.0 * s, p.content);
-        c.stroke_rounded(x, y, w, h, 7.0 * s, s, p.accent);
+        let border = if focused { p.accent } else { p.ink(0.15) };
+        c.stroke_rounded(x, y, w, h, 7.0 * s, s, border);
         // Défilement : le curseur reste visible
         let inner = w - 2.0 * pad;
         let xc = font.measure(&self.text[..self.cursor], px);
         let shift = (xc - inner + 2.0 * s).max(0.0);
         let tx = x + pad - shift;
         let (a, b) = self.selection();
-        if b > a {
+        if focused && b > a {
             let xa = (tx + font.measure(&self.text[..a], px)).max(x + pad);
             let xb = (tx + font.measure(&self.text[..b], px)).min(x + w - pad);
             c.fill_rounded(
@@ -224,7 +226,9 @@ impl Field {
             let visible = font.truncate(&self.text[start..], px, x + w - pad - sx);
             font.draw_in(c, &visible, sx, y, h, px, p.text);
         }
-        c.fill_rounded(tx + xc, y + 5.0 * s, s.max(1.5), h - 10.0 * s, 0.0, p.text);
+        if focused {
+            c.fill_rounded(tx + xc, y + 5.0 * s, s.max(1.5), h - 10.0 * s, 0.0, p.text);
+        }
     }
 }
 

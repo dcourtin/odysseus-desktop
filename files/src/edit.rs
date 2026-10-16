@@ -195,8 +195,17 @@ impl Files {
         s: f32,
     ) {
         let pad = 8.0 * s;
-        r.field
-            .draw(font, c, x - pad, y + 3.0 * s, w + pad, h - 6.0 * s, s, "");
+        r.field.draw(
+            font,
+            c,
+            x - pad,
+            y + 3.0 * s,
+            w + pad,
+            h - 6.0 * s,
+            s,
+            "",
+            true,
+        );
     }
 
     // --- Nouveau dossier ----------------------------------------------------------

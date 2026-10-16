@@ -21,6 +21,7 @@ mod edit;
 mod field;
 mod info;
 mod model;
+mod search;
 mod undo;
 
 use std::os::fd::AsFd;
@@ -129,6 +130,10 @@ enum Hit {
     NewFolder,
     /// Champ du chemin tapé
     Goto,
+    /// Bouton de recherche, son champ, sa portée (sous-dossiers ou non)
+    Search,
+    SearchField,
+    Scope(bool),
 }
 
 /// Glisser-déposer en cours depuis Fichiers
@@ -198,6 +203,9 @@ struct Files {
     rename: Option<edit::Rename>,
     /// Chemin tapé (Ctrl+L), à la place du fil d'Ariane
     goto: Option<field::Field>,
+    /// Recherche (Ctrl+F), et lots de résultats du fil des sous-dossiers
+    search: Option<search::Search>,
+    found: channel::Sender<search::Found>,
     band: Option<edit::Band>,
     menu: Option<edit::Menu>,
     /// Haut de la première ligne, et fin du nom de chaque ligne affichée
@@ -320,6 +328,15 @@ fn main() {
     let (thumbs, thumb_rx) = channel::channel::<(PathBuf, Option<Image>)>();
     let (extracts, extract_rx) = channel::channel::<Result<PathBuf, String>>();
     let (pastes, paste_rx) = channel::channel::<clip::Pasted>();
+    let (found, found_rx) = channel::channel::<search::Found>();
+    event_loop
+        .handle()
+        .insert_source(found_rx, |event, _, files| {
+            if let ChannelEvent::Msg(found) = event {
+                files.found(found);
+            }
+        })
+        .expect("canal de la recherche");
     event_loop
         .handle()
         .insert_source(paste_rx, |event, _, files| {
@@ -422,6 +439,8 @@ fn main() {
         last_toolbar_click: None,
         rename: None,
         goto: None,
+        search: None,
+        found,
         band: None,
         menu: None,
         rows_top: 0.0,
@@ -476,6 +495,7 @@ impl Files {
     fn navigated(&mut self) {
         self.menu = None;
         self.goto = None;
+        self.left_search_dir();
         self.watch_cwd();
         self.update_title();
         self.follow_selection();
@@ -594,7 +614,7 @@ impl Files {
     }
 
     fn key(&mut self, event: KeyEvent) {
-        if self.rename_key(&event) || self.goto_key(&event) {
+        if self.rename_key(&event) || self.goto_key(&event) || self.search_key(&event) {
             return;
         }
         if self.menu.take().is_some() && event.keysym == Keysym::Escape {
@@ -656,6 +676,7 @@ impl Files {
             Keysym::x if ctrl => return self.clip_selection(true),
             Keysym::v if ctrl => return self.paste(),
             Keysym::d if ctrl => return self.duplicate(),
+            Keysym::f if ctrl => return self.start_search(),
             Keysym::l if ctrl => return self.start_goto(),
             Keysym::t if ctrl => {
                 let dir = self.browser.cwd.clone();
@@ -666,6 +687,7 @@ impl Files {
                 let cur = self.browser.selected;
                 self.browser.select(cur);
             }
+            Keysym::Escape if self.search.is_some() => return self.close_search(),
             Keysym::Escape if self.info => self.info = false,
             Keysym::q if ctrl => {
                 self.exit = true;
@@ -770,6 +792,9 @@ impl Files {
             Some(Hit::Rename) => self.start_rename(),
             Some(Hit::NewFolder) => self.new_folder(),
             Some(Hit::Goto) => {}
+            Some(Hit::Search) => self.start_search(),
+            Some(Hit::SearchField) => self.draw(),
+            Some(Hit::Scope(deep)) => self.set_scope(deep),
             Some(Hit::Trash) if self.in_trash() => self.restore_selected(),
             Some(Hit::Trash) => self.trash_selected(),
             None => {
@@ -981,6 +1006,7 @@ impl Files {
                     | Hit::AskAgent
                     | Hit::Rename
                     | Hit::NewFolder
+                    | Hit::Search
             )
         });
         if hover != self.hover {
@@ -1336,8 +1362,24 @@ impl Files {
             };
             crumbs.push((label, acc.clone()));
         }
+        // À droite de la barre d'outils : recherche (Ctrl+F), nouveau dossier
+        // (Ctrl+Maj+N), terminal dans le dossier affiché (Ctrl+T)
+        let mut buttons = vec![(icon::TERMINAL, Hit::Terminal(self.browser.cwd.clone()))];
+        if common::trash::files_dir().is_none_or(|t| self.browser.cwd != t) {
+            buttons.push((icon::FOLDER_PLUS, Hit::NewFolder));
+        }
+        if self.search.is_none() {
+            buttons.push((icon::SEARCH, Hit::Search));
+        }
+        let button = 28.0 * s;
+        let buttons_left = right - 16.0 * s - buttons.len() as f32 * (button + 8.0 * s) + 8.0 * s;
+        let search_w = if self.search.is_some() {
+            (240.0 * s).min((right - x0) * 0.35)
+        } else {
+            0.0
+        };
         let crumb_x0 = x0 + 100.0 * s;
-        let avail = right - crumb_x0 - 120.0 * s;
+        let avail = buttons_left - search_w - crumb_x0 - 24.0 * s;
         let sep_w = self.regular.measure("  ›  ", 14.0 * s);
         let widths: Vec<f32> = crumbs
             .iter()
@@ -1362,6 +1404,7 @@ impl Files {
                 fh,
                 s,
                 "",
+                true,
             );
             hit(crumb_x0 - 8.0 * s, mid - fh / 2.0, fw, fh, Hit::Goto);
             first = crumbs.len();
@@ -1409,11 +1452,21 @@ impl Files {
                 cx += sep_w;
             }
         }
-        // À droite de la barre d'outils : nouveau dossier (Ctrl+Maj+N), et
-        // terminal dans le dossier affiché (Ctrl+T)
-        let mut buttons = vec![(icon::TERMINAL, Hit::Terminal(self.browser.cwd.clone()))];
-        if common::trash::files_dir().is_none_or(|t| self.browser.cwd != t) {
-            buttons.push((icon::FOLDER_PLUS, Hit::NewFolder));
+        if let Some(search) = self.search.as_ref() {
+            let fh = 30.0 * s;
+            let fx = buttons_left - 8.0 * s - search_w;
+            search.field.draw(
+                &self.regular,
+                &mut c,
+                fx,
+                mid - fh / 2.0,
+                search_w,
+                fh,
+                s,
+                "Rechercher",
+                search.focused,
+            );
+            hit(fx, mid - fh / 2.0, search_w, fh, Hit::SearchField);
         }
         for (i, (glyph, what)) in buttons.into_iter().enumerate() {
             let size = 28.0 * s;
@@ -1544,7 +1597,11 @@ impl Files {
         let top = header_y + HEADER_H * s;
         let b = &self.browser;
         if b.entries.is_empty() && b.message.is_none() {
-            let msg = "Dossier vide";
+            let msg = match self.search.as_ref() {
+                Some(s) if s.busy => "Recherche…",
+                Some(s) if !s.field.text.trim().is_empty() => "Aucun résultat",
+                _ => "Dossier vide",
+            };
             let mw = self.regular.measure(msg, 15.0 * s);
             let list_h = h as f32 - top - STATUS_H * s;
             self.regular.draw_in(
@@ -1617,6 +1674,27 @@ impl Files {
             } else {
                 list_x + 36.0 * s + self.regular.measure(&name, 14.0 * s)
             };
+            // Recherche dans les sous-dossiers : où se trouve l'élément
+            if let Some(place) = e.place.as_ref().filter(|_| renaming.is_none()) {
+                let label = if place.is_empty() {
+                    "ici"
+                } else {
+                    place.as_str()
+                };
+                let room = size_x - 16.0 * s - (name_end + 12.0 * s);
+                if room > 40.0 * s {
+                    let text = self.regular.truncate(label, 12.0 * s, room);
+                    self.regular.draw_in(
+                        &mut c,
+                        &text,
+                        name_end + 12.0 * s,
+                        ry,
+                        rh,
+                        12.0 * s,
+                        theme::palette().text_dim,
+                    );
+                }
+            }
             name_ends.push((idx, (name_end / s) as f64));
             let size = if e.is_dir {
                 "—".to_string()
@@ -1649,6 +1727,22 @@ impl Files {
         c.fill_rounded(x0, sy, right - x0, s, 0.0, theme::palette().ink(0.06));
         let status = match &b.message {
             Some(m) => m.clone(),
+            None if self.search.is_some() && !b.multiple() => {
+                let s = self.search.as_ref().unwrap();
+                let n = b.entries.len();
+                let what = if s.field.text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("{n} résultat{}", plural(n))
+                };
+                if s.busy {
+                    format!("{what} · recherche…")
+                } else if s.capped {
+                    format!("{what} · arrêtée là, précisez la recherche")
+                } else {
+                    what
+                }
+            }
             None if b.multiple() => {
                 let sel = b.selection();
                 let bytes: u64 = sel.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
@@ -1681,6 +1775,36 @@ impl Files {
         };
         self.regular
             .draw_in(&mut c, &status, list_x, sy, STATUS_H * s, 12.0 * s, color);
+        // Portée de la recherche, à droite de la barre d'état
+        if let Some(search) = self.search.as_ref() {
+            let mut sx = right - 16.0 * s;
+            for (label, deep) in [("Sous-dossiers", true), ("Ce dossier", false)] {
+                let lw = self.regular.measure(label, 12.0 * s) + 20.0 * s;
+                sx -= lw;
+                let ch = 20.0 * s;
+                let cy = sy + (STATUS_H * s - ch) / 2.0;
+                let active = search.deep == deep;
+                if active {
+                    c.fill_rounded(
+                        sx,
+                        cy,
+                        lw,
+                        ch,
+                        ch / 2.0,
+                        theme::palette().accent.with_alpha(0.25),
+                    );
+                }
+                let color = if active {
+                    theme::palette().text
+                } else {
+                    theme::palette().text_dim
+                };
+                self.regular
+                    .draw_in(&mut c, label, sx + 10.0 * s, cy, ch, 12.0 * s, color);
+                hit(sx, cy, lw, ch, Hit::Scope(deep));
+                sx -= 6.0 * s;
+            }
+        }
 
         if let Some(d) = self.details.as_ref().filter(|_| info_px > 0.0) {
             let fonts = Fonts {
@@ -2411,7 +2535,11 @@ impl PointerHandler for Files {
                     if self.rename.is_some() {
                         self.commit_rename();
                     }
-                    if self.goto.is_some() && self.hit_at(x, y) != Some(Hit::Goto) {
+                    let hit_now = self.hit_at(x, y);
+                    if let Some(s) = self.search.as_mut() {
+                        s.focused = hit_now == Some(Hit::SearchField);
+                    }
+                    if self.goto.is_some() && hit_now != Some(Hit::Goto) {
                         self.goto = None;
                         self.draw();
                     }

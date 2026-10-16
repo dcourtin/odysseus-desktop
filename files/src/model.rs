@@ -12,6 +12,9 @@ pub struct Entry {
     pub is_dir: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
+    /// Recherche dans les sous-dossiers : dossier de l'élément, relatif au
+    /// dossier affiché
+    pub place: Option<String>,
 }
 
 /// Colonne de tri
@@ -93,6 +96,11 @@ pub struct Browser {
     pub sort: Sort,
     /// Message d'erreur ou d'information pour la barre d'état
     pub message: Option<String>,
+    /// Recherche : seuls les noms qui contiennent ce texte (sans casse ni
+    /// accents) ; `deep` : la liste vient d'une recherche dans les
+    /// sous-dossiers (search.rs), elle n'est plus relue depuis le dossier
+    pub filter: String,
+    pub deep: bool,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
 }
@@ -109,6 +117,8 @@ impl Browser {
             show_hidden: false,
             sort: Sort::load(),
             message: None,
+            filter: String::new(),
+            deep: false,
             back: Vec::new(),
             forward: Vec::new(),
         };
@@ -120,12 +130,23 @@ impl Browser {
     pub fn reload(&mut self) {
         self.message = None;
         let selected = self.entries.get(self.selected).map(|e| e.path.clone());
+        if self.deep {
+            // Résultats d'une recherche : ceux qui ont disparu s'en vont
+            self.entries.retain(|e| e.path.symlink_metadata().is_ok());
+            self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+            self.normalize();
+            return;
+        }
         self.entries.clear();
+        let filter = fold(&self.filter);
         match std::fs::read_dir(&self.cwd) {
             Ok(list) => {
                 for item in list.flatten() {
                     let name = item.file_name().to_string_lossy().into_owned();
                     if !self.show_hidden && name.starts_with('.') {
+                        continue;
+                    }
+                    if !filter.is_empty() && !fold(&name).contains(&filter) {
                         continue;
                     }
                     let path = item.path();
@@ -141,6 +162,7 @@ impl Browser {
                         is_dir,
                         size,
                         modified,
+                        place: None,
                     });
                 }
             }
@@ -158,7 +180,7 @@ impl Browser {
 
     /// Dossiers d'abord (comme le Finder), puis la colonne choisie ; à égalité,
     /// ordre alphabétique sans casse. Les dossiers n'ont pas de taille : par nom.
-    fn sort_entries(&mut self) {
+    pub fn sort_entries(&mut self) {
         let sort = self.sort;
         self.entries.sort_by(|a, b| {
             let by_name = || a.name.to_lowercase().cmp(&b.name.to_lowercase());
@@ -199,6 +221,8 @@ impl Browser {
     }
 
     fn go(&mut self, path: PathBuf) {
+        self.filter.clear();
+        self.deep = false;
         self.cwd = path;
         self.selected = 0;
         self.anchor = 0;
@@ -359,6 +383,24 @@ impl Browser {
             self.select(i);
         }
     }
+}
+
+/// Texte comparable pour la recherche : minuscules, sans accents
+pub fn fold(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à' | 'â' | 'ä' | 'á' | 'ã' | 'å' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' | 'í' | 'ì' => 'i',
+            'ô' | 'ö' | 'ó' | 'ò' | 'õ' => 'o',
+            'ù' | 'û' | 'ü' | 'ú' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            'ÿ' => 'y',
+            other => other,
+        })
+        .collect()
 }
 
 /// Taille lisible, à la française : 12 octets, 3,4 Ko, 1,2 Go.

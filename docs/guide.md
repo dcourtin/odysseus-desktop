@@ -149,6 +149,11 @@ de volume affichent un indicateur.
   fenêtre, il y est déposé (un terminal reçoit les chemins). Des fichiers venant
   d'une autre application (ou d'une autre fenêtre Fichiers) sont copiés dans le
   dossier visé, ou dans le dossier affiché.
+- **Rechercher** : Ctrl+F ou la loupe de la barre d'outils. Le dossier se filtre
+  à la frappe, sans tenir compte des majuscules ni des accents. En bas à droite,
+  « Sous-dossiers » cherche dans toute l'arborescence : les résultats arrivent au
+  fur et à mesure, chacun avec son emplacement (2 000 au plus). Entrée passe le
+  clavier aux résultats, ↑ ↓ y circulent, Échap ferme la recherche.
 - **Annuler** : Ctrl+Z défait la dernière opération, puis la précédente (jusqu'à
   30) : mise à la corbeille, renommage, déplacement, collage, copie, duplication,
   nouveau dossier, archive. Une copie défaite part à la corbeille ; rien n'est
@@ -163,7 +168,7 @@ de volume affichent un indicateur.
   l'Aperçu), Entrée ou F2 (renommer), Ctrl+↑ (dossier parent), Suppr
   (corbeille), Ctrl+Maj+N (nouveau dossier), Ctrl+C / Ctrl+X /
   Ctrl+V (copier, couper, coller), Ctrl+Z (annuler),
-  Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin),
+  Ctrl+Maj+C (copier le chemin), Ctrl+D (dupliquer), Ctrl+L (aller à un chemin), Ctrl+F (rechercher),
   Ctrl+T (terminal ici), Ctrl+H (fichiers cachés), F5 (relire).
 - **Archives** : un double-clic décompresse à côté (zip, tar, gz, xz, bz2, zst).
 - **Clés USB et disques externes** : sous « Appareils », avec un bouton d'éjection.
