@@ -3,6 +3,7 @@
 
 pub mod docs;
 pub mod files;
+pub mod memory;
 pub mod notebook;
 pub mod run;
 pub mod tools;

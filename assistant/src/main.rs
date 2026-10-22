@@ -536,6 +536,7 @@ impl App {
             question,
             files,
             self.context.clone(),
+            self.conversation,
             self.generation,
             self.events.clone(),
         ));

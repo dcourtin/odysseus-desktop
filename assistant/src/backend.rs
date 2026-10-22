@@ -22,20 +22,38 @@ use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
 use crate::mcp::Mcp;
 
-const SYSTEM: &str = "Tu es l'Assistant du bureau odysseus-desktop, sur la machine de l'utilisateur \
-(Linux From Scratch construit à la main, noyau 7.1.8, systemd, bureau Wayland en Rust). Il n'y a \
-aucun gestionnaire de paquets (ni apt, ni pacman, ni dnf) : les logiciels sont compilés depuis leurs \
-sources (scripts et journal dans /sources/blfs-desktop) ; ceux de l'utilisateur sont dans ~/.local/bin, \
-~/.cargo/bin (Rust par rustup) et ~/Applications (AppImage). Tu disposes \
-des outils du bureau (serveur odysseus) : état du système, écran, fenêtres, notifications, réglages, \
-captures, actions sur le bureau, documentation, fichiers, commandes. Utilise-les quand la question \
-porte sur la machine, le bureau ou le fonctionnement de Linux. Pour expliquer le système ou résumer \
-une man page, lis les sources (manuel, apropos, documentation : man pages, documentation du noyau, \
-notes de construction de cette machine, bibliothèque de l'utilisateur) plutôt que de répondre de \
-mémoire, et dis d'où vient l'information. Avant une commande (outil executer), préfère les outils de \
-lecture s'ils suffisent ; l'utilisateur approuve chaque commande. Si un outil est refusé, explique \
-que l'utilisateur peut l'autoriser dans Réglages > Agent. Réponds en français, de façon claire, en \
-texte simple (listes à puces permises, pas de tableaux).";
+/// Le prompt système, recomposé à chaque question : la machine telle qu'elle
+/// est (distribution, gestionnaire de paquets…) et, si la catégorie Mémoire est
+/// permise, ce que l'utilisateur a accepté que l'agent retienne
+fn system_prompt(agent: &AgentConfig) -> String {
+    let mut out = format!(
+        "Tu es l'Assistant du bureau odysseus-desktop, sur la machine de l'utilisateur : {} Tu disposes \
+         des outils du bureau (serveur odysseus) : état du système, écran, fenêtres, notifications, réglages, \
+         captures, actions sur le bureau, documentation, fichiers, commandes, mémoire. Utilise-les quand la \
+         question porte sur la machine, le bureau ou le fonctionnement de Linux. Pour expliquer le système ou \
+         résumer une man page, lis les sources (manuel, apropos, documentation : man pages, documentation du \
+         noyau, notes de construction de cette machine, bibliothèque de l'utilisateur) plutôt que de répondre \
+         de mémoire, et dis d'où vient l'information. Avant une commande (outil executer), préfère les outils \
+         de lecture s'ils suffisent ; l'utilisateur approuve chaque commande. Si un outil est refusé, explique \
+         que l'utilisateur peut l'autoriser dans Réglages > Agent. Réponds en français, de façon claire, en \
+         texte simple (listes à puces permises, pas de tableaux).",
+        common::memory::machine()
+    );
+    if agent.perms.memory {
+        out.push_str(
+            " Mémoire : quand l'utilisateur te confie quelque chose de durable sur lui ou sa machine (une \
+             préférence, une habitude, le nom d'un disque, un projet), propose de le retenir avec l'outil \
+             retenir, en une phrase ; il décide dans une notification. Jamais un secret, jamais ce qui est à \
+             l'écran ou dans un fichier. Quand il renvoie à une fois précédente, l'outil conversations \
+             retrouve ses conversations passées.",
+        );
+        if let Some(facts) = common::memory::prompt() {
+            out.push_str("\n\n");
+            out.push_str(&facts);
+        }
+    }
+    out
+}
 
 pub enum Event {
     /// Morceau de réponse
@@ -126,6 +144,10 @@ pub fn tool_label(name: &str) -> String {
         "creer_automatisme" => "Création d'un automatisme",
         "lister_automatismes" => "Automatismes",
         "lancer_automatisme" => "Lancement d'un automatisme",
+        "memoire" => "Mémoire",
+        "retenir" => "Souvenir soumis à votre accord",
+        "oublier" => "Oubli soumis à votre accord",
+        "conversations" => "Conversations précédentes",
         "Read" => "Lecture d'un fichier",
         "WebSearch" => "Recherche sur le web",
         "WebFetch" => "Lecture d'une page web",
@@ -173,6 +195,7 @@ pub fn ask(
     question: String,
     attachments: Vec<PathBuf>,
     context: Context,
+    conversation: Option<i64>,
     generation: u64,
     tx: Sender<(u64, Event)>,
 ) -> Job {
@@ -183,19 +206,34 @@ pub fn ask(
         inner: tx,
     };
     std::thread::spawn(move || {
+        let system = system_prompt(&agent);
         let result = match agent.agent.as_str() {
             "ollama" => ollama(
                 &agent,
                 &question,
                 &attachments,
                 context.ollama_history,
+                conversation,
+                &system,
                 &tx,
                 &j,
             ),
             "commande" => custom(&agent, &question, &attachments, &tx, &j),
             _ => {
                 let session = context.claude_session;
-                match claude(&agent, &question, &attachments, session.clone(), &tx, &j) {
+                let run = |session: Option<String>| {
+                    claude(
+                        &agent,
+                        &question,
+                        &attachments,
+                        session,
+                        conversation,
+                        &system,
+                        &tx,
+                        &j,
+                    )
+                };
+                match run(session.clone()) {
                     // Conversation reprise mais inconnue de Claude Code (effacée
                     // de son côté) : on repart sans elle plutôt que d'échouer
                     Err(e) if session.is_some() && !j.cancelled() && unknown_session(&e) => {
@@ -204,7 +242,7 @@ pub fn ask(
                              sans en connaître le détail."
                                 .into(),
                         ));
-                        claude(&agent, &question, &attachments, None, &tx, &j)
+                        run(None)
                     }
                     r => r,
                 }
@@ -229,11 +267,14 @@ fn unknown_session(error: &str) -> bool {
     e.contains("session") && (e.contains("not found") || e.contains("no conversation"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn claude(
     agent: &AgentConfig,
     question: &str,
     attachments: &[PathBuf],
     session: Option<String>,
+    conversation: Option<i64>,
+    system: &str,
     tx: &Tx,
     job: &Job,
 ) -> Result<(), String> {
@@ -261,7 +302,11 @@ fn claude(
             "WebFetch",
         ])
         .arg("--append-system-prompt")
-        .arg(SYSTEM);
+        .arg(system);
+    // odysseus-mcp, lancé par Claude Code, sait dans quelle conversation il parle
+    if let Some(id) = conversation {
+        cmd.env("ODYSSEUS_CONVERSATION", id.to_string());
+    }
     for p in attachments {
         if let Some(dir) = p.parent() {
             cmd.arg("--add-dir").arg(dir);
@@ -380,15 +425,18 @@ fn claude(
 
 // --- Ollama ---------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn ollama(
     agent: &AgentConfig,
     question: &str,
     attachments: &[PathBuf],
     mut history: Vec<Value>,
+    conversation: Option<i64>,
+    system: &str,
     tx: &Tx,
     job: &Job,
 ) -> Result<(), String> {
-    let mut mcp = Mcp::start()?;
+    let mut mcp = Mcp::start(conversation)?;
     let tools = mcp.tools_for_ollama()?;
     history.push(json!({"role": "user", "content": prompt_with(question, attachments)}));
     // Quelques tours au plus : question, outils, réponse
@@ -396,7 +444,7 @@ fn ollama(
         if job.cancelled() {
             break;
         }
-        let mut messages = vec![json!({"role": "system", "content": SYSTEM})];
+        let mut messages = vec![json!({"role": "system", "content": system})];
         messages.extend(history.iter().cloned());
         let mut body = json!({
             "model": agent.ollama_model,
@@ -522,5 +570,23 @@ fn custom(
         Ok(())
     } else {
         Err(format!("la commande s'est terminée en erreur ({status})"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_prompt_follows_the_machine_and_the_permissions() {
+        let mut agent = AgentConfig::default();
+        let with = system_prompt(&agent);
+        assert!(with.contains("noyau"));
+        assert!(with.contains("outil retenir"));
+        assert!(!with.contains("Linux From Scratch construit à la main"));
+        agent.perms.memory = false;
+        let without = system_prompt(&agent);
+        assert!(!without.contains("retenir"));
+        assert!(!without.contains("accepté que tu retiennes"));
     }
 }

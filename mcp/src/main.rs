@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Serveur du bureau odysseus-desktop (Wayland, Linux From Scratch). \
+const INSTRUCTIONS: &str = "Serveur du bureau odysseus-desktop (Wayland). \
 Il donne l'état de la machine (processeur, mémoire, carte graphique, disques, réseau, \
 processus), la liste des fenêtres et des notifications, des captures d'écran, et permet \
 d'agir sur le bureau (notifier, ouvrir un fichier, lancer une application, fermer ou déplacer \
@@ -30,10 +30,13 @@ une fenêtre, changer de bureau, son, Ne pas déranger, thème, fond d'écran, l
 échelle) et sur le presse-papiers. Il donne aussi la documentation de la machine (man pages, \
 documentation du noyau, notes de construction de cet ordinateur, bibliothèque de \
 l'utilisateur), la lecture des fichiers, et l'exécution de commandes que l'utilisateur \
-approuve une à une. Pour expliquer le système, appuyez-vous sur ces sources plutôt que sur \
-votre mémoire, et citez-les. Chaque catégorie est autorisée ou non par l'utilisateur dans \
-Réglages > Agent : un refus n'est pas une panne, l'outil « autorisations » dit ce qui est \
-permis. Répondez à l'utilisateur en français.";
+approuve une à une. La mémoire de l'Assistant : les faits que l'utilisateur a accepté de \
+retenir (outil memoire) et ses conversations précédentes (conversations) ; quand il confie \
+quelque chose de durable sur lui ou sa machine, proposez de le retenir (retenir), il décide \
+dans une notification, et jamais un secret. Pour expliquer le système, appuyez-vous sur ces \
+sources plutôt que sur votre mémoire, et citez-les. Chaque catégorie est autorisée ou non par \
+l'utilisateur dans Réglages > Agent : un refus n'est pas une panne, l'outil « autorisations » \
+dit ce qui est permis. Répondez à l'utilisateur en français.";
 
 fn main() {
     drop_privileges();

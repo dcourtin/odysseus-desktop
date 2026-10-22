@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use common::text::fold;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -126,24 +127,6 @@ pub fn title(messages: &[Message]) -> String {
     }
 }
 
-/// Minuscules sans accents, pour chercher « ete » dans « Été »
-pub fn fold(s: &str) -> String {
-    s.chars()
-        .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'à' | 'â' | 'ä' | 'á' | 'ã' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'î' | 'ï' | 'í' | 'ì' => 'i',
-            'ô' | 'ö' | 'ó' | 'ò' | 'õ' => 'o',
-            'ù' | 'û' | 'ü' | 'ú' => 'u',
-            'ç' => 'c',
-            'ÿ' => 'y',
-            'ñ' => 'n',
-            c => c,
-        })
-        .collect()
-}
-
 impl Store {
     pub fn open() -> Result<Self, String> {
         let path = path();
@@ -236,6 +219,16 @@ impl Store {
             out.push(summary);
         }
         Ok(out)
+    }
+
+    /// Titre d'une conversation ; None si elle n'existe pas
+    pub fn title(&self, id: i64) -> Result<Option<String>, String> {
+        self.db
+            .query_row("SELECT title FROM conversations WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(err)
     }
 
     pub fn count(&self) -> usize {

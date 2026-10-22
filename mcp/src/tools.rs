@@ -26,6 +26,7 @@ enum Cat {
     Docs,
     Files,
     Notes,
+    Memory,
     Desktop,
     Screen,
     Act,
@@ -41,6 +42,7 @@ impl Cat {
             Cat::Docs => "Lire la documentation",
             Cat::Files => "Lire les fichiers",
             Cat::Notes => "Notes",
+            Cat::Memory => "Mémoire",
             Cat::Desktop => "Voir le bureau",
             Cat::Screen => "Voir l'écran",
             Cat::Act => "Agir sur le bureau",
@@ -56,6 +58,7 @@ impl Cat {
             Cat::Docs => p.docs,
             Cat::Files => p.files,
             Cat::Notes => p.notes,
+            Cat::Memory => p.memory,
             Cat::Desktop => p.desktop,
             Cat::Screen => p.screen,
             Cat::Act => p.act,
@@ -378,6 +381,48 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "memoire",
+        title: "Mémoire",
+        cat: Cat::Memory,
+        description: "Les faits que l'utilisateur a accepté de retenir sur lui et sa machine (fichier ~/.config/odysseus/memoire.md, qu'il édite aussi à la main), avec leur date et leur origine. Ils vous sont déjà donnés en tête de conversation : cet outil sert à les relire en entier, ou à répondre à « qu'est-ce que tu sais de moi ? ».",
+        schema: no_args,
+    },
+    Tool {
+        name: "retenir",
+        title: "Retenir un fait",
+        cat: Cat::Memory,
+        description: "Propose à l'utilisateur de retenir un fait durable sur lui ou sa machine (une préférence, une habitude, le nom d'un disque, un projet en cours…), en une phrase. Il accepte ou refuse dans une notification Garder / Refuser : ne proposez que ce qui resservira dans d'autres conversations. Jamais un secret (mot de passe, jeton, clé : refusé d'office), jamais ce qui est à l'écran ou dans un fichier (les outils le redonnent), jamais sans que l'utilisateur l'ait dit ou demandé. Dites « pourquoi » en une phrase.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "fait": {"type": "string", "description": "Le fait, en une phrase, à la troisième personne (« Préfère les réponses courtes »)"},
+                "pourquoi": {"type": "string", "description": "En quoi cela resservira, pour l'utilisateur"}
+            }, "required": ["fait"]})
+        },
+    },
+    Tool {
+        name: "oublier",
+        title: "Oublier un fait",
+        cat: Cat::Memory,
+        description: "Propose à l'utilisateur de retirer un fait de sa mémoire : son texte exact, ou un morceau qui ne désigne qu'un fait. Il accepte ou refuse dans une notification.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "fait": {"type": "string"}
+            }, "required": ["fait"]})
+        },
+    },
+    Tool {
+        name: "conversations",
+        title: "Conversations précédentes",
+        cat: Cat::Memory,
+        description: "Le fil de l'Assistant : les conversations précédentes de l'utilisateur avec son agent, les plus récentes d'abord (identifiant, date, agent, titre). « chercher » filtre sur les questions et les réponses (tous les mots, sans tenir compte des accents ni de la casse) ; « id » lit une conversation entière. Utile quand l'utilisateur renvoie à une fois précédente (« comme la dernière fois », « ce que tu m'avais dit sur… »).",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "chercher": {"type": "string", "description": "Mots à trouver"},
+                "id": {"type": "integer", "description": "Conversation à lire en entier"}
+            }})
+        },
+    },
+    Tool {
         name: "lire_presse_papiers",
         title: "Lire le presse-papiers",
         cat: Cat::Clipboard,
@@ -446,7 +491,10 @@ pub fn list() -> Vec<Value> {
             let read_only = matches!(
                 t.cat,
                 Cat::Always | Cat::Read | Cat::Docs | Cat::Files | Cat::Desktop | Cat::Screen
-            ) || matches!(t.name, "lire_presse_papiers" | "notes" | "lire_note");
+            ) || matches!(
+                t.name,
+                "lire_presse_papiers" | "notes" | "lire_note" | "memoire" | "conversations"
+            );
             json!({
                 "name": t.name,
                 "title": t.title,
@@ -455,7 +503,7 @@ pub fn list() -> Vec<Value> {
                 "annotations": {
                     "title": t.title,
                     "readOnlyHint": read_only,
-                    "destructiveHint": t.cat == Cat::Run || t.name == "fermer_fenetre",
+                    "destructiveHint": t.cat == Cat::Run || matches!(t.name, "fermer_fenetre" | "oublier"),
                     "openWorldHint": t.cat == Cat::Run
                 }
             })
@@ -508,13 +556,18 @@ pub fn call(name: &str, args: &Value) -> Value {
         ))});
     }
     let outcome = run(name, args, &settings, false);
-    // Commande refusée dans la notification : consignée comme refusée
+    // Commande, souvenir ou oubli refusés dans la notification : consignés comme refusés
     match &outcome {
-        Err(e) if tool.cat == Cat::Run && e.starts_with("Refusé") => log(
-            name,
-            false,
-            &format!("{} — refusée par l'utilisateur", summary(args)),
-        ),
+        Err(e)
+            if matches!(tool.cat, Cat::Run | Cat::Memory)
+                && e.starts_with("Refusé par l'utilisateur") =>
+        {
+            log(
+                name,
+                false,
+                &format!("{} — refusé par l'utilisateur", summary(args)),
+            )
+        }
         _ => log(name, true, &summary(args)),
     }
     match outcome {
@@ -634,6 +687,15 @@ fn run(name: &str, args: &Value, settings: &Settings, approved: bool) -> Outcome
         "supprimer_note" => {
             crate::notebook::trash(n("id").ok_or("« id » manquant")? as i64).map(text)
         }
+        "memoire" => crate::memory::facts().map(text),
+        "retenir" => {
+            crate::memory::remember(s("fait").unwrap_or(""), s("pourquoi").unwrap_or("")).map(text)
+        }
+        "oublier" => crate::memory::forget(s("fait").unwrap_or("")).map(text),
+        "conversations" => {
+            crate::memory::conversations(s("chercher").unwrap_or(""), n("id").map(|v| v as i64))
+                .map(text)
+        }
         "lire_presse_papiers" => clipboard_read(),
         "ecrire_presse_papiers" => {
             let t = s("texte").ok_or("Texte manquant")?;
@@ -733,6 +795,7 @@ fn permissions(p: &AgentPerms) -> String {
         Cat::Docs,
         Cat::Files,
         Cat::Notes,
+        Cat::Memory,
         Cat::Desktop,
         Cat::Screen,
         Cat::Act,

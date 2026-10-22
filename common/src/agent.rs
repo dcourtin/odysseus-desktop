@@ -16,8 +16,8 @@
 //!   ],
 //!   "autorisations": {
 //!     "lire_systeme": true, "lire_documentation": true, "lire_fichiers": false,
-//!     "notes": false, "voir_bureau": true, "voir_ecran": false, "agir": false,
-//!     "presse_papiers": false, "executer": false
+//!     "notes": false, "memoire": true, "voir_bureau": true, "voir_ecran": false,
+//!     "agir": false, "presse_papiers": false, "executer": false
 //!   }
 //! }
 //! ```
@@ -37,6 +37,9 @@ pub struct AgentPerms {
     pub files: bool,
     /// Notes de l'appli Notes : les lire, les écrire, les mettre à la corbeille
     pub notes: bool,
+    /// Mémoire : lire les faits retenus et les conversations passées, proposer
+    /// d'en retenir ou d'en oublier (chaque fois avec l'accord de l'utilisateur)
+    pub memory: bool,
     /// Fenêtres, bureaux, historique des notifications
     pub desktop: bool,
     /// Captures de l'écran ou d'une fenêtre (envoyées à l'agent)
@@ -56,6 +59,7 @@ impl Default for AgentPerms {
             docs: true,
             files: false,
             notes: false,
+            memory: true,
             desktop: true,
             screen: false,
             act: false,
@@ -211,6 +215,7 @@ impl AgentConfig {
             docs: flag("lire_documentation", d.docs),
             files: flag("lire_fichiers", d.files),
             notes: flag("notes", d.notes),
+            memory: flag("memoire", d.memory),
             desktop: flag("voir_bureau", d.desktop),
             screen: flag("voir_ecran", d.screen),
             act: flag("agir", d.act),
@@ -297,6 +302,7 @@ impl AgentConfig {
             "lire_documentation": p.docs,
             "lire_fichiers": p.files,
             "notes": p.notes,
+            "memoire": p.memory,
             "voir_bureau": p.desktop,
             "voir_ecran": p.screen,
             "agir": p.act,
@@ -338,6 +344,7 @@ mod tests {
         assert_eq!(c.ollama_url, "http://127.0.0.1:11434");
         assert_eq!(c.models.len(), 1);
         assert!(c.perms.screen && c.perms.read && c.perms.docs && !c.perms.act && !c.perms.run);
+        assert!(c.perms.memory);
         let out = c.to_json();
         assert_eq!(out["ma_note"], "à garder");
         assert_eq!(out["ollama"]["options"]["num_ctx"], 16384);

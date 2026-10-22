@@ -123,7 +123,7 @@ const AGENTS: [(&str, &str, &str); 3] = [
     ),
 ];
 /// Autorisations d'odysseus-mcp : titre, explication
-const PERMS: [(&str, &str); 9] = [
+const PERMS: [(&str, &str); 10] = [
     (
         "Lire l'état du système",
         "Charge, températures, mémoire, disques, réseau, écran, réglages, journaux d'odysseus.",
@@ -139,6 +139,10 @@ const PERMS: [(&str, &str); 9] = [
     (
         "Notes",
         "Lire, écrire et ranger vos notes ; une note supprimée va à la corbeille. Avec un agent en ligne, leur contenu quitte la machine.",
+    ),
+    (
+        "Mémoire",
+        "Les faits que vous avez accepté de retenir (préférences, machine), lus à chaque conversation, et vos conversations précédentes. Retenir ou oublier passe toujours par une notification.",
     ),
     (
         "Voir le bureau",
@@ -328,6 +332,9 @@ enum Hit {
     EditAgentJson,
     Perm(usize),
     CopyMcp,
+    /// Mémoire de l'Assistant : oublier un fait (deux clics), ouvrir memoire.md
+    Forget(String),
+    EditMemory,
 }
 
 type Rect = (f32, f32, f32, f32);
@@ -395,6 +402,8 @@ struct App {
     tasks: Vec<(agents::Task, f32, String)>,
     news: channel::Sender<agents::News>,
     delete_armed: Option<(String, Instant)>,
+    /// Fait dont l'oubli attend un second clic
+    forget_armed: Option<(String, Instant)>,
     /// Automatismes (~/.config/odysseus/automatismes) et leur état, fichiers illisibles
     autos: Vec<(common::auto::Automatism, common::auto::Status)>,
     /// Trousseaux (Secret Service) et noms des secrets rangés
@@ -578,6 +587,7 @@ fn main() {
         tasks: Vec::new(),
         news,
         delete_armed: None,
+        forget_armed: None,
         autos: Vec::new(),
         keyrings: trousseau::State::Unknown,
         keyrings_read: None,
@@ -689,6 +699,21 @@ fn mcp_declared() -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     std::fs::read_to_string(PathBuf::from(home).join(".claude.json"))
         .is_ok_and(|t| t.contains("odysseus-mcp"))
+}
+
+/// « 22 oct. 2026 »
+fn fact_date(t: i64) -> String {
+    const MOIS: [&str; 12] = [
+        "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
+        "déc.",
+    ];
+    use chrono::Datelike;
+    chrono::DateTime::from_timestamp(t, 0)
+        .map(|d| {
+            let d = d.with_timezone(&chrono::Local);
+            format!("{} {} {}", d.day(), MOIS[d.month0() as usize], d.year())
+        })
+        .unwrap_or_default()
 }
 
 /// Derniers appels des agents (journal d'odysseus-mcp), du plus récent au plus ancien :
@@ -1280,6 +1305,36 @@ impl App {
                     self.delete_armed = Some((m, Instant::now()));
                 }
             }
+            Hit::Forget(f) => {
+                let armed = self
+                    .forget_armed
+                    .as_ref()
+                    .is_some_and(|(a, at)| *a == f && at.elapsed() < Duration::from_secs(4));
+                if armed {
+                    self.forget_armed = None;
+                    let done = common::memory::Memory::open()
+                        .ok_or_else(|| "HOME inconnu".to_string())
+                        .and_then(|m| m.remove(&f));
+                    match done {
+                        Ok(true) => self.toast("Oublié"),
+                        Ok(false) => self.toast("Ce fait n'y était plus"),
+                        Err(e) => self.toast(e),
+                    }
+                } else {
+                    self.forget_armed = Some((f, Instant::now()));
+                }
+            }
+            Hit::EditMemory => {
+                // Fichier créé avec son en-tête s'il n'existe pas, puis ouvert dans l'éditeur
+                if let Some(m) = common::memory::Memory::open() {
+                    if let Err(e) = m.ensure() {
+                        self.toast(e);
+                        return;
+                    }
+                    let path = m.file().to_path_buf();
+                    self.edit_in_terminal(&path, "memoire.md");
+                }
+            }
             Hit::UseModel(m) => {
                 self.agent.ollama_model = m;
                 self.agent.agent = "ollama".into();
@@ -1327,10 +1382,11 @@ impl App {
                     1 => &mut p.docs,
                     2 => &mut p.files,
                     3 => &mut p.notes,
-                    4 => &mut p.desktop,
-                    5 => &mut p.screen,
-                    6 => &mut p.act,
-                    7 => &mut p.clipboard,
+                    4 => &mut p.memory,
+                    5 => &mut p.desktop,
+                    6 => &mut p.screen,
+                    7 => &mut p.act,
+                    8 => &mut p.clipboard,
                     _ => &mut p.run,
                 };
                 *flag = !*flag;
@@ -2571,6 +2627,7 @@ impl App {
             perms.docs,
             perms.files,
             perms.notes,
+            perms.memory,
             perms.desktop,
             perms.screen,
             perms.act,
@@ -2602,6 +2659,69 @@ impl App {
             );
         }
         y += PERMS.len() as f32 * rh + 28.0;
+
+        // Mémoire : les faits retenus, à oublier d'un clic (deux, le second confirme)
+        y = ui.section(x, y, "Mémoire de l'Assistant");
+        let facts = common::memory::facts();
+        if facts.is_empty() {
+            y = ui.note(
+                x,
+                y,
+                w,
+                "Rien encore. Quand vous confiez à l'Assistant quelque chose de durable sur vous \
+                 ou votre machine, il propose de le retenir ; vous décidez dans une notification. \
+                 Vous pouvez aussi écrire les faits vous-même, une ligne chacun.",
+            ) + 4.0;
+        } else {
+            let rh = 58.0;
+            ui.card(x, y, w, facts.len() as f32 * rh);
+            for (i, f) in facts.iter().enumerate() {
+                let ry = y + i as f32 * rh;
+                if i > 0 {
+                    ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+                }
+                let text = ui.truncate(&f.text, 13.0, w - 160.0);
+                ui.text(&text, x + 18.0, ry + 8.0, 22.0, 13.0, p.text);
+                let origin = match (f.date, &f.origin) {
+                    (None, None) => "écrit à la main".to_string(),
+                    (Some(t), None) => format!("retenu le {}", fact_date(t)),
+                    (Some(t), Some(o)) => format!("retenu le {} · {o}", fact_date(t)),
+                    (None, Some(o)) => o.clone(),
+                };
+                let origin = ui.truncate(&origin, 11.5, w - 160.0);
+                ui.text(&origin, x + 18.0, ry + 31.0, 18.0, 11.5, p.text_dim);
+                let armed = self
+                    .forget_armed
+                    .as_ref()
+                    .is_some_and(|(a, at)| *a == f.text && at.elapsed() < Duration::from_secs(4));
+                ui.button(
+                    x + w - 18.0 - 110.0,
+                    ry + 12.0,
+                    110.0,
+                    if armed { "Confirmer ?" } else { "Oublier" },
+                    false,
+                    Hit::Forget(f.text.clone()),
+                );
+            }
+            y += facts.len() as f32 * rh + 8.0;
+            y = ui.note(
+                x,
+                y,
+                w,
+                "Lus en tête de chaque conversation. L'Assistant ne retient ni n'oublie rien \
+                 sans votre accord ; jamais un mot de passe ni une clé.",
+            ) + 4.0;
+        }
+        ui.button(x, y, 210.0, "Modifier memoire.md", false, Hit::EditMemory);
+        ui.text(
+            "une ligne par fait, lue à chaque conversation",
+            x + 222.0,
+            y,
+            34.0,
+            11.5,
+            p.text_dim,
+        );
+        y += 34.0 + 24.0;
 
         // Brancher Claude Code sur odysseus-mcp
         y = ui.section(x, y, "Brancher Claude Code sur ce bureau");

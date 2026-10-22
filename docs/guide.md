@@ -245,7 +245,7 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
 
 ### Ce que l'agent peut faire (Réglages > Agent)
 
-Neuf autorisations, chacune activable :
+Dix autorisations, chacune activable :
 
 | Autorisation | Ce qu'elle permet |
 |---|---|
@@ -253,6 +253,7 @@ Neuf autorisations, chacune activable :
 | Lire la documentation | man pages, documentation du noyau, notes de construction de la machine, ce guide, `~/Documents/Bibliothèque` |
 | Lire les fichiers | vos fichiers, jamais les secrets (clés, mots de passe) |
 | Notes | lire, écrire et ranger vos notes |
+| Mémoire | les faits que vous avez acceptés, vos conversations précédentes ; retenir ou oublier passe par une notification |
 | Voir le bureau | fenêtres, bureaux, historique des notifications |
 | Voir l'écran | captures (un témoin s'allume dans la barre) |
 | Agir sur le bureau | notifier, ouvrir, lancer, ranger les fenêtres, régler thème, fond, lumière de nuit, échelle |
@@ -260,6 +261,26 @@ Neuf autorisations, chacune activable :
 | Exécuter des commandes | chacune approuvée par vous, jamais en administrateur |
 
 Chaque appel est consigné, et visible dans la même page.
+
+### Mémoire
+
+L'Assistant peut retenir des faits durables sur vous et votre machine : « préfère les
+réponses courtes », « le disque Archives est un NAS ». Ils sont lus en tête de chaque
+conversation, quel que soit l'agent.
+
+- **Il propose, vous décidez** : quand vous lui confiez quelque chose de durable, il
+  demande à le retenir dans une notification Garder / Refuser. Rien n'est écrit
+  sans votre accord, et oublier passe par la même notification.
+- **Jamais un secret** : un mot de passe, un jeton, une clé sont refusés d'office.
+  Ce qui est à l'écran ou dans un fichier n'est pas un fait : les outils le
+  redonnent sur le moment.
+- **Réglages > Agent > Mémoire** liste les faits avec leur date et la conversation
+  d'origine ; « Oublier » (deux clics) en retire un. Le fichier est
+  `~/.config/odysseus/memoire.md`, une ligne par fait : vous l'éditez à la main
+  si vous préférez.
+- **« Qu'est-ce que tu sais de moi ? »** : l'Assistant répond par la liste exacte.
+- Il retrouve aussi vos conversations précédentes quand vous y renvoyez (« comme la
+  dernière fois »). Désactiver la catégorie Mémoire retire tout cela.
 
 ## Automatismes
 

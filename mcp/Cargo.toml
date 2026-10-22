@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 common.workspace = true
 notes = { path = "../notes" }
+assistant = { path = "../assistant" }
 serde_json.workspace = true
 dbus.workspace = true
 chrono.workspace = true

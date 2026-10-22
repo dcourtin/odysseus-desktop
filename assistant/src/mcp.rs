@@ -24,12 +24,17 @@ pub struct ToolResult {
 }
 
 impl Mcp {
-    pub fn start() -> Result<Self, String> {
+    /// `conversation` : celle du fil, pour que l'agent sache d'où vient ce qu'il retient
+    pub fn start(conversation: Option<i64>) -> Result<Self, String> {
         let exe = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("odysseus-mcp")))
             .ok_or("odysseus-mcp introuvable")?;
-        let mut child = Command::new(exe)
+        let mut cmd = Command::new(exe);
+        if let Some(id) = conversation {
+            cmd.env("ODYSSEUS_CONVERSATION", id.to_string());
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
