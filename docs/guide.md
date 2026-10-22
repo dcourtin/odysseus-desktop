@@ -92,6 +92,10 @@ verrouillage, redémarrage et extinction.
 
 ## Notifications
 
+Au survol d'une bannière ou d'une carte du centre : la croix à gauche la
+ferme, le bouton à droite (« Demander ») ouvre l'Assistant avec son contenu
+en contexte, pour la résumer, y répondre ou en faire quelque chose.
+
 Bannières en haut à droite, historique dans le centre de notifications (cloche).
 « Ne pas déranger » cache les bannières : elles restent dans le centre. Les touches
 de volume affichent un indicateur.
@@ -250,6 +254,15 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
 - **Copier, Insérer** : sous chaque réponse. Insérer la colle dans la fenêtre
   d'où vous venez, comme un Ctrl+V : sélectionner un paragraphe, Super+A,
   « traduis », Insérer, sans quitter l'application.
+- **Depuis une notification** : au survol d'une bannière ou d'une carte du
+  centre, le bouton à droite (« Demander ») ouvre l'Assistant avec la
+  notification en pastille. La notification reste.
+- **La même entrée lance** : tapez « firefox », la pastille « Ouvrir Firefox »
+  apparaît et Entrée l'ouvre ; Maj+Entrée pose la question quand même. Avec
+  plusieurs mots, Entrée demande et Tab ouvre la première proposition. Les
+  automatismes validés se lancent de même, et une commande connue (« htop »)
+  s'exécute par Tab ou d'un clic. Le lanceur (Super+Espace) reste, et « ? »
+  y renvoie à l'Assistant.
 - Les outils qu'il utilise s'affichent au passage. Une commande shell ne se lance
   qu'après votre accord, dans une notification Autoriser / Refuser.
 

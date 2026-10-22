@@ -9,12 +9,17 @@
 //! fenêtre active, le texte sélectionné, le presse-papiers, le dossier ouvert
 //! dans Fichiers ; avec `--contexte` (Super+A) il se place près de la fenêtre.
 //! Chaque réponse se copie, ou s'insère dans la fenêtre d'où l'on vient.
+//! Depuis une notification (bouton « Demander »), elle arrive en pastille.
+//!
+//! Le panneau lance aussi : un nom d'application ou d'automatisme tapé seul
+//! s'ouvre avec Entrée (Maj+Entrée pose la question quand même), une commande
+//! connue s'exécute ; ce que proposait le lanceur, à la même entrée.
 //!
 //! Les conversations sont gardées (store, ~/.local/share/odysseus/assistant.db)
 //! et se reprennent : les plus récentes sous les suggestions, toutes par
 //! l'icône d'horloge ou Ctrl+H, avec une recherche.
 //!
-//! `odysseus-assistant [--contexte] [--joindre FICHIER]… [QUESTION]`
+//! `odysseus-assistant [--contexte] [--notification TEXTE] [--joindre FICHIER]… [QUESTION]`
 //! Clavier : Entrée envoie, Échap arrête la réponse puis ferme, ↑ reprend la
 //! dernière question, Ctrl+V colle, Ctrl+L nouvelle conversation, Ctrl+H les
 //! conversations précédentes.
@@ -26,7 +31,8 @@ mod mcp;
 use std::{
     fs::File,
     io::{Read, Write},
-    path::PathBuf,
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -36,6 +42,7 @@ use backend::{Ask, Context, Event, Job};
 use chrono::{DateTime, Datelike, Local, Timelike};
 use common::{
     agent::AgentConfig,
+    apps,
     draw::{Canvas, Text},
     theme::{self, Rgba, icon},
 };
@@ -97,8 +104,14 @@ const BTN_LEFT: u32 = 0x110;
 const ROW_H: f32 = 54.0;
 /// Conversations récentes proposées sous les suggestions
 const RECENT: usize = 3;
-/// Hauteur d'une rangée de pastilles (fichiers joints, contexte)
+/// Hauteur d'une rangée de pastilles (fichiers joints, contexte, lancements)
 const CHIP_ROW: f32 = 30.0;
+/// Applications proposées au plus pour ce qui est tapé
+const MAX_LAUNCH: usize = 3;
+/// En dessous, une application n'est pas proposée ; au-dessus de `STRONG`,
+/// un mot seul l'ouvre avec Entrée (début du nom, d'un mot du nom, sous-chaîne)
+const WEAK: i32 = 300;
+const STRONG: i32 = 500;
 
 const SUGGESTIONS: [&str; 4] = [
     "Qu'est-ce qui chauffe en ce moment ?",
@@ -210,6 +223,9 @@ enum Hit {
     Close,
     RemoveFile(usize),
     RemoveChip(usize),
+    /// Lancer une application (indice dans `apps`), exécuter la commande tapée
+    Launch(usize),
+    Run(String),
     /// Une réponse (indice dans la conversation) : la copier, l'insérer dans la fenêtre
     CopyAnswer(usize),
     InsertAnswer(usize),
@@ -255,6 +271,8 @@ struct App {
     anchor: bool,
     /// Réponse copiée à l'instant (le bouton le dit deux secondes)
     copied: Option<(usize, Instant)>,
+    /// Applications et automatismes, pour lancer depuis la même entrée
+    apps: Vec<apps::App>,
     last_question: String,
     job: Option<Job>,
     /// Numéro de la réponse en cours : les événements d'une réponse
@@ -322,6 +340,7 @@ fn main() {
     let mut files = Vec::new();
     let mut words = Vec::new();
     let mut anchor = false;
+    let mut notification = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -331,11 +350,12 @@ fn main() {
                 }
             }
             "--contexte" => anchor = true,
+            "--notification" => notification = args.next().filter(|t| !t.trim().is_empty()),
             _ => words.push(a),
         }
     }
     let question = words.join(" ");
-    let with_args = !files.is_empty() || !question.is_empty();
+    let with_args = !files.is_empty() || !question.is_empty() || notification.is_some();
     // Super+A : bascule. Avec une question ou un fichier : l'ancien panneau
     // cède la place au nouveau.
     if close_existing() && !with_args {
@@ -347,7 +367,10 @@ fn main() {
     unsafe { libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t) };
     // Ce que l'utilisateur a sous les yeux, avant que le panneau ne prenne le clavier
     let window = context::focused_window();
-    let chips = context::gather(window.as_ref());
+    let mut chips = context::gather(window.as_ref());
+    if let Some(text) = notification.as_deref() {
+        chips.insert(0, context::notification_chip(text));
+    }
 
     let conn = Connection::connect_to_env().expect("pas de compositeur Wayland (WAYLAND_DISPLAY)");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
@@ -447,6 +470,7 @@ fn main() {
         window,
         anchor,
         copied: None,
+        apps: apps::with_automatisms(apps::load()),
         last_question: String::new(),
         job: None,
         generation: 0,
@@ -653,6 +677,95 @@ impl App {
                 && *state == ToolState::Running
             {
                 *state = ToolState::Interrupted;
+            }
+        }
+    }
+
+    // --- Lancer, comme le lanceur ---------------------------------------------------
+
+    /// Applications et automatismes qui correspondent à ce qui est tapé,
+    /// les meilleurs d'abord (score, indice dans `apps`)
+    fn launch_matches(&self) -> Vec<(i32, usize)> {
+        let q = self.input.trim();
+        if q.is_empty() || q.starts_with('?') || self.history.is_some() || self.job.is_some() {
+            return Vec::new();
+        }
+        let mut scored: Vec<(i32, usize)> = self
+            .apps
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| apps::score(q, a).filter(|s| *s >= WEAK).map(|s| (s, i)))
+            .collect();
+        scored.sort_by_key(|&(s, i)| (std::cmp::Reverse(s), !self.apps[i].is_odysseus()));
+        scored.truncate(MAX_LAUNCH);
+        scored
+    }
+
+    /// Un mot seul qui désigne nettement une application : Entrée l'ouvre
+    fn launch_on_enter(&self) -> Option<usize> {
+        let q = self.input.trim();
+        if q.contains(char::is_whitespace) {
+            return None;
+        }
+        self.launch_matches()
+            .first()
+            .filter(|(s, _)| *s >= STRONG)
+            .map(|(_, i)| *i)
+    }
+
+    /// Ce qui est tapé commence par une commande connue (dans le PATH) et ne
+    /// désigne pas nettement une application : on propose de l'exécuter
+    fn run_candidate(&self) -> Option<String> {
+        let q = self.input.trim();
+        let first = q.split_whitespace().next()?;
+        if q.starts_with('?') || self.history.is_some() || self.job.is_some() {
+            return None;
+        }
+        if self
+            .launch_matches()
+            .first()
+            .is_some_and(|(s, _)| *s >= STRONG)
+        {
+            return None;
+        }
+        let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
+        let known = first.contains('/') && Path::new(first).is_file()
+            || path.split(':').any(|d| Path::new(d).join(first).is_file());
+        known.then(|| q.to_string())
+    }
+
+    fn launch_app(&mut self, i: usize) {
+        let Some(app) = self.apps.get(i) else {
+            return;
+        };
+        self.spawn_detached(&app.command());
+    }
+
+    fn run_command(&mut self, cmd: &str) {
+        self.spawn_detached(cmd);
+    }
+
+    /// Lance une commande dans son propre groupe de processus (elle survit au
+    /// panneau), puis ferme le panneau : la chose demandée est faite
+    fn spawn_detached(&mut self, command: &str) {
+        match Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+        {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+                self.exit = true;
+            }
+            Err(e) => {
+                self.items.push(Item::Notice(format!(
+                    "Impossible de lancer « {command} » : {e}"
+                )));
+                self.draw();
             }
         }
     }
@@ -977,6 +1090,8 @@ impl App {
             }
             Some(Hit::CopyAnswer(k)) => self.copy_answer(k),
             Some(Hit::InsertAnswer(k)) => self.insert_answer(k),
+            Some(Hit::Launch(i)) => self.launch_app(i),
+            Some(Hit::Run(cmd)) => self.run_command(&cmd),
             Some(Hit::History) => self.show_history(),
             Some(Hit::Back) => self.hide_history(),
             Some(Hit::Open(id)) => self.open_conversation(id),
@@ -1074,7 +1189,19 @@ impl App {
         match event.keysym {
             Keysym::Escape if self.job.is_some() => self.stop(),
             Keysym::Escape => self.exit = true,
-            Keysym::Return | Keysym::KP_Enter => self.send(),
+            // Un mot seul qui désigne une application : Entrée l'ouvre ;
+            // Maj+Entrée pose la question quand même
+            Keysym::Return | Keysym::KP_Enter => match self.launch_on_enter() {
+                Some(i) if !self.modifiers.shift => self.launch_app(i),
+                _ => self.send(),
+            },
+            Keysym::Tab => {
+                if let Some(&(_, i)) = self.launch_matches().first() {
+                    self.launch_app(i);
+                } else if let Some(cmd) = self.run_candidate() {
+                    self.run_command(&cmd);
+                }
+            }
             Keysym::l if ctrl => self.new_conversation(),
             Keysym::h if ctrl => self.show_history(),
             Keysym::v if ctrl => {
@@ -1205,7 +1332,9 @@ impl App {
         // Conversation, sous l'en-tête et au-dessus de la saisie (et des pastilles)
         let top = y0 + HEADER_H;
         let rows = self.chip_rows(&ui);
-        let bottom = y0 + PH - INPUT_H - rows.len() as f32 * CHIP_ROW;
+        let launch = self.launch_row(&ui);
+        let extra_rows = rows.len() + usize::from(!launch.is_empty());
+        let bottom = y0 + PH - INPUT_H - extra_rows as f32 * CHIP_ROW;
         let (cx, cw) = (x0 + PAD, PW - 2.0 * PAD);
         if self.history.is_some() {
             self.history_view(&mut ui, cx, top, cw, bottom);
@@ -1232,7 +1361,7 @@ impl App {
         }
 
         self.header(&mut ui, x0, y0);
-        self.input_area(&mut ui, x0, y0, &rows);
+        self.input_area(&mut ui, x0, y0, &rows, &launch);
 
         self.hits = ui.hits;
         let surface = self.layer.wl_surface();
@@ -1461,6 +1590,7 @@ impl App {
                 context::Kind::Selection => icon::PENCIL,
                 context::Kind::Clipboard => icon::COPY,
                 context::Kind::Folder => icon::FOLDER,
+                context::Kind::Notification => icon::BELL,
             };
             push(glyph, c.label.clone(), Hit::RemoveChip(i));
         }
@@ -1474,12 +1604,58 @@ impl App {
         rows
     }
 
-    fn input_area(&self, ui: &mut Ui, x0: f32, y0: f32, rows: &[Vec<(char, String, f32, Hit)>]) {
+    /// Ce que l'entrée peut lancer : applications ou automatismes qui
+    /// correspondent, ou la commande tapée (icône, texte, largeur, action)
+    fn launch_row(&self, ui: &Ui) -> Vec<(char, String, f32, Hit)> {
+        let mut row = Vec::new();
+        let mut used = 0.0;
+        for (_, i) in self.launch_matches() {
+            let app = &self.apps[i];
+            let (glyph, verb) = if app.is_automatism() {
+                (icon::ZAP, "Lancer")
+            } else {
+                (icon::APP, "Ouvrir")
+            };
+            let label = ui.truncate(&format!("{verb} {}", app.name), 12.0, 200.0);
+            let w = ui.measure(&label, 12.0) + 40.0;
+            if used + w > PW - 2.0 * PAD {
+                break;
+            }
+            used += w + 8.0;
+            row.push((glyph, label, w, Hit::Launch(i)));
+        }
+        if let Some(cmd) = self.run_candidate() {
+            let label = ui.truncate(&format!("Exécuter « {cmd} »"), 12.0, 300.0);
+            let w = ui.measure(&label, 12.0) + 40.0;
+            if used + w <= PW - 2.0 * PAD {
+                row.push((icon::TERMINAL, label, w, Hit::Run(cmd)));
+            }
+        }
+        row
+    }
+
+    fn input_area(
+        &self,
+        ui: &mut Ui,
+        x0: f32,
+        y0: f32,
+        rows: &[Vec<(char, String, f32, Hit)>],
+        launch: &[(char, String, f32, Hit)],
+    ) {
         let p = theme::palette();
         let mut y = y0 + PH - INPUT_H + 12.0;
+        // Lancements proposés, juste au-dessus de la saisie
+        if !launch.is_empty() {
+            y -= CHIP_ROW;
+            let mut lx = x0 + PAD;
+            for (glyph, label, _, hit) in launch {
+                lx += ui.pill(lx, y, *glyph, label, hit.clone()) + 8.0;
+            }
+            y += CHIP_ROW;
+        }
         // Pastilles : contexte (teinte neutre) et fichiers joints (teinte d'accent)
         if !rows.is_empty() {
-            y -= rows.len() as f32 * CHIP_ROW;
+            y -= (rows.len() + usize::from(!launch.is_empty())) as f32 * CHIP_ROW;
             for row in rows {
                 let mut fx = x0 + PAD;
                 for (glyph, label, w, hit) in row {
@@ -1496,6 +1672,9 @@ impl App {
                     ui.hit((fx + w - 24.0, y, 24.0, 24.0), hit.clone());
                     fx += w + 8.0;
                 }
+                y += CHIP_ROW;
+            }
+            if !launch.is_empty() {
                 y += CHIP_ROW;
             }
         }
@@ -1546,8 +1725,20 @@ impl App {
         } else {
             ui.round_button(bx, by, icon::ARROW_UP, Hit::Send, true);
         }
-        let hint = "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre";
-        ui.text_centered(hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
+        let hint = match (self.launch_on_enter(), launch.first()) {
+            (Some(i), _) => format!(
+                "Entrée : ouvrir {} · Maj+Entrée : demander · Échap : fermer",
+                self.apps[i].name
+            ),
+            (None, Some((_, label, ..))) => {
+                format!(
+                    "Entrée : envoyer · Tab : {} · Échap : fermer",
+                    label.to_lowercase()
+                )
+            }
+            _ => "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre".into(),
+        };
+        ui.text_centered(&hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
     }
 
     /// Lignes de la conversation, prêtes à dessiner

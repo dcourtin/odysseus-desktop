@@ -1394,13 +1394,7 @@ fn launch(name: &str) -> Outcome {
         .max_by_key(|(s, _)| *s)
         .map(|(_, a)| a)
         .ok_or_else(|| format!("Aucune application ne correspond à « {name} »"))?;
-    let command = if best.terminal {
-        let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
-        format!("{term} -e {}", best.exec)
-    } else {
-        best.exec.clone()
-    };
-    spawn("/bin/sh", &["-c", &command])?;
+    spawn("/bin/sh", &["-c", &best.command()])?;
     Ok(text(format!("{} lancé", best.name)))
 }
 

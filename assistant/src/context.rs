@@ -20,6 +20,7 @@ pub enum Kind {
     Selection,
     Clipboard,
     Folder,
+    Notification,
 }
 
 impl Kind {
@@ -29,7 +30,19 @@ impl Kind {
             Kind::Selection => "sélection",
             Kind::Clipboard => "presse-papiers",
             Kind::Folder => "dossier",
+            Kind::Notification => "notification",
         }
+    }
+}
+
+/// Une notification dont on vient (bouton « Demander » d'odysseus-notify) :
+/// « Application : titre — texte »
+pub fn notification_chip(text: &str) -> Chip {
+    Chip {
+        kind: Kind::Notification,
+        label: format!("Notification : {}", preview(text)),
+        text: format!("Notification reçue : {}", bounded(text)),
+        dir: None,
     }
 }
 

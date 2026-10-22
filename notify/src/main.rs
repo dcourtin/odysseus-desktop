@@ -416,9 +416,10 @@ impl App {
         if surface != panel.surface() {
             return None;
         }
+        // Les pastilles des coins (fermer, Demander) débordent de la carte
         self.banner_hits
             .iter()
-            .find(|h| h.contains(*x, *y))
+            .find(|h| h.contains(*x, *y) || h.on_close(*x, *y) || h.on_ask(*x, *y))
             .map(|h| h.id)
     }
 
@@ -845,7 +846,11 @@ impl App {
             for n in list {
                 let card_h = card::height(fonts, n, 4);
                 let over = hover.is_some_and(|(px, py)| {
-                    px >= x && px < x + CARD_W && py >= y - 4.0 && py < y + card_h
+                    let near = |cx: f32, cy: f32| (px - cx).powi(2) + (py - cy).powi(2) <= 169.0;
+                    (px >= x && px < x + CARD_W && py >= y - 4.0 && py < y + card_h)
+                        // Les pastilles des coins (fermer, Demander) débordent de la carte
+                        || near(x + 2.0, y + 2.0)
+                        || near(x + CARD_W - 2.0, y + 2.0)
                 });
                 let hit = card::draw(&mut canvas, fonts, n, x, y, s, over, 4);
                 center.hits.push(hit);
@@ -921,10 +926,32 @@ impl App {
         } else {
             return;
         };
-        let Some(hit) = hits.iter().find(|h| h.contains(x, y) || h.on_close(x, y)) else {
+        let Some(hit) = hits
+            .iter()
+            .find(|h| h.contains(x, y) || h.on_close(x, y) || h.on_ask(x, y))
+        else {
             return;
         };
         let id = hit.id;
+        if hit.on_ask(x, y) {
+            // « Demander » : l'Assistant s'ouvre avec la notification en contexte ;
+            // elle reste affichée, c'est de son contenu qu'on parle
+            if let Some(text) = self.store.get(id).map(|n| {
+                let body = n.body.split_whitespace().collect::<Vec<_>>().join(" ");
+                if body.is_empty() {
+                    format!("{} : {}", n.app_name, n.summary)
+                } else {
+                    format!("{} : {} — {body}", n.app_name, n.summary)
+                }
+            }) {
+                ask_assistant(&text);
+            }
+            if in_center {
+                self.close_center();
+            }
+            self.refresh();
+            return;
+        }
         if hit.on_close(x, y) {
             // Croix : simple fermeture
         } else if let Some(key) = hit.button_at(x, y) {
@@ -940,6 +967,26 @@ impl App {
             self.bus.closed(id, Reason::Dismissed as u32);
         }
         self.refresh();
+    }
+}
+
+/// Ouvre l'Assistant (installé à côté) avec une notification en contexte
+fn ask_assistant(text: &str) {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("odysseus-assistant")))
+        .unwrap_or_else(|| "odysseus-assistant".into());
+    match std::process::Command::new(exe)
+        .arg("--notification")
+        .arg(text)
+        .process_group(0)
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+        }
+        Err(e) => eprintln!("odysseus-notify : Assistant introuvable : {e}"),
     }
 }
 

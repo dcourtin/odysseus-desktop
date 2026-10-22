@@ -137,6 +137,52 @@ pub fn load() -> Vec<App> {
     apps
 }
 
+/// Les automatismes validés qu'on peut lancer à la main, comme des
+/// applications (lanceur, Assistant) : leur commande passe par odysseus-auto,
+/// installé à côté du programme appelant
+pub fn with_automatisms(mut list: Vec<App>) -> Vec<App> {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("odysseus-auto")))
+        .unwrap_or_else(|| "odysseus-auto".into());
+    for a in crate::auto::load_all().0 {
+        if !a.manual() || !crate::auto::status(&a).validated {
+            continue;
+        }
+        list.push(App {
+            id: String::new(),
+            wm_class: String::new(),
+            name: a.name.clone(),
+            comment: if a.description.is_empty() {
+                "Automatisme".into()
+            } else {
+                format!("Automatisme · {}", a.description)
+            },
+            exec: format!("'{}' lancer '{}'", exe.display(), a.id),
+            terminal: false,
+            icon: String::new(),
+        });
+    }
+    list
+}
+
+impl App {
+    /// Un automatisme déguisé en application (voir `with_automatisms`)
+    pub fn is_automatism(&self) -> bool {
+        self.id.is_empty() && self.comment.starts_with("Automatisme")
+    }
+
+    /// La commande qui la lance, dans un terminal si elle le demande
+    pub fn command(&self) -> String {
+        if self.terminal {
+            let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
+            format!("{term} -e {}", self.exec)
+        } else {
+            self.exec.clone()
+        }
+    }
+}
+
 /// Score de correspondance (plus haut = meilleur), None si aucune.
 /// Début du nom > début d'un mot > sous-chaîne > lettres dans l'ordre.
 pub fn score(query: &str, app: &App) -> Option<i32> {

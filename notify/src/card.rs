@@ -34,6 +34,8 @@ pub struct Hit {
     pub h: f32,
     /// Bouton de fermeture (visible au survol)
     pub close: (f32, f32),
+    /// Bouton « Demander à l'Assistant » (visible au survol, coin opposé)
+    pub ask: (f32, f32),
     /// Boutons d'action : clé et zone horizontale [x0, x1] sur la rangée du bas
     pub buttons: Vec<(String, f32, f32)>,
     pub buttons_y: f32,
@@ -46,6 +48,11 @@ impl Hit {
 
     pub fn on_close(&self, x: f32, y: f32) -> bool {
         let (cx, cy) = self.close;
+        (x - cx).powi(2) + (y - cy).powi(2) <= (CLOSE_R + 3.0).powi(2)
+    }
+
+    pub fn on_ask(&self, x: f32, y: f32) -> bool {
+        let (cx, cy) = self.ask;
         (x - cx).powi(2) + (y - cy).powi(2) <= (CLOSE_R + 3.0).powi(2)
     }
 
@@ -297,23 +304,28 @@ pub fn draw(
         }
     }
 
-    // Fermeture : pastille en haut à gauche, au survol (comme macOS)
+    // Au survol : fermeture en haut à gauche (comme macOS), « Demander à
+    // l'Assistant » en haut à droite, la notification en contexte
     let close = (x + 2.0, y + 2.0);
+    let ask = (x + CARD_W - 2.0, y + 2.0);
     if hovered {
-        let (cx, cy) = (close.0 * s, close.1 * s);
-        canvas.fill_circle(cx, cy, CLOSE_R * s, theme::palette().subtle);
-        canvas.stroke_rounded(
-            cx - CLOSE_R * s,
-            cy - CLOSE_R * s,
-            2.0 * CLOSE_R * s,
-            2.0 * CLOSE_R * s,
-            CLOSE_R * s,
-            s.max(1.0),
-            theme::palette().panel_border(),
-        );
-        fonts
-            .icons
-            .icon(canvas, icon::CLOSE, cx, cy, 12.0 * s, theme::palette().text);
+        for ((px, py), glyph, color) in [
+            (close, icon::CLOSE, theme::palette().text),
+            (ask, icon::BOT, theme::palette().accent),
+        ] {
+            let (cx, cy) = (px * s, py * s);
+            canvas.fill_circle(cx, cy, CLOSE_R * s, theme::palette().subtle);
+            canvas.stroke_rounded(
+                cx - CLOSE_R * s,
+                cy - CLOSE_R * s,
+                2.0 * CLOSE_R * s,
+                2.0 * CLOSE_R * s,
+                CLOSE_R * s,
+                s.max(1.0),
+                theme::palette().panel_border(),
+            );
+            fonts.icons.icon(canvas, glyph, cx, cy, 12.0 * s, color);
+        }
     }
 
     Hit {
@@ -323,6 +335,7 @@ pub fn draw(
         w: CARD_W,
         h,
         close,
+        ask,
         buttons,
         buttons_y,
     }

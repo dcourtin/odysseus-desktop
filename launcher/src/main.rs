@@ -68,33 +68,6 @@ enum Entry {
     Ask(String),
 }
 
-/// Les automatismes validés qu'on peut lancer à la main, comme des applications
-fn with_automatisms(mut list: Vec<App>) -> Vec<App> {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("odysseus-auto")))
-        .unwrap_or_else(|| "odysseus-auto".into());
-    for a in common::auto::load_all().0 {
-        if !a.manual() || !common::auto::status(&a).validated {
-            continue;
-        }
-        list.push(App {
-            id: String::new(),
-            wm_class: String::new(),
-            name: a.name.clone(),
-            comment: if a.description.is_empty() {
-                "Automatisme".into()
-            } else {
-                format!("Automatisme · {}", a.description)
-            },
-            exec: format!("'{}' lancer '{}'", exe.display(), a.id),
-            terminal: false,
-            icon: String::new(),
-        });
-    }
-    list
-}
-
 struct Launcher {
     registry_state: RegistryState,
     output_state: OutputState,
@@ -209,7 +182,7 @@ fn main() {
         modifiers: Modifiers::default(),
         regular: Text::load(theme::FONT_REGULAR).expect("police"),
         bold: Text::load(theme::FONT_BOLD).expect("police"),
-        apps: with_automatisms(apps::load()),
+        apps: apps::with_automatisms(apps::load()),
         // Requête initiale optionnelle : `launcher foot`
         query: std::env::args().skip(1).collect::<Vec<_>>().join(" "),
         entries: Vec::new(),
@@ -289,15 +262,7 @@ impl Launcher {
 
     fn launch(&mut self, index: usize) {
         let command = match self.entries.get(index) {
-            Some(Entry::App(i)) => {
-                let app = &self.apps[*i];
-                if app.terminal {
-                    let term = std::env::var("TERMINAL").unwrap_or_else(|_| "foot".into());
-                    format!("{term} -e {}", app.exec)
-                } else {
-                    app.exec.clone()
-                }
-            }
+            Some(Entry::App(i)) => self.apps[*i].command(),
             Some(Entry::Run(cmd)) => cmd.clone(),
             Some(Entry::Ask(question)) => {
                 let exe = std::env::current_exe()
