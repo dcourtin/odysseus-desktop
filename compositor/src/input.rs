@@ -412,7 +412,9 @@ impl Odysseus {
             Action::Minimize => self.minimize_focused(),
             Action::Lock => self.lock_session(),
             Action::Shortcuts => self.spawn_sibling("odysseus-raccourcis", &[]),
-            Action::Assistant => self.spawn_sibling("odysseus-assistant", &[]),
+            // Super+A : la bulle arrive avec le contexte (fenêtre active, sélection…)
+            // et se place près de la fenêtre
+            Action::Assistant => self.spawn_sibling("odysseus-assistant", &["--contexte"]),
             Action::Snap(zone) => {
                 if let Some(window) = self.focused_window() {
                     self.snap_window(&window, zone);

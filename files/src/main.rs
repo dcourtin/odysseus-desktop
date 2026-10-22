@@ -190,6 +190,8 @@ struct Files {
     bold: Text,
     icons: Text,
     browser: Browser,
+    /// Dernier état publié pour l'Assistant (dossier et sélection)
+    published: String,
     places: Vec<(String, PathBuf)>,
     hits: Vec<((f64, f64, f64, f64), Hit)>,
     last_click: Option<(Instant, usize)>,
@@ -305,6 +307,14 @@ fn devices() -> Vec<(String, PathBuf)> {
     list.sort();
     list.dedup();
     list
+}
+
+/// État publié pour l'Assistant, propre à cet affichage Wayland
+fn state_file() -> Option<PathBuf> {
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    let display = display.rsplit('/').next().unwrap_or("").to_string();
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| PathBuf::from(d).join(format!("odysseus-files.{display}.json")))
 }
 
 fn main() {
@@ -449,6 +459,7 @@ fn main() {
         bold: Text::load(theme::FONT_BOLD).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         browser: Browser::new(start),
+        published: String::new(),
         places: places(&home),
         hits: Vec::new(),
         last_click: None,
@@ -941,6 +952,33 @@ impl Files {
         }
     }
 
+    /// Pour l'Assistant appelé pendant que Fichiers est au premier plan
+    /// (Super+A) : le dossier ouvert et la sélection, dans
+    /// $XDG_RUNTIME_DIR/odysseus-files.<affichage>.json, réécrit quand ça change
+    fn publish_state(&mut self) {
+        let Some(path) = state_file() else {
+            return;
+        };
+        // Une sélection voulue (Ctrl+clic, Maj+clic, Ctrl+A), pas la ligne du curseur
+        let mut selection: Vec<String> = self
+            .browser
+            .picked
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        selection.sort();
+        let text = serde_json::json!({
+            "dossier": self.browser.cwd.to_string_lossy(),
+            "selection": selection,
+        })
+        .to_string();
+        if text == self.published {
+            return;
+        }
+        self.published = text;
+        let _ = std::fs::write(path, &self.published);
+    }
+
     /// Chemins des éléments sélectionnés, dans l'ordre de la liste
     fn selected_paths(&self) -> Vec<PathBuf> {
         self.browser
@@ -1238,6 +1276,7 @@ impl Files {
         if !self.configured {
             return;
         }
+        self.publish_state();
         self.refresh_details();
         let s = self.scale.max(1) as f32;
         let (w, h) = (self.width * s as u32, self.height * s as u32);

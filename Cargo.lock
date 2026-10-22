@@ -597,6 +597,7 @@ dependencies = [
  "chrono",
  "common",
  "image",
+ "serde_json",
  "smithay-client-toolkit",
 ]
 

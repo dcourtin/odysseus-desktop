@@ -4,28 +4,42 @@
 //! outils du bureau qu'il utilise (odysseus-mcp) s'affichent au passage.
 //! On y glisse des fichiers depuis Fichiers (pièces jointes).
 //!
+//! L'agent dans le contexte : à l'ouverture, le panneau rassemble ce que
+//! l'utilisateur avait sous les yeux (context) en pastilles retirables, la
+//! fenêtre active, le texte sélectionné, le presse-papiers, le dossier ouvert
+//! dans Fichiers ; avec `--contexte` (Super+A) il se place près de la fenêtre.
+//! Chaque réponse se copie, ou s'insère dans la fenêtre d'où l'on vient.
+//!
 //! Les conversations sont gardées (store, ~/.local/share/odysseus/assistant.db)
 //! et se reprennent : les plus récentes sous les suggestions, toutes par
 //! l'icône d'horloge ou Ctrl+H, avec une recherche.
 //!
-//! `odysseus-assistant [--joindre FICHIER]… [QUESTION]`
+//! `odysseus-assistant [--contexte] [--joindre FICHIER]… [QUESTION]`
 //! Clavier : Entrée envoie, Échap arrête la réponse puis ferme, ↑ reprend la
 //! dernière question, Ctrl+V colle, Ctrl+L nouvelle conversation, Ctrl+H les
 //! conversations précédentes.
 
 mod backend;
+mod context;
 mod mcp;
 
-use std::{fs::File, io::Read, path::PathBuf, time::Duration};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
 use assistant::store::{Conversation, Kind, Message, Store, Summary};
-use backend::{Context, Event, Job};
+use backend::{Ask, Context, Event, Job};
 use chrono::{DateTime, Datelike, Local, Timelike};
 use common::{
     agent::AgentConfig,
     draw::{Canvas, Text},
     theme::{self, Rgba, icon},
 };
+use context::{Chip, Window};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     data_device_manager::{
@@ -83,6 +97,8 @@ const BTN_LEFT: u32 = 0x110;
 const ROW_H: f32 = 54.0;
 /// Conversations récentes proposées sous les suggestions
 const RECENT: usize = 3;
+/// Hauteur d'une rangée de pastilles (fichiers joints, contexte)
+const CHIP_ROW: f32 = 30.0;
 
 const SUGGESTIONS: [&str; 4] = [
     "Qu'est-ce qui chauffe en ce moment ?",
@@ -96,6 +112,8 @@ enum Item {
     User {
         text: String,
         files: Vec<String>,
+        /// Pastilles de contexte envoyées avec la question (« fenêtre », « sélection »…)
+        context: Vec<String>,
     },
     Answer(String),
     Tool {
@@ -119,7 +137,17 @@ enum ToolState {
 /// Ce qui est gardé d'un élément ; rien pour un avis du panneau
 fn message_from(item: &Item) -> Option<Message> {
     let (kind, body, extra) = match item {
-        Item::User { text, files } => (Kind::User, text.clone(), files.join("\n")),
+        Item::User {
+            text,
+            files,
+            context,
+        } => {
+            let mut extra = files.clone();
+            if !context.is_empty() {
+                extra.push(format!("contexte: {}", context.join(", ")));
+            }
+            (Kind::User, text.clone(), extra.join("\n"))
+        }
         Item::Answer(t) => (Kind::Answer, t.clone(), String::new()),
         Item::Tool { label, state } => {
             let state = match state {
@@ -142,9 +170,15 @@ fn item_from(m: &Message) -> Item {
             files: m
                 .extra
                 .lines()
-                .filter(|l| !l.is_empty())
+                .filter(|l| !l.is_empty() && !l.starts_with("contexte: "))
                 .map(String::from)
                 .collect(),
+            context: m
+                .extra
+                .lines()
+                .find_map(|l| l.strip_prefix("contexte: "))
+                .map(|c| c.split(", ").map(String::from).collect())
+                .unwrap_or_default(),
         },
         Kind::Answer => Item::Answer(m.body.clone()),
         Kind::Tool => Item::Tool {
@@ -175,6 +209,10 @@ enum Hit {
     New,
     Close,
     RemoveFile(usize),
+    RemoveChip(usize),
+    /// Une réponse (indice dans la conversation) : la copier, l'insérer dans la fenêtre
+    CopyAnswer(usize),
+    InsertAnswer(usize),
     /// Ouvrir ou fermer la liste des conversations
     History,
     Back,
@@ -209,6 +247,14 @@ struct App {
     items: Vec<Item>,
     input: String,
     files: Vec<PathBuf>,
+    /// Le contexte rassemblé à l'ouverture, tant qu'il n'est pas envoyé ni retiré
+    chips: Vec<Chip>,
+    /// La fenêtre active à l'ouverture : où insérer une réponse, où se placer
+    window: Option<Window>,
+    /// `--contexte` : la bulle se place près de la fenêtre active
+    anchor: bool,
+    /// Réponse copiée à l'instant (le bouton le dit deux secondes)
+    copied: Option<(usize, Instant)>,
     last_question: String,
     job: Option<Job>,
     /// Numéro de la réponse en cours : les événements d'une réponse
@@ -272,9 +318,10 @@ fn close_existing() -> bool {
 }
 
 fn main() {
-    // Arguments : pièces jointes et question
+    // Arguments : pièces jointes, question, bulle en contexte
     let mut files = Vec::new();
     let mut words = Vec::new();
+    let mut anchor = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -283,6 +330,7 @@ fn main() {
                     files.push(PathBuf::from(f));
                 }
             }
+            "--contexte" => anchor = true,
             _ => words.push(a),
         }
     }
@@ -297,6 +345,9 @@ fn main() {
         let _ = std::fs::write(p, std::process::id().to_string());
     }
     unsafe { libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t) };
+    // Ce que l'utilisateur a sous les yeux, avant que le panneau ne prenne le clavier
+    let window = context::focused_window();
+    let chips = context::gather(window.as_ref());
 
     let conn = Connection::connect_to_env().expect("pas de compositeur Wayland (WAYLAND_DISPLAY)");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
@@ -392,6 +443,10 @@ fn main() {
         items: Vec::new(),
         input: String::new(),
         files,
+        chips,
+        window,
+        anchor,
+        copied: None,
         last_question: String::new(),
         job: None,
         generation: 0,
@@ -440,6 +495,27 @@ static TERM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(
 
 extern "C" fn on_term(_: libc::c_int) {
     TERM.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Met un texte dans le presse-papiers (wl-copy le sert après la fermeture)
+fn wl_copy(text: &str) -> Result<(), String> {
+    let mut child = Command::new("wl-copy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("wl-copy : {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("wl-copy : {e}"))?;
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("wl-copy a échoué".into())
+    }
 }
 
 /// Markdown simplifié : gras et code retirés, puces rendues « • »
@@ -504,7 +580,7 @@ impl App {
             return;
         }
         let question = self.input.trim().to_string();
-        if question.is_empty() && self.files.is_empty() {
+        if question.is_empty() && self.files.is_empty() && self.chips.is_empty() {
             return;
         }
         // L'agent choisi peut avoir changé (Réglages, agent.json)
@@ -514,6 +590,8 @@ impl App {
         }
         self.agent = agent;
         let files: Vec<PathBuf> = std::mem::take(&mut self.files);
+        // Les pastilles partent avec la question, une fois
+        let chips: Vec<Chip> = std::mem::take(&mut self.chips);
         self.items.push(Item::User {
             text: question.clone(),
             files: files
@@ -524,6 +602,7 @@ impl App {
                         .unwrap_or_default()
                 })
                 .collect(),
+            context: chips.iter().map(|c| c.kind.label().to_string()).collect(),
         });
         self.last_question = question.clone();
         self.input.clear();
@@ -531,10 +610,15 @@ impl App {
         // La question est gardée avant la réponse : fermé entre-temps, rien n'est perdu
         self.persist();
         self.generation += 1;
+        let ask = Ask {
+            question,
+            attachments: files,
+            context: chips.iter().map(|c| c.text.clone()).collect(),
+            dirs: chips.iter().filter_map(|c| c.dir.clone()).collect(),
+        };
         self.job = Some(backend::ask(
             self.agent.clone(),
-            question,
-            files,
+            ask,
             self.context.clone(),
             self.conversation,
             self.generation,
@@ -571,6 +655,59 @@ impl App {
                 *state = ToolState::Interrupted;
             }
         }
+    }
+
+    // --- Une réponse, vers le presse-papiers ou la fenêtre ----------------------------
+
+    /// Le texte d'une réponse, débarrassé de ses marques Markdown
+    fn answer_text(&self, k: usize) -> Option<String> {
+        match self.items.get(k) {
+            Some(Item::Answer(t)) => Some(plain(t)),
+            _ => None,
+        }
+    }
+
+    fn copy_answer(&mut self, k: usize) {
+        let Some(text) = self.answer_text(k) else {
+            return;
+        };
+        match wl_copy(&text) {
+            Ok(()) => {
+                self.copied = Some((k, Instant::now()));
+                // Le bouton redit « Copier » deux secondes plus tard
+                let _ = self.loop_handle.insert_source(
+                    Timer::from_duration(Duration::from_millis(2200)),
+                    |_, _, app| {
+                        app.draw();
+                        TimeoutAction::Drop
+                    },
+                );
+            }
+            Err(e) => self.items.push(Item::Notice(e)),
+        }
+        self.draw();
+    }
+
+    /// Insérer : le texte va au presse-papiers, puis le compositeur colle
+    /// (Ctrl+V) dans la fenêtre d'où l'on est venu
+    fn insert_answer(&mut self, k: usize) {
+        let Some(text) = self.answer_text(k) else {
+            return;
+        };
+        let Some(id) = self.window.as_ref().map(|w| w.id) else {
+            return;
+        };
+        let done = wl_copy(&text).and_then(|()| {
+            // wl-copy vient de prendre la sélection : un instant avant de coller
+            std::thread::sleep(Duration::from_millis(80));
+            common::ipc::command(&format!("paste {id}"))
+        });
+        if let Err(e) = done {
+            self.items.push(Item::Notice(format!(
+                "Impossible d'insérer dans la fenêtre ({e}) : la réponse est dans le presse-papiers."
+            )));
+        }
+        self.draw();
     }
 
     fn new_conversation(&mut self) {
@@ -832,6 +969,14 @@ impl App {
                 }
                 self.draw();
             }
+            Some(Hit::RemoveChip(i)) => {
+                if i < self.chips.len() {
+                    self.chips.remove(i);
+                }
+                self.draw();
+            }
+            Some(Hit::CopyAnswer(k)) => self.copy_answer(k),
+            Some(Hit::InsertAnswer(k)) => self.insert_answer(k),
             Some(Hit::History) => self.show_history(),
             Some(Hit::Back) => self.hide_history(),
             Some(Hit::Open(id)) => self.open_conversation(id),
@@ -934,7 +1079,7 @@ impl App {
             Keysym::h if ctrl => self.show_history(),
             Keysym::v if ctrl => {
                 // Texte du presse-papiers, sur une ligne
-                if let Ok(out) = std::process::Command::new("wl-paste")
+                if let Ok(out) = Command::new("wl-paste")
                     .args(["--no-newline", "--type", "text/plain"])
                     .output()
                 {
@@ -965,6 +1110,28 @@ impl App {
             }
         }
         self.draw();
+    }
+
+    /// Avec `--contexte` : la bulle se place à droite de la fenêtre active
+    /// s'il y a la place, sinon dans son coin supérieur droit ; sans fenêtre,
+    /// elle reste au coin de l'écran, sous son icône de la barre
+    fn place_near_window(&mut self, screen_w: i32, screen_h: i32) {
+        let Some(w) = self.window.as_ref().filter(|_| self.anchor) else {
+            return;
+        };
+        let (pw, ph) = (self.width as i32, self.height as i32);
+        let right_edge = w.x + w.width;
+        let margin_right = if right_edge + pw <= screen_w {
+            screen_w - right_edge - pw
+        } else {
+            (screen_w - right_edge).max(0)
+        };
+        let margin_right = margin_right.clamp(0, (screen_w - pw).max(0));
+        let margin_top = w.y.clamp(0, (screen_h - ph).max(0));
+        // Les marges comptent depuis le bord de l'écran, pas depuis la barre
+        self.layer.set_exclusive_zone(-1);
+        self.layer.set_margin(margin_top, margin_right, 0, 0);
+        self.layer.commit();
     }
 
     // --- Dessin -------------------------------------------------------------------
@@ -1035,9 +1202,10 @@ impl App {
             hover: self.hover.clone(),
         };
 
-        // Conversation, sous l'en-tête et au-dessus de la saisie
+        // Conversation, sous l'en-tête et au-dessus de la saisie (et des pastilles)
         let top = y0 + HEADER_H;
-        let bottom = y0 + PH - INPUT_H - if self.files.is_empty() { 0.0 } else { 30.0 };
+        let rows = self.chip_rows(&ui);
+        let bottom = y0 + PH - INPUT_H - rows.len() as f32 * CHIP_ROW;
         let (cx, cw) = (x0 + PAD, PW - 2.0 * PAD);
         if self.history.is_some() {
             self.history_view(&mut ui, cx, top, cw, bottom);
@@ -1064,7 +1232,7 @@ impl App {
         }
 
         self.header(&mut ui, x0, y0);
-        self.input_area(&mut ui, x0, y0);
+        self.input_area(&mut ui, x0, y0, &rows);
 
         self.hits = ui.hits;
         let surface = self.layer.wl_surface();
@@ -1269,28 +1437,67 @@ impl App {
         }
     }
 
-    fn input_area(&self, ui: &mut Ui, x0: f32, y0: f32) {
+    /// Les pastilles au-dessus de la saisie, en rangées : le contexte, puis
+    /// les fichiers joints ; chacune avec son icône, son texte, sa croix
+    fn chip_rows(&self, ui: &Ui) -> Vec<Vec<(char, String, f32, Hit)>> {
+        let max_w = PW - 2.0 * PAD;
+        let mut rows: Vec<Vec<(char, String, f32, Hit)>> = Vec::new();
+        let mut row_w = 0.0;
+        let mut push = |glyph: char, label: String, hit: Hit| {
+            let label = ui.truncate(&label, 12.0, 230.0);
+            let w = ui.measure(&label, 12.0) + 52.0;
+            if rows.is_empty() || row_w + w > max_w {
+                rows.push(Vec::new());
+                row_w = 0.0;
+            }
+            row_w += w + 8.0;
+            if let Some(last) = rows.last_mut() {
+                last.push((glyph, label, w, hit));
+            }
+        };
+        for (i, c) in self.chips.iter().enumerate() {
+            let glyph = match c.kind {
+                context::Kind::Window => icon::APP,
+                context::Kind::Selection => icon::PENCIL,
+                context::Kind::Clipboard => icon::COPY,
+                context::Kind::Folder => icon::FOLDER,
+            };
+            push(glyph, c.label.clone(), Hit::RemoveChip(i));
+        }
+        for (i, f) in self.files.iter().enumerate() {
+            let name = f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            push(icon::LINK, name, Hit::RemoveFile(i));
+        }
+        rows
+    }
+
+    fn input_area(&self, ui: &mut Ui, x0: f32, y0: f32, rows: &[Vec<(char, String, f32, Hit)>]) {
         let p = theme::palette();
         let mut y = y0 + PH - INPUT_H + 12.0;
-        // Pièces jointes
-        if !self.files.is_empty() {
-            y -= 30.0;
-            let mut fx = x0 + PAD;
-            for (i, f) in self.files.iter().enumerate() {
-                let name = f
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let name = ui.truncate(&name, 12.0, 200.0);
-                let fw = ui.measure(&name, 12.0) + 52.0;
-                ui.rounded(fx, y, fw, 24.0, 12.0, p.accent.with_alpha(0.16));
-                ui.icon(icon::LINK, fx + 14.0, y + 12.0, 11.0, p.accent);
-                ui.text(fx + 24.0, y, 24.0, 12.0, &name, p.text);
-                ui.icon(icon::CLOSE, fx + fw - 13.0, y + 12.0, 10.0, p.text_dim);
-                ui.hit((fx + fw - 24.0, y, 24.0, 24.0), Hit::RemoveFile(i));
-                fx += fw + 8.0;
+        // Pastilles : contexte (teinte neutre) et fichiers joints (teinte d'accent)
+        if !rows.is_empty() {
+            y -= rows.len() as f32 * CHIP_ROW;
+            for row in rows {
+                let mut fx = x0 + PAD;
+                for (glyph, label, w, hit) in row {
+                    let is_file = matches!(hit, Hit::RemoveFile(_));
+                    let (bg, fg) = if is_file {
+                        (p.accent.with_alpha(0.16), p.accent)
+                    } else {
+                        (p.ink(0.08), p.text_soft())
+                    };
+                    ui.rounded(fx, y, *w, 24.0, 12.0, bg);
+                    ui.icon(*glyph, fx + 14.0, y + 12.0, 11.0, fg);
+                    ui.text(fx + 24.0, y, 24.0, 12.0, label, p.text);
+                    ui.icon(icon::CLOSE, fx + w - 13.0, y + 12.0, 10.0, p.text_dim);
+                    ui.hit((fx + w - 24.0, y, 24.0, 24.0), hit.clone());
+                    fx += w + 8.0;
+                }
+                y += CHIP_ROW;
             }
-            y += 30.0;
         }
         let (fx, fw, fh) = (x0 + PAD, PW - 2.0 * PAD, 46.0);
         ui.rounded(fx, y, fw, fh, 14.0, p.ink(0.07));
@@ -1348,7 +1555,11 @@ impl App {
         let mut lines = Vec::new();
         for (k, item) in self.items.iter().enumerate() {
             match item {
-                Item::User { text, files } => {
+                Item::User {
+                    text,
+                    files,
+                    context,
+                } => {
                     if k > 0 {
                         lines.push(Line::gap(14.0));
                     }
@@ -1356,6 +1567,9 @@ impl App {
                     let mut wrapped = Vec::new();
                     for para in text.split('\n') {
                         wrapped.extend(ui.wrap(para, 14.0, bw - 28.0));
+                    }
+                    if !context.is_empty() {
+                        wrapped.push(format!("Contexte : {}", context.join(", ")));
                     }
                     if !files.is_empty() {
                         wrapped.push(format!("Joint : {}", files.join(", ")));
@@ -1383,6 +1597,14 @@ impl App {
                                 h: LINE,
                             });
                         }
+                    }
+                    // Réponse finie : la copier, l'insérer dans la fenêtre d'où l'on vient
+                    let streaming = self.job.is_some() && k + 1 == self.items.len();
+                    if !streaming && !text.trim().is_empty() {
+                        lines.push(Line {
+                            kind: LineKind::Actions(k),
+                            h: 34.0,
+                        });
                     }
                 }
                 Item::Tool { label, state } => lines.push(Line {
@@ -1465,6 +1687,28 @@ impl App {
                 ui.icon(icon::INFO, x + 8.0, y + LINE / 2.0, 12.0, p.text_dim);
                 ui.text(x + 22.0, y, LINE, 12.5, l, p.text_dim);
             }
+            LineKind::Actions(k) => {
+                let copied = self
+                    .copied
+                    .is_some_and(|(i, at)| i == *k && at.elapsed() < Duration::from_secs(2));
+                let mut bx = x;
+                let (glyph, label) = if copied {
+                    (icon::CHECK, "Copié".to_string())
+                } else {
+                    (icon::COPY, "Copier".to_string())
+                };
+                bx += ui.pill(bx, y + 6.0, glyph, &label, Hit::CopyAnswer(*k)) + 8.0;
+                if let Some(w) = self.window.as_ref() {
+                    let label = ui.truncate(&format!("Insérer dans {}", w.name), 12.0, 260.0);
+                    ui.pill(
+                        bx,
+                        y + 6.0,
+                        icon::ARROW_RIGHT,
+                        &label,
+                        Hit::InsertAnswer(*k),
+                    );
+                }
+            }
         }
     }
 }
@@ -1476,6 +1720,8 @@ enum LineKind {
     Tool(String, ToolState),
     Error(String),
     Notice(String),
+    /// Sous une réponse (indice dans la conversation) : Copier, Insérer
+    Actions(usize),
 }
 
 struct Line {
@@ -1559,6 +1805,25 @@ impl Ui<'_, '_> {
         self.bold
             .draw_centered(self.c, t, cx * s, y * s, h * s, px * s, c);
     }
+    /// Petit bouton à icône et texte ; renvoie sa largeur
+    fn pill(&mut self, x: f32, y: f32, glyph: char, label: &str, hit: Hit) -> f32 {
+        let p = theme::palette();
+        let hovered = self.hover == Some(hit.clone());
+        let w = self.measure(label, 12.0) + 40.0;
+        self.rounded(
+            x,
+            y,
+            w,
+            24.0,
+            12.0,
+            if hovered { p.tile_hover() } else { p.ink(0.07) },
+        );
+        self.icon(glyph, x + 14.0, y + 12.0, 11.0, p.text_soft());
+        self.text(x + 26.0, y, 24.0, 12.0, label, p.text_soft());
+        self.hit((x, y, w, 24.0), hit);
+        w
+    }
+
     /// Bouton rond à icône (plein : accent)
     fn round_button(&mut self, cx: f32, cy: f32, glyph: char, hit: Hit, filled: bool) {
         let p = theme::palette();
@@ -1930,7 +2195,11 @@ impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if let Some((sw, sh)) = self.output_state.info(&output).and_then(|i| i.logical_size) {
+            self.place_near_window(sw, sh);
+        }
+    }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }

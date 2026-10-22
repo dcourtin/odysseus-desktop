@@ -35,7 +35,10 @@ fn system_prompt(agent: &AgentConfig) -> String {
          noyau, notes de construction de cette machine, bibliothèque de l'utilisateur) plutôt que de répondre \
          de mémoire, et dis d'où vient l'information. Avant une commande (outil executer), préfère les outils \
          de lecture s'ils suffisent ; l'utilisateur approuve chaque commande. Si un outil est refusé, explique \
-         que l'utilisateur peut l'autoriser dans Réglages > Agent. Réponds en français, de façon claire, en \
+         que l'utilisateur peut l'autoriser dans Réglages > Agent. Le contexte joint à une question \
+         (fenêtre active, texte sélectionné, presse-papiers, dossier ouvert) est ce que l'utilisateur avait \
+         sous les yeux : « ça », « ce texte », « cette fenêtre » le désignent, réponds dessus directement \
+         sans le lui redemander. Réponds en français, de façon claire, en \
          texte simple (listes à puces permises, pas de tableaux).",
         common::memory::machine()
     );
@@ -164,23 +167,53 @@ fn mcp_path() -> String {
         .unwrap_or_else(|| "odysseus-mcp".into())
 }
 
-fn prompt_with(question: &str, attachments: &[PathBuf]) -> String {
-    if attachments.is_empty() {
-        return question.to_string();
-    }
-    let list: Vec<String> = attachments
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
-    format!(
-        "Fichiers joints (chemins absolus) : {}\n\n{}",
-        list.join(", "),
-        if question.trim().is_empty() {
-            "Que peux-tu me dire de ces fichiers ?"
-        } else {
-            question
+/// Une question, avec ce qui l'accompagne
+#[derive(Clone, Default, Debug)]
+pub struct Ask {
+    pub question: String,
+    /// Fichiers joints (glissés, Ctrl+V, Fichiers > Demander à l'Assistant)
+    pub attachments: Vec<PathBuf>,
+    /// Pastilles de contexte restées affichées : fenêtre, sélection, presse-papiers, dossier
+    pub context: Vec<String>,
+    /// Dossiers que l'agent peut lire directement (le dossier ouvert dans Fichiers)
+    pub dirs: Vec<PathBuf>,
+}
+
+/// Le message envoyé : contexte, fichiers joints, puis la question
+fn prompt_with(ask: &Ask) -> String {
+    let mut out = String::new();
+    if !ask.context.is_empty() {
+        out.push_str(
+            "Contexte (ce que l'utilisateur avait sous les yeux en posant sa question ; il a pu \
+             en retirer une partie) :\n",
+        );
+        for c in &ask.context {
+            out.push_str(&format!("- {}\n", c.replace('\n', "\n  ")));
         }
-    )
+        out.push('\n');
+    }
+    if !ask.attachments.is_empty() {
+        let list: Vec<String> = ask
+            .attachments
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        out.push_str(&format!(
+            "Fichiers joints (chemins absolus) : {}\n\n",
+            list.join(", ")
+        ));
+    }
+    let question = ask.question.trim();
+    out.push_str(if question.is_empty() {
+        if ask.attachments.is_empty() {
+            "Que peux-tu me dire de ce contexte ?"
+        } else {
+            "Que peux-tu me dire de ces fichiers ?"
+        }
+    } else {
+        question
+    });
+    out
 }
 
 /// Conversation en cours, à reprendre
@@ -192,8 +225,7 @@ pub struct Context {
 
 pub fn ask(
     agent: AgentConfig,
-    question: String,
-    attachments: Vec<PathBuf>,
+    ask: Ask,
     context: Context,
     conversation: Option<i64>,
     generation: u64,
@@ -210,28 +242,18 @@ pub fn ask(
         let result = match agent.agent.as_str() {
             "ollama" => ollama(
                 &agent,
-                &question,
-                &attachments,
+                &ask,
                 context.ollama_history,
                 conversation,
                 &system,
                 &tx,
                 &j,
             ),
-            "commande" => custom(&agent, &question, &attachments, &tx, &j),
+            "commande" => custom(&agent, &ask, &tx, &j),
             _ => {
                 let session = context.claude_session;
                 let run = |session: Option<String>| {
-                    claude(
-                        &agent,
-                        &question,
-                        &attachments,
-                        session,
-                        conversation,
-                        &system,
-                        &tx,
-                        &j,
-                    )
+                    claude(&agent, &ask, session, conversation, &system, &tx, &j)
                 };
                 match run(session.clone()) {
                     // Conversation reprise mais inconnue de Claude Code (effacée
@@ -267,11 +289,9 @@ fn unknown_session(error: &str) -> bool {
     e.contains("session") && (e.contains("not found") || e.contains("no conversation"))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn claude(
     agent: &AgentConfig,
-    question: &str,
-    attachments: &[PathBuf],
+    ask: &Ask,
     session: Option<String>,
     conversation: Option<i64>,
     system: &str,
@@ -285,7 +305,7 @@ fn claude(
     let mcp = json!({"mcpServers": {"odysseus": {"type": "stdio", "command": mcp_path()}}});
     let mut cmd = Command::new(bin);
     cmd.arg("-p")
-        .arg(prompt_with(question, attachments))
+        .arg(prompt_with(ask))
         .args([
             "--output-format",
             "stream-json",
@@ -307,10 +327,14 @@ fn claude(
     if let Some(id) = conversation {
         cmd.env("ODYSSEUS_CONVERSATION", id.to_string());
     }
-    for p in attachments {
-        if let Some(dir) = p.parent() {
-            cmd.arg("--add-dir").arg(dir);
-        }
+    // Lisibles directement : les dossiers des fichiers joints, le dossier ouvert dans Fichiers
+    for dir in ask
+        .attachments
+        .iter()
+        .filter_map(|p| p.parent())
+        .chain(ask.dirs.iter().map(PathBuf::as_path))
+    {
+        cmd.arg("--add-dir").arg(dir);
     }
     if let Some(id) = session {
         cmd.args(["--resume", &id]);
@@ -425,11 +449,9 @@ fn claude(
 
 // --- Ollama ---------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
 fn ollama(
     agent: &AgentConfig,
-    question: &str,
-    attachments: &[PathBuf],
+    ask: &Ask,
     mut history: Vec<Value>,
     conversation: Option<i64>,
     system: &str,
@@ -438,7 +460,7 @@ fn ollama(
 ) -> Result<(), String> {
     let mut mcp = Mcp::start(conversation)?;
     let tools = mcp.tools_for_ollama()?;
-    history.push(json!({"role": "user", "content": prompt_with(question, attachments)}));
+    history.push(json!({"role": "user", "content": prompt_with(ask)}));
     // Quelques tours au plus : question, outils, réponse
     for _ in 0..8 {
         if job.cancelled() {
@@ -539,13 +561,7 @@ fn ollama(
 
 // --- Commande personnalisée ---------------------------------------------------------
 
-fn custom(
-    agent: &AgentConfig,
-    question: &str,
-    attachments: &[PathBuf],
-    tx: &Tx,
-    job: &Job,
-) -> Result<(), String> {
+fn custom(agent: &AgentConfig, ask: &Ask, tx: &Tx, job: &Job) -> Result<(), String> {
     if agent.custom_command.trim().is_empty() {
         return Err("Aucune commande définie (agent.json, clé commande.commande)".into());
     }
@@ -554,7 +570,7 @@ fn custom(
         .arg("-c")
         .arg(format!("{} \"$1\"", agent.custom_command))
         .arg("odysseus-assistant")
-        .arg(prompt_with(question, attachments))
+        .arg(prompt_with(ask))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

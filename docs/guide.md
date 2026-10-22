@@ -240,6 +240,16 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
   `~/.local/share/odysseus/assistant.db`.
 - **Joindre des fichiers** : les glisser dans le panneau, Ctrl+V, ou Fichiers >
   Demander à l'Assistant (aussi pour plusieurs fichiers d'un coup).
+- **L'agent dans le contexte** : à l'ouverture, ce que vous aviez sous les yeux
+  arrive en pastilles au-dessus de la saisie : la fenêtre active, le texte
+  surligné dans n'importe quelle application, le presse-papiers, le dossier
+  ouvert dans Fichiers et sa sélection. Une croix retire une pastille ; seules
+  celles qui restent partent avec la question, et une seule fois. « Traduis
+  ça », « explique cette erreur », « range ces fichiers » se comprennent sans
+  rien coller. Avec Super+A, la bulle se place près de la fenêtre active.
+- **Copier, Insérer** : sous chaque réponse. Insérer la colle dans la fenêtre
+  d'où vous venez, comme un Ctrl+V : sélectionner un paragraphe, Super+A,
+  « traduis », Insérer, sans quitter l'application.
 - Les outils qu'il utilise s'affichent au passage. Une commande shell ne se lance
   qu'après votre accord, dans une notification Autoriser / Refuser.
 

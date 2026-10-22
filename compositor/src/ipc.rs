@@ -8,6 +8,7 @@
 //! « nightlight on|off|auto|toggle », « output scale X », « output mode WxH[@Hz] »),
 //! GET_WORKSPACES, SUBSCRIBE (événements « workspace »), GET_OUTPUTS ; propres
 //! à odysseus, pour les agents : GET_WINDOWS (100), « focus <id> »,
+//! « paste <id> » (coller le presse-papiers dans une fenêtre),
 //! « agent-capture <fichier.png> [<id>] » ; partage d'écran : GET_SCREENCAST
 //! (101, sessions en cours, signalées aux abonnés par un événement
 //! « workspace » de changement « screencast ») et « screencast stop ».
@@ -175,6 +176,10 @@ fn run_command(state: &mut Odysseus, command: &str) -> bool {
     }
     if let Some(id) = command.strip_prefix("close ") {
         return id.trim().parse().is_ok_and(|id| state.close_by_id(id));
+    }
+    // « paste <id> » : Ctrl+V dans une fenêtre (bouton « Insérer » de l'Assistant)
+    if let Some(id) = command.strip_prefix("paste ") {
+        return id.trim().parse().is_ok_and(|id| state.paste_into(id));
     }
     if let Some(arg) = command.strip_prefix("move ") {
         let words: Vec<&str> = arg.split_whitespace().collect();

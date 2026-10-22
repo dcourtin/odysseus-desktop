@@ -110,11 +110,19 @@ pub fn title(messages: &[Message]) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("");
     let text = if line.is_empty() {
-        let files: Vec<&str> = first.extra.lines().filter(|l| !l.is_empty()).collect();
-        if files.is_empty() {
-            String::new()
-        } else {
-            format!("Fichiers : {}", files.join(", "))
+        let files: Vec<&str> = first
+            .extra
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with("contexte: "))
+            .collect();
+        let context = first
+            .extra
+            .lines()
+            .find_map(|l| l.strip_prefix("contexte: "));
+        match (files.is_empty(), context) {
+            (false, _) => format!("Fichiers : {}", files.join(", ")),
+            (true, Some(c)) => format!("Contexte : {c}"),
+            (true, None) => String::new(),
         }
     } else {
         line.to_string()
@@ -428,6 +436,12 @@ mod tests {
             extra: "a.png\nb.pdf".into(),
         };
         assert_eq!(title(&[files]), "Fichiers : a.png, b.pdf");
+        let context = Message {
+            kind: Kind::User,
+            body: String::new(),
+            extra: "contexte: fenêtre, sélection".into(),
+        };
+        assert_eq!(title(&[context]), "Contexte : fenêtre, sélection");
         let long = "x".repeat(100);
         let t = title(&[msg(Kind::User, &format!("\n  {long}"))]);
         assert_eq!(t.chars().count(), TITLE_CHARS);

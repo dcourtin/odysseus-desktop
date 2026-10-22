@@ -1,7 +1,8 @@
-//! Ce que le compositeur offre aux agents (odysseus-mcp), par l'IPC :
-//! la liste des fenêtres de tous les bureaux, la mise au premier plan d'une
-//! fenêtre, et une capture écrite à l'endroit demandé (sans passer par
-//! ~/Images ni par le presse-papiers).
+//! Ce que le compositeur offre aux agents (odysseus-mcp) et à l'Assistant,
+//! par l'IPC : la liste des fenêtres de tous les bureaux, la mise au premier
+//! plan d'une fenêtre, le collage du presse-papiers dans une fenêtre
+//! (« Insérer » une réponse), et une capture écrite à l'endroit demandé
+//! (sans passer par ~/Images ni par le presse-papiers).
 
 use std::{
     path::PathBuf,
@@ -167,6 +168,53 @@ impl Odysseus {
             self.switch_workspace(ws);
         }
         self.focus_window(&window);
+        true
+    }
+
+    /// Colle le presse-papiers dans une fenêtre (IPC « paste <id> », bouton
+    /// « Insérer » de l'Assistant) : elle passe au premier plan et reçoit
+    /// Ctrl+V, avec la touche qui donne « v » dans la disposition en cours
+    /// (pas la même en bépo qu'en azerty). Rien d'autre n'est simulé : c'est
+    /// l'application qui colle, comme si l'utilisateur l'avait fait.
+    pub fn paste_into(&mut self, id: u64) -> bool {
+        use smithay::{
+            backend::input::KeyState,
+            input::keyboard::{FilterResult, Keycode, Keysym},
+            utils::{Clock, Monotonic, SERIAL_COUNTER},
+        };
+        if !self.focus_by_id(id) {
+            return false;
+        }
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return false;
+        };
+        let v = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            let layout = xkb.active_layout().0;
+            // Sûr : la carte n'est qu'empruntée le temps de la recherche, jamais clonée
+            let keymap = unsafe { xkb.keymap() };
+            (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
+                .map(Keycode::new)
+                .find(|k| keymap.key_get_syms_by_level(*k, layout, 0) == [Keysym::v])
+        });
+        let Some(v) = v else {
+            tracing::warn!("paste : aucune touche ne donne « v » dans cette disposition");
+            return false;
+        };
+        // KEY_LEFTCTRL (29) ; les codes xkb sont ceux d'evdev décalés de 8
+        let ctrl = Keycode::new(29 + 8);
+        let time = Clock::<Monotonic>::new().now().as_millis();
+        for (code, state) in [
+            (ctrl, KeyState::Pressed),
+            (v, KeyState::Pressed),
+            (v, KeyState::Released),
+            (ctrl, KeyState::Released),
+        ] {
+            let serial = SERIAL_COUNTER.next_serial();
+            keyboard.input::<(), _>(self, code, state, serial, time, |_, _, _| {
+                FilterResult::Forward
+            });
+        }
         true
     }
 }
