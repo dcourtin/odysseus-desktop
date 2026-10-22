@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Assistant d'odysseus-desktop : l'agent choisi (Claude Code, Ollama…), avec les outils du bureau"
 
+[lib]
+name = "assistant"
+path = "src/lib.rs"
+
 [[bin]]
 name = "odysseus-assistant"
 path = "src/main.rs"
@@ -13,4 +17,6 @@ path = "src/main.rs"
 common.workspace = true
 smithay-client-toolkit.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
+rusqlite = "0.37"
 libc = "0.2"

@@ -231,6 +231,13 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
 
 - **Entrée** envoie, **↑** rappelle la dernière question, **Ctrl+L** commence une
   nouvelle conversation, **Échap** arrête la réponse puis ferme.
+- **Reprendre une conversation** : les plus récentes sont proposées sous les
+  suggestions ; l'icône d'horloge ou **Ctrl+H** les liste toutes, et ce que vous
+  tapez y cherche (sans casse ni accents, dans les questions et les réponses).
+  ↑ ↓ choisissent, Entrée reprend, Suppr supprime, Ctrl+Z rétablit. L'agent
+  continue là où il en était s'il est encore le même ; sinon il relit la
+  conversation sans en connaître le détail. Le fil est gardé dans
+  `~/.local/share/odysseus/assistant.db`.
 - **Joindre des fichiers** : les glisser dans le panneau, Ctrl+V, ou Fichiers >
   Demander à l'Assistant (aussi pour plusieurs fichiers d'un coup).
 - Les outils qu'il utilise s'affichent au passage. Une commande shell ne se lance

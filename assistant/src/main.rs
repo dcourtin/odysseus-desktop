@@ -4,16 +4,23 @@
 //! outils du bureau qu'il utilise (odysseus-mcp) s'affichent au passage.
 //! On y glisse des fichiers depuis Fichiers (pièces jointes).
 //!
+//! Les conversations sont gardées (store, ~/.local/share/odysseus/assistant.db)
+//! et se reprennent : les plus récentes sous les suggestions, toutes par
+//! l'icône d'horloge ou Ctrl+H, avec une recherche.
+//!
 //! `odysseus-assistant [--joindre FICHIER]… [QUESTION]`
 //! Clavier : Entrée envoie, Échap arrête la réponse puis ferme, ↑ reprend la
-//! dernière question, Ctrl+V colle, Ctrl+L nouvelle conversation.
+//! dernière question, Ctrl+V colle, Ctrl+L nouvelle conversation, Ctrl+H les
+//! conversations précédentes.
 
 mod backend;
 mod mcp;
 
 use std::{fs::File, io::Read, path::PathBuf, time::Duration};
 
+use assistant::store::{Conversation, Kind, Message, Store, Summary};
 use backend::{Context, Event, Job};
+use chrono::{DateTime, Datelike, Local, Timelike};
 use common::{
     agent::AgentConfig,
     draw::{Canvas, Text},
@@ -72,6 +79,10 @@ const INPUT_H: f32 = 96.0;
 const PAD: f32 = 22.0;
 const LINE: f32 = 21.0;
 const BTN_LEFT: u32 = 0x110;
+/// Hauteur d'une ligne de la liste des conversations
+const ROW_H: f32 = 54.0;
+/// Conversations récentes proposées sous les suggestions
+const RECENT: usize = 3;
 
 const SUGGESTIONS: [&str; 4] = [
     "Qu'est-ce qui chauffe en ce moment ?",
@@ -82,10 +93,78 @@ const SUGGESTIONS: [&str; 4] = [
 
 /// Élément de la conversation
 enum Item {
-    User { text: String, files: Vec<String> },
+    User {
+        text: String,
+        files: Vec<String>,
+    },
     Answer(String),
-    Tool { label: String, ok: Option<bool> },
+    Tool {
+        label: String,
+        state: ToolState,
+    },
     Error(String),
+    /// Information du panneau lui-même, pas gardée dans le fil
+    Notice(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ToolState {
+    Running,
+    Done,
+    Refused,
+    /// La réponse s'est arrêtée avant la fin de l'outil
+    Interrupted,
+}
+
+/// Ce qui est gardé d'un élément ; rien pour un avis du panneau
+fn message_from(item: &Item) -> Option<Message> {
+    let (kind, body, extra) = match item {
+        Item::User { text, files } => (Kind::User, text.clone(), files.join("\n")),
+        Item::Answer(t) => (Kind::Answer, t.clone(), String::new()),
+        Item::Tool { label, state } => {
+            let state = match state {
+                ToolState::Done => "ok",
+                ToolState::Refused => "refuse",
+                ToolState::Running | ToolState::Interrupted => "interrompu",
+            };
+            (Kind::Tool, label.clone(), state.into())
+        }
+        Item::Error(e) => (Kind::Error, e.clone(), String::new()),
+        Item::Notice(_) => return None,
+    };
+    Some(Message { kind, body, extra })
+}
+
+fn item_from(m: &Message) -> Item {
+    match m.kind {
+        Kind::User => Item::User {
+            text: m.body.clone(),
+            files: m
+                .extra
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+        },
+        Kind::Answer => Item::Answer(m.body.clone()),
+        Kind::Tool => Item::Tool {
+            label: m.body.clone(),
+            state: match m.extra.as_str() {
+                "refuse" => ToolState::Refused,
+                "interrompu" => ToolState::Interrupted,
+                _ => ToolState::Done,
+            },
+        },
+        Kind::Error => Item::Error(m.body.clone()),
+    }
+}
+
+/// La liste des conversations, quand elle est ouverte
+struct History {
+    search: String,
+    rows: Vec<Summary>,
+    selected: usize,
+    scroll: f32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -96,6 +175,12 @@ enum Hit {
     New,
     Close,
     RemoveFile(usize),
+    /// Ouvrir ou fermer la liste des conversations
+    History,
+    Back,
+    /// Reprendre une conversation, la supprimer
+    Open(i64),
+    Delete(i64),
 }
 
 /// Largeur, hauteur du tampon et thème
@@ -118,7 +203,7 @@ struct App {
     regular: Text,
     bold: Text,
     icons: Text,
-    events: channel::Sender<Event>,
+    events: channel::Sender<(u64, Event)>,
     drops: channel::Sender<Vec<PathBuf>>,
     agent: AgentConfig,
     items: Vec<Item>,
@@ -126,7 +211,19 @@ struct App {
     files: Vec<PathBuf>,
     last_question: String,
     job: Option<Job>,
+    /// Numéro de la réponse en cours : les événements d'une réponse
+    /// abandonnée arrivent avec un numéro périmé et sont ignorés
+    generation: u64,
     context: Context,
+    /// Le fil ; absent si la base ne s'ouvre pas (l'Assistant marche quand même)
+    store: Option<Store>,
+    /// Conversation en cours dans le fil, dès la première question
+    conversation: Option<i64>,
+    /// Les plus récentes, proposées quand la conversation est vide
+    recent: Vec<Summary>,
+    history: Option<History>,
+    /// Conversations supprimées pendant cette session, pour Ctrl+Z
+    trash: Vec<Conversation>,
     /// Défilement : distance depuis le bas (0 : on suit la réponse)
     scroll: f32,
     content_h: f32,
@@ -227,12 +324,12 @@ fn main() {
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
         .expect("source Wayland");
-    let (events, rx) = channel::channel::<Event>();
+    let (events, rx) = channel::channel::<(u64, Event)>();
     event_loop
         .handle()
         .insert_source(rx, |event, _, app| {
-            if let ChannelEvent::Msg(e) = event {
-                app.on_event(e);
+            if let ChannelEvent::Msg((generation, e)) = event {
+                app.on_event(generation, e);
             }
         })
         .expect("canal de l'agent");
@@ -252,10 +349,15 @@ fn main() {
         .insert_source(
             Timer::from_duration(Duration::from_millis(300)),
             |_, _, app| {
-                let tool_running = app
-                    .items
-                    .iter()
-                    .any(|i| matches!(i, Item::Tool { ok: None, .. }));
+                let tool_running = app.items.iter().any(|i| {
+                    matches!(
+                        i,
+                        Item::Tool {
+                            state: ToolState::Running,
+                            ..
+                        }
+                    )
+                });
                 if app.job.is_some() && tool_running {
                     app.draw();
                 }
@@ -264,6 +366,9 @@ fn main() {
         )
         .expect("minuterie");
 
+    let store = Store::open()
+        .map_err(|e| eprintln!("odysseus-assistant : fil des conversations : {e}"))
+        .ok();
     let mut app = App {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -289,7 +394,13 @@ fn main() {
         files,
         last_question: String::new(),
         job: None,
+        generation: 0,
         context: Context::default(),
+        store,
+        conversation: None,
+        recent: Vec::new(),
+        history: None,
+        trash: Vec::new(),
         scroll: 0.0,
         content_h: 0.0,
         hits: Vec::new(),
@@ -304,6 +415,7 @@ fn main() {
         configured: false,
         exit: false,
     };
+    app.refresh_recent();
     // Question passée en argument (lanceur) : posée aussitôt
     if !question.is_empty() {
         app.input = question;
@@ -317,9 +429,8 @@ fn main() {
             break;
         }
     }
-    if let Some(job) = app.job.take() {
-        job.stop();
-    }
+    // Fermé pendant une réponse (Super+A, lanceur) : le fil garde ce qui a été dit
+    app.abandon();
     if let Some(p) = pid_file() {
         let _ = std::fs::remove_file(p);
     }
@@ -360,6 +471,33 @@ fn agent_name(a: &AgentConfig) -> String {
     }
 }
 
+/// Nom court d'un agent du fil (claude, ollama, commande)
+fn agent_label(agent: &str) -> &'static str {
+    match agent {
+        "ollama" => "Ollama",
+        "commande" => "Commande",
+        _ => "Claude Code",
+    }
+}
+
+/// « aujourd'hui à 14:32 », « hier à 9:05 », « 16 oct. », « 3 mars 2025 »
+fn when(t: i64) -> String {
+    const MOIS: [&str; 12] = [
+        "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
+        "déc.",
+    ];
+    let Some(d) = DateTime::from_timestamp(t, 0).map(|d| d.with_timezone(&Local)) else {
+        return String::new();
+    };
+    let today = Local::now().date_naive();
+    match (today - d.date_naive()).num_days() {
+        0 => format!("aujourd'hui à {}:{:02}", d.hour(), d.minute()),
+        1 => format!("hier à {}:{:02}", d.hour(), d.minute()),
+        _ if d.year() == today.year() => format!("{} {}", d.day(), MOIS[d.month0() as usize]),
+        _ => format!("{} {} {}", d.day(), MOIS[d.month0() as usize], d.year()),
+    }
+}
+
 impl App {
     fn send(&mut self) {
         if self.job.is_some() {
@@ -390,11 +528,15 @@ impl App {
         self.last_question = question.clone();
         self.input.clear();
         self.scroll = 0.0;
+        // La question est gardée avant la réponse : fermé entre-temps, rien n'est perdu
+        self.persist();
+        self.generation += 1;
         self.job = Some(backend::ask(
             self.agent.clone(),
             question,
             files,
             self.context.clone(),
+            self.generation,
             self.events.clone(),
         ));
         self.draw();
@@ -406,16 +548,214 @@ impl App {
         }
     }
 
+    /// La réponse en cours, s'il y en a une, est abandonnée et le fil garde
+    /// la conversation telle quelle ; ce que la réponse enverra encore ne
+    /// sera pas écouté
+    fn abandon(&mut self) {
+        if let Some(job) = self.job.take() {
+            job.stop();
+            self.settle_tools();
+            self.items.push(Item::Error("Interrompu".into()));
+            self.persist();
+        }
+        self.generation += 1;
+    }
+
+    /// La réponse s'arrête là : les outils encore en cours le disent
+    fn settle_tools(&mut self) {
+        for item in &mut self.items {
+            if let Item::Tool { state, .. } = item
+                && *state == ToolState::Running
+            {
+                *state = ToolState::Interrupted;
+            }
+        }
+    }
+
     fn new_conversation(&mut self) {
-        self.stop();
-        self.job = None;
+        self.abandon();
         self.items.clear();
         self.context = Context::default();
+        self.conversation = None;
+        self.history = None;
+        self.scroll = 0.0;
+        self.refresh_recent();
+        self.draw();
+    }
+
+    // --- Le fil ---------------------------------------------------------------------
+
+    /// La conversation en cours, telle qu'elle est, dans le fil
+    fn persist(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let messages: Vec<Message> = self.items.iter().filter_map(message_from).collect();
+        if messages.is_empty() {
+            return;
+        }
+        let id = match self.conversation {
+            Some(id) => id,
+            None => match store.create(&self.agent.agent) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("odysseus-assistant : fil : {e}");
+                    return;
+                }
+            },
+        };
+        self.conversation = Some(id);
+        let c = Conversation {
+            agent: self.agent.agent.clone(),
+            claude_session: self.context.claude_session.clone(),
+            ollama_history: self.context.ollama_history.clone(),
+            messages,
+        };
+        if let Err(e) = store.save(id, &c) {
+            eprintln!("odysseus-assistant : fil : {e}");
+        }
+    }
+
+    fn refresh_recent(&mut self) {
+        self.recent = self
+            .store
+            .as_ref()
+            .and_then(|s| s.list("").ok())
+            .unwrap_or_default()
+            .into_iter()
+            .take(RECENT)
+            .collect();
+    }
+
+    /// Reprendre une conversation du fil, avec ce qu'il faut au modèle pour
+    /// la continuer si c'est encore le même agent
+    fn open_conversation(&mut self, id: i64) {
+        let Some(c) = self.store.as_ref().and_then(|s| s.load(id).ok().flatten()) else {
+            return;
+        };
+        self.abandon();
+        self.history = None;
+        self.agent = AgentConfig::load();
+        self.conversation = Some(id);
+        self.items = c.messages.iter().map(item_from).collect();
+        if c.agent == self.agent.agent {
+            self.context = Context {
+                claude_session: c.claude_session,
+                ollama_history: c.ollama_history,
+            };
+        } else {
+            self.context = Context::default();
+            self.items.push(Item::Notice(format!(
+                "Conversation menée avec {} : {} la reprend sans en connaître le détail.",
+                agent_label(&c.agent),
+                agent_name(&self.agent)
+            )));
+        }
         self.scroll = 0.0;
         self.draw();
     }
 
-    fn on_event(&mut self, e: Event) {
+    /// Supprimée du fil, mais gardée en mémoire le temps d'un Ctrl+Z
+    fn delete_conversation(&mut self, id: i64) {
+        if self.conversation == Some(id) {
+            // C'est celle qu'on lit : le panneau repart à vide
+            self.abandon();
+            self.items.clear();
+            self.context = Context::default();
+            self.conversation = None;
+            self.scroll = 0.0;
+        }
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let kept = store.load(id).ok().flatten();
+        if let Err(e) = store.delete(id) {
+            eprintln!("odysseus-assistant : fil : {e}");
+            return;
+        }
+        if let Some(c) = kept {
+            self.trash.push(c);
+        }
+        self.refresh_recent();
+        if let Some(h) = self.history.as_mut() {
+            h.rows.retain(|r| r.id != id);
+            h.selected = h.selected.min(h.rows.len().saturating_sub(1));
+        }
+        self.draw();
+    }
+
+    /// Ctrl+Z dans la liste : la dernière conversation supprimée revient
+    fn restore_conversation(&mut self) {
+        let Some(c) = self.trash.pop() else {
+            return;
+        };
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        if let Err(e) = store.create(&c.agent).and_then(|id| store.save(id, &c)) {
+            eprintln!("odysseus-assistant : fil : {e}");
+        }
+        self.refresh_recent();
+        self.refresh_history();
+        self.draw();
+    }
+
+    fn show_history(&mut self) {
+        if self.store.is_none() {
+            return;
+        }
+        self.history = Some(History {
+            search: String::new(),
+            rows: Vec::new(),
+            selected: 0,
+            scroll: 0.0,
+        });
+        self.refresh_history();
+        self.draw();
+    }
+
+    fn hide_history(&mut self) {
+        self.history = None;
+        self.draw();
+    }
+
+    /// La liste suit la recherche
+    fn refresh_history(&mut self) {
+        let Some(h) = self.history.as_mut() else {
+            return;
+        };
+        h.rows = self
+            .store
+            .as_ref()
+            .and_then(|s| s.list(&h.search).ok())
+            .unwrap_or_default();
+        h.selected = 0;
+        h.scroll = 0.0;
+    }
+
+    /// Déplacer la sélection de la liste, en la gardant visible
+    fn select_history(&mut self, delta: i32) {
+        let Some(h) = self.history.as_mut() else {
+            return;
+        };
+        if h.rows.is_empty() {
+            return;
+        }
+        let last = h.rows.len() as i32 - 1;
+        h.selected = (h.selected as i32 + delta).clamp(0, last) as usize;
+        let view = PH - HEADER_H - INPUT_H - 44.0;
+        let top = h.selected as f32 * ROW_H;
+        if top < h.scroll {
+            h.scroll = top;
+        } else if top + ROW_H > h.scroll + view {
+            h.scroll = top + ROW_H - view;
+        }
+    }
+
+    fn on_event(&mut self, generation: u64, e: Event) {
+        if generation != self.generation {
+            return;
+        }
         match e {
             Event::Delta(t) => match self.items.last_mut() {
                 Some(Item::Answer(text)) => text.push_str(&t),
@@ -426,21 +766,33 @@ impl App {
                     text.push_str("\n\n");
                 }
             }
-            Event::Tool(label) => self.items.push(Item::Tool { label, ok: None }),
+            Event::Tool(label) => self.items.push(Item::Tool {
+                label,
+                state: ToolState::Running,
+            }),
             Event::ToolDone(ok) => {
-                if let Some(Item::Tool { ok: state, .. }) = self
-                    .items
-                    .iter_mut()
-                    .rev()
-                    .find(|i| matches!(i, Item::Tool { ok: None, .. }))
-                {
-                    *state = Some(ok);
+                if let Some(Item::Tool { state, .. }) = self.items.iter_mut().rev().find(|i| {
+                    matches!(
+                        i,
+                        Item::Tool {
+                            state: ToolState::Running,
+                            ..
+                        }
+                    )
+                }) {
+                    *state = if ok {
+                        ToolState::Done
+                    } else {
+                        ToolState::Refused
+                    };
                 }
             }
             Event::Session(id) => self.context.claude_session = Some(id),
             Event::History(h) => self.context.ollama_history = h,
+            Event::Notice(t) => self.items.push(Item::Notice(t)),
             Event::Done(result) => {
                 self.job = None;
+                self.settle_tools();
                 if let Err(e) = result {
                     self.items.push(Item::Error(e));
                 }
@@ -449,6 +801,7 @@ impl App {
                     let trimmed = text.trim_end().len();
                     text.truncate(trimmed);
                 }
+                self.persist();
             }
         }
         self.draw();
@@ -478,17 +831,106 @@ impl App {
                 }
                 self.draw();
             }
+            Some(Hit::History) => self.show_history(),
+            Some(Hit::Back) => self.hide_history(),
+            Some(Hit::Open(id)) => self.open_conversation(id),
+            Some(Hit::Delete(id)) => self.delete_conversation(id),
             None => {}
+        }
+    }
+
+    /// Clavier dans la liste des conversations : la saisie cherche, ↑ ↓
+    /// choisissent, Entrée reprend, Suppr supprime, Échap revient
+    fn history_key(&mut self, event: KeyEvent) {
+        let ctrl = self.modifiers.ctrl;
+        // Une page : ce que la liste montre d'un coup
+        let page = ((PH - HEADER_H - INPUT_H - 44.0) / ROW_H) as i32;
+        match event.keysym {
+            Keysym::Escape => self.hide_history(),
+            Keysym::h if ctrl => self.hide_history(),
+            Keysym::l if ctrl => self.new_conversation(),
+            Keysym::z if ctrl => self.restore_conversation(),
+            Keysym::Return | Keysym::KP_Enter => {
+                if let Some(id) = self
+                    .history
+                    .as_ref()
+                    .and_then(|h| h.rows.get(h.selected))
+                    .map(|r| r.id)
+                {
+                    self.open_conversation(id);
+                }
+            }
+            Keysym::Delete => {
+                if let Some(id) = self
+                    .history
+                    .as_ref()
+                    .and_then(|h| h.rows.get(h.selected))
+                    .map(|r| r.id)
+                {
+                    self.delete_conversation(id);
+                }
+            }
+            Keysym::Up => {
+                self.select_history(-1);
+                self.draw();
+            }
+            Keysym::Down => {
+                self.select_history(1);
+                self.draw();
+            }
+            Keysym::Prior => {
+                self.select_history(-page);
+                self.draw();
+            }
+            Keysym::Next => {
+                self.select_history(page);
+                self.draw();
+            }
+            Keysym::BackSpace => {
+                if let Some(h) = self.history.as_mut() {
+                    if ctrl {
+                        let trimmed = h.search.trim_end().len();
+                        h.search.truncate(trimmed);
+                        let cut = h.search.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                        h.search.truncate(cut);
+                    } else {
+                        h.search.pop();
+                    }
+                }
+                self.refresh_history();
+                self.draw();
+            }
+            _ => {
+                if ctrl || self.modifiers.alt || self.modifiers.logo {
+                    return;
+                }
+                let Some(t) = event
+                    .utf8
+                    .filter(|t| !t.is_empty() && t.chars().all(|c| !c.is_control()))
+                else {
+                    return;
+                };
+                if let Some(h) = self.history.as_mut() {
+                    h.search.push_str(&t);
+                }
+                self.refresh_history();
+                self.draw();
+            }
         }
     }
 
     fn key(&mut self, event: KeyEvent) {
         let ctrl = self.modifiers.ctrl;
+        if self.history.is_some() {
+            self.history_key(event);
+            return;
+        }
         match event.keysym {
             Keysym::Escape if self.job.is_some() => self.stop(),
             Keysym::Escape => self.exit = true,
             Keysym::Return | Keysym::KP_Enter => self.send(),
             Keysym::l if ctrl => self.new_conversation(),
+            Keysym::h if ctrl => self.show_history(),
             Keysym::v if ctrl => {
                 // Texte du presse-papiers, sur une ligne
                 if let Ok(out) = std::process::Command::new("wl-paste")
@@ -596,7 +1038,9 @@ impl App {
         let top = y0 + HEADER_H;
         let bottom = y0 + PH - INPUT_H - if self.files.is_empty() { 0.0 } else { 30.0 };
         let (cx, cw) = (x0 + PAD, PW - 2.0 * PAD);
-        if self.items.is_empty() {
+        if self.history.is_some() {
+            self.history_view(&mut ui, cx, top, cw, bottom);
+        } else if self.items.is_empty() {
             self.empty_state(&mut ui, cx, top, cw, bottom);
         } else {
             let lines = self.layout(&ui, cw);
@@ -642,13 +1086,102 @@ impl App {
         let nw = ui.measure(&name, 11.5) + 18.0;
         ui.rounded(nx, y0 + 17.0, nw, 22.0, 11.0, p.ink(0.08));
         ui.text_centered(&name, nx + nw / 2.0, y0 + 17.0, 22.0, 11.5, p.text_soft());
-        // À droite : nouvelle conversation, fermer
-        let bx = x0 + PW - 44.0;
+        // À droite : fermer, nouvelle conversation, les conversations précédentes
+        let mut bx = x0 + PW - 44.0;
         ui.round_button(bx, y0 + 28.0, icon::CLOSE, Hit::Close, false);
         if !self.items.is_empty() {
-            ui.round_button(bx - 36.0, y0 + 28.0, icon::ROTATE_CCW, Hit::New, false);
+            bx -= 36.0;
+            ui.round_button(bx, y0 + 28.0, icon::ROTATE_CCW, Hit::New, false);
+        }
+        if self.store.is_some() {
+            bx -= 36.0;
+            if self.history.is_some() {
+                ui.round_button(bx, y0 + 28.0, icon::CLOCK, Hit::Back, true);
+            } else {
+                ui.round_button(bx, y0 + 28.0, icon::CLOCK, Hit::History, false);
+            }
         }
         ui.rect(x0 + 1.0, y0 + HEADER_H - 1.0, PW - 2.0, 1.0, p.ink(0.07));
+    }
+
+    /// La liste des conversations, à la place de la conversation
+    fn history_view(&self, ui: &mut Ui, x: f32, top: f32, w: f32, bottom: f32) {
+        let p = theme::palette();
+        let Some(h) = self.history.as_ref() else {
+            return;
+        };
+        ui.bold(x, top + 10.0, 28.0, 15.0, "Conversations", p.text);
+        let count = match h.rows.len() {
+            0 if h.search.is_empty() => "aucune".to_string(),
+            0 => "aucune ne correspond".to_string(),
+            1 => "une".to_string(),
+            n => n.to_string(),
+        };
+        let cw = ui.measure(&count, 12.0);
+        ui.text(x + w - cw, top + 10.0, 28.0, 12.0, &count, p.text_dim);
+        let rows_top = top + 44.0;
+        if h.rows.is_empty() {
+            let msg = if h.search.is_empty() {
+                "Vos conversations se retrouveront ici.".to_string()
+            } else {
+                format!("Rien ne contient « {} ».", h.search.trim())
+            };
+            ui.text_centered(&msg, x + w / 2.0, rows_top + 60.0, 20.0, 13.0, p.text_dim);
+            return;
+        }
+        let mut y = rows_top - h.scroll;
+        for (i, row) in h.rows.iter().enumerate() {
+            // Lignes entières seulement, comme la conversation
+            if y >= rows_top - 2.0 && y + ROW_H - 4.0 <= bottom + 2.0 {
+                let hit = Hit::Open(row.id);
+                let hovered =
+                    ui.hover == Some(hit.clone()) || ui.hover == Some(Hit::Delete(row.id));
+                let selected = i == h.selected;
+                if selected {
+                    ui.rounded(x, y, w, ROW_H - 4.0, 12.0, p.accent.with_alpha(0.14));
+                } else if hovered {
+                    ui.rounded(x, y, w, ROW_H - 4.0, 12.0, p.tile_hover());
+                }
+                ui.icon(
+                    icon::CLOCK,
+                    x + 20.0,
+                    y + ROW_H / 2.0 - 2.0,
+                    15.0,
+                    p.text_dim,
+                );
+                let title = if row.title.is_empty() {
+                    "Sans titre".to_string()
+                } else {
+                    row.title.clone()
+                };
+                let title = ui.truncate(&title, 14.0, w - 90.0);
+                ui.text(x + 40.0, y + 6.0, LINE, 14.0, &title, p.text);
+                let detail = format!(
+                    "{} · {} · {}",
+                    when(row.modified),
+                    agent_label(&row.agent),
+                    match row.questions {
+                        1 => "une question".to_string(),
+                        n => format!("{n} questions"),
+                    }
+                );
+                ui.text(x + 40.0, y + 27.0, 18.0, 11.5, &detail, p.text_dim);
+                ui.hit((x, y, w - 44.0, ROW_H - 4.0), hit);
+                // Supprimer : visible sur la ligne survolée ou choisie
+                if hovered || selected {
+                    ui.round_button(
+                        x + w - 24.0,
+                        y + ROW_H / 2.0 - 2.0,
+                        icon::TRASH,
+                        Hit::Delete(row.id),
+                        false,
+                    );
+                } else {
+                    ui.hit((x + w - 44.0, y, 44.0, ROW_H - 4.0), Hit::Delete(row.id));
+                }
+            }
+            y += ROW_H;
+        }
     }
 
     fn empty_state(&self, ui: &mut Ui, x: f32, top: f32, w: f32, bottom: f32) {
@@ -692,6 +1225,47 @@ impl App {
             ui.text(sx + 14.0, sy, 40.0, 13.0, &t, p.text_soft());
             ui.hit((sx, sy, sw, 40.0), hit);
         }
+        // Les dernières conversations, à reprendre
+        if self.recent.is_empty() {
+            return;
+        }
+        let mut y = cy + 74.0 + 2.0 * 50.0 + 12.0;
+        ui.bold(x, y, 24.0, 12.0, "Reprendre", p.text_dim);
+        let total = self.store.as_ref().map_or(0, Store::count);
+        if total > self.recent.len() {
+            let more = format!("toutes ({total})");
+            let mw = ui.measure(&more, 12.0);
+            let hovered = ui.hover == Some(Hit::History);
+            ui.text(
+                x + w - mw,
+                y,
+                24.0,
+                12.0,
+                &more,
+                if hovered { p.text } else { p.text_dim },
+            );
+            ui.hit((x + w - mw - 8.0, y, mw + 8.0, 24.0), Hit::History);
+        }
+        y += 28.0;
+        for row in &self.recent {
+            let hit = Hit::Open(row.id);
+            if ui.hover == Some(hit.clone()) {
+                ui.rounded(x, y, w, 32.0, 10.0, p.tile_hover());
+            }
+            ui.icon(icon::CLOCK, x + 14.0, y + 16.0, 12.0, p.text_dim);
+            let date = when(row.modified);
+            let dw = ui.measure(&date, 11.5);
+            ui.text(x + w - dw - 12.0, y, 32.0, 11.5, &date, p.text_dim);
+            let title = if row.title.is_empty() {
+                "Sans titre".to_string()
+            } else {
+                row.title.clone()
+            };
+            let title = ui.truncate(&title, 13.0, w - dw - 50.0);
+            ui.text(x + 30.0, y, 32.0, 13.0, &title, p.text_soft());
+            ui.hit((x, y, w, 32.0), hit);
+            y += 34.0;
+        }
     }
 
     fn input_area(&self, ui: &mut Ui, x0: f32, y0: f32) {
@@ -721,6 +1295,26 @@ impl App {
         ui.rounded(fx, y, fw, fh, 14.0, p.ink(0.07));
         ui.stroke(fx, y, fw, fh, 14.0, p.accent.with_alpha(0.45));
         let tw = fw - 70.0;
+        // Liste des conversations : la saisie cherche
+        if let Some(h) = self.history.as_ref() {
+            ui.icon(icon::SEARCH, fx + 22.0, y + fh / 2.0, 14.0, p.text_dim);
+            if h.search.is_empty() {
+                let hint = "Rechercher dans les conversations…";
+                ui.text(fx + 40.0, y, fh, 14.0, hint, p.text_dim);
+            } else {
+                let mut shown = h.search.clone();
+                while ui.measure(&shown, 14.0) > tw - 24.0 && !shown.is_empty() {
+                    shown.remove(0);
+                }
+                ui.text(fx + 40.0, y, fh, 14.0, &shown, p.text);
+                let cx = fx + 40.0 + ui.measure(&shown, 14.0) + 1.0;
+                ui.rect(cx, y + 13.0, 1.5, 20.0, p.accent);
+            }
+            ui.round_button(fx + fw - 26.0, y + fh / 2.0, icon::CLOSE, Hit::Back, false);
+            let hint = "Entrée : reprendre · ↑ ↓ : choisir · Suppr : supprimer, Ctrl+Z : rétablir · Échap : retour";
+            ui.text_centered(hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
+            return;
+        }
         if self.input.is_empty() {
             let hint = if self.job.is_some() {
                 "Réponse en cours… Échap pour l'arrêter"
@@ -790,14 +1384,23 @@ impl App {
                         }
                     }
                 }
-                Item::Tool { label, ok } => lines.push(Line {
-                    kind: LineKind::Tool(label.clone(), *ok),
+                Item::Tool { label, state } => lines.push(Line {
+                    kind: LineKind::Tool(label.clone(), *state),
                     h: 28.0,
                 }),
                 Item::Error(e) => {
                     for l in ui.wrap(e, 13.0, w - 24.0) {
                         lines.push(Line {
                             kind: LineKind::Error(l),
+                            h: LINE,
+                        });
+                    }
+                }
+                Item::Notice(t) => {
+                    lines.push(Line::gap(6.0));
+                    for l in ui.wrap(t, 12.5, w - 24.0) {
+                        lines.push(Line {
+                            kind: LineKind::Notice(l),
                             h: LINE,
                         });
                     }
@@ -819,9 +1422,9 @@ impl App {
                 }
             }
             LineKind::Text(l) => ui.text(x, y, LINE, 14.0, l, p.text),
-            LineKind::Tool(label, ok) => {
-                let (glyph, color, suffix) = match ok {
-                    None => {
+            LineKind::Tool(label, state) => {
+                let (glyph, color, suffix) = match state {
+                    ToolState::Running => {
                         // Trois points qui s'allument tour à tour
                         let t = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -829,8 +1432,11 @@ impl App {
                             .unwrap_or(0);
                         (icon::LOADER, p.accent, ".".repeat(t as usize))
                     }
-                    Some(true) => (icon::CHECK, p.success, String::new()),
-                    Some(false) => (icon::CLOSE, p.danger, " (refusé)".to_string()),
+                    ToolState::Done => (icon::CHECK, p.success, String::new()),
+                    ToolState::Refused => (icon::CLOSE, p.danger, " (refusé)".to_string()),
+                    ToolState::Interrupted => {
+                        (icon::CLOSE, p.text_dim, " (interrompu)".to_string())
+                    }
                 };
                 ui.rounded(
                     x,
@@ -854,6 +1460,10 @@ impl App {
                 ui.icon(icon::INFO, x + 8.0, y + LINE / 2.0, 12.0, p.danger);
                 ui.text(x + 22.0, y, LINE, 13.0, l, p.danger);
             }
+            LineKind::Notice(l) => {
+                ui.icon(icon::INFO, x + 8.0, y + LINE / 2.0, 12.0, p.text_dim);
+                ui.text(x + 22.0, y, LINE, 12.5, l, p.text_dim);
+            }
         }
     }
 }
@@ -862,8 +1472,9 @@ enum LineKind {
     Gap,
     Bubble(Vec<String>, f32),
     Text(String),
-    Tool(String, Option<bool>),
+    Tool(String, ToolState),
     Error(String),
+    Notice(String),
 }
 
 struct Line {
@@ -1115,8 +1726,15 @@ impl PointerHandler for App {
                 }
                 PointerEventKind::Leave { .. } if self.hover.take().is_some() => self.draw(),
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
-                    let max = (self.content_h - (PH - HEADER_H - INPUT_H)).max(0.0);
-                    self.scroll = (self.scroll - vertical.absolute as f32 * 1.5).clamp(0.0, max);
+                    let step = vertical.absolute as f32 * 1.5;
+                    if let Some(h) = self.history.as_mut() {
+                        let view = PH - HEADER_H - INPUT_H - 44.0;
+                        let max = (h.rows.len() as f32 * ROW_H - view).max(0.0);
+                        h.scroll = (h.scroll + step).clamp(0.0, max);
+                    } else {
+                        let max = (self.content_h - (PH - HEADER_H - INPUT_H)).max(0.0);
+                        self.scroll = (self.scroll - step).clamp(0.0, max);
+                    }
                     self.draw();
                 }
                 _ => {}

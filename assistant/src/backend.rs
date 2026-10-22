@@ -49,7 +49,24 @@ pub enum Event {
     Session(String),
     /// Historique Ollama, pour la suite
     History(Vec<Value>),
+    /// À dire à l'utilisateur, sans être une erreur
+    Notice(String),
     Done(Result<(), String>),
+}
+
+/// Canal vers le panneau, marqué du numéro de la réponse : ce qu'une réponse
+/// abandonnée (nouvelle conversation, reprise d'une autre) envoie encore
+/// après coup est ignoré
+#[derive(Clone)]
+pub struct Tx {
+    generation: u64,
+    inner: Sender<(u64, Event)>,
+}
+
+impl Tx {
+    fn send(&self, e: Event) {
+        let _ = self.inner.send((self.generation, e));
+    }
 }
 
 /// Réponse en cours : de quoi l'interrompre
@@ -156,10 +173,15 @@ pub fn ask(
     question: String,
     attachments: Vec<PathBuf>,
     context: Context,
-    tx: Sender<Event>,
+    generation: u64,
+    tx: Sender<(u64, Event)>,
 ) -> Job {
     let job = Job::default();
     let j = job.clone();
+    let tx = Tx {
+        generation,
+        inner: tx,
+    };
     std::thread::spawn(move || {
         let result = match agent.agent.as_str() {
             "ollama" => ollama(
@@ -171,33 +193,48 @@ pub fn ask(
                 &j,
             ),
             "commande" => custom(&agent, &question, &attachments, &tx, &j),
-            _ => claude(
-                &agent,
-                &question,
-                &attachments,
-                context.claude_session,
-                &tx,
-                &j,
-            ),
+            _ => {
+                let session = context.claude_session;
+                match claude(&agent, &question, &attachments, session.clone(), &tx, &j) {
+                    // Conversation reprise mais inconnue de Claude Code (effacée
+                    // de son côté) : on repart sans elle plutôt que d'échouer
+                    Err(e) if session.is_some() && !j.cancelled() && unknown_session(&e) => {
+                        tx.send(Event::Notice(
+                            "Claude Code ne retrouve plus cette conversation : il la reprend \
+                             sans en connaître le détail."
+                                .into(),
+                        ));
+                        claude(&agent, &question, &attachments, None, &tx, &j)
+                    }
+                    r => r,
+                }
+            }
         };
         let result = if j.cancelled() {
             Err("Interrompu".into())
         } else {
             result
         };
-        let _ = tx.send(Event::Done(result));
+        tx.send(Event::Done(result));
     });
     job
 }
 
 // --- Claude Code ------------------------------------------------------------------
 
+/// « No conversation found with session ID: … » : la session à reprendre
+/// n'existe plus chez Claude Code
+fn unknown_session(error: &str) -> bool {
+    let e = error.to_lowercase();
+    e.contains("session") && (e.contains("not found") || e.contains("no conversation"))
+}
+
 fn claude(
     agent: &AgentConfig,
     question: &str,
     attachments: &[PathBuf],
     session: Option<String>,
-    tx: &Sender<Event>,
+    tx: &Tx,
     job: &Job,
 ) -> Result<(), String> {
     let bin = agent.claude();
@@ -252,7 +289,7 @@ fn claude(
         match e["type"].as_str() {
             Some("system") => {
                 if let Some(id) = e["session_id"].as_str() {
-                    let _ = tx.send(Event::Session(id.to_string()));
+                    tx.send(Event::Session(id.to_string()));
                 }
             }
             Some("stream_event") => {
@@ -265,12 +302,12 @@ fn claude(
                                 let name = block["name"].as_str().unwrap_or("");
                                 // La recherche d'outils de Claude Code ne regarde pas l'utilisateur
                                 if name != "ToolSearch" {
-                                    let _ = tx.send(Event::Tool(tool_label(name)));
+                                    tx.send(Event::Tool(tool_label(name)));
                                     after_tool = true;
                                 }
                             }
                             Some("text") if after_tool => {
-                                let _ = tx.send(Event::Break);
+                                tx.send(Event::Break);
                                 after_tool = false;
                             }
                             _ => {}
@@ -278,7 +315,7 @@ fn claude(
                     }
                     Some("content_block_delta") => {
                         if let Some(t) = ev["delta"]["text"].as_str() {
-                            let _ = tx.send(Event::Delta(t.to_string()));
+                            tx.send(Event::Delta(t.to_string()));
                         }
                     }
                     _ => {}
@@ -293,14 +330,14 @@ fn claude(
                             .is_some_and(|a| a.iter().any(|x| x["type"] == "tool_reference"));
                         if !is_search {
                             let ok = !c["is_error"].as_bool().unwrap_or(false);
-                            let _ = tx.send(Event::ToolDone(ok));
+                            tx.send(Event::ToolDone(ok));
                         }
                     }
                 }
             }
             Some("result") => {
                 if let Some(id) = e["session_id"].as_str() {
-                    let _ = tx.send(Event::Session(id.to_string()));
+                    tx.send(Event::Session(id.to_string()));
                 }
                 if e["is_error"].as_bool() == Some(true) {
                     error = Some(
@@ -348,7 +385,7 @@ fn ollama(
     question: &str,
     attachments: &[PathBuf],
     mut history: Vec<Value>,
-    tx: &Sender<Event>,
+    tx: &Tx,
     job: &Job,
 ) -> Result<(), String> {
     let mut mcp = Mcp::start()?;
@@ -409,7 +446,7 @@ fn ollama(
                 && !t.is_empty()
             {
                 content.push_str(t);
-                let _ = tx.send(Event::Delta(t.to_string()));
+                tx.send(Event::Delta(t.to_string()));
             }
             if let Some(c) = v["message"]["tool_calls"].as_array() {
                 calls.extend(c.iter().cloned());
@@ -432,13 +469,13 @@ fn ollama(
         for call in calls {
             let name = call["function"]["name"].as_str().unwrap_or("").to_string();
             let args = call["function"]["arguments"].clone();
-            let _ = tx.send(Event::Tool(tool_label(&name)));
+            tx.send(Event::Tool(tool_label(&name)));
             let result = mcp.call(&name, if args.is_object() { args } else { json!({}) });
             let (text, ok, images) = match result {
                 Ok(r) => (r.text, !r.is_error, r.images),
                 Err(e) => (e, false, Vec::new()),
             };
-            let _ = tx.send(Event::ToolDone(ok));
+            tx.send(Event::ToolDone(ok));
             let mut msg = json!({"role": "tool", "tool_name": name, "content": text});
             // Les modèles qui voient (Gemma 3…) reçoivent l'image ; les autres l'ignorent
             if !images.is_empty() {
@@ -446,9 +483,9 @@ fn ollama(
             }
             history.push(msg);
         }
-        let _ = tx.send(Event::Break);
+        tx.send(Event::Break);
     }
-    let _ = tx.send(Event::History(history));
+    tx.send(Event::History(history));
     Ok(())
 }
 
@@ -458,7 +495,7 @@ fn custom(
     agent: &AgentConfig,
     question: &str,
     attachments: &[PathBuf],
-    tx: &Sender<Event>,
+    tx: &Tx,
     job: &Job,
 ) -> Result<(), String> {
     if agent.custom_command.trim().is_empty() {
@@ -478,7 +515,7 @@ fn custom(
     *job.pid.lock().unwrap() = Some(child.id());
     let stdout = child.stdout.take().ok_or("sortie absente")?;
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        let _ = tx.send(Event::Delta(format!("{line}\n")));
+        tx.send(Event::Delta(format!("{line}\n")));
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() || job.cancelled() {
