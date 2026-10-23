@@ -1,7 +1,8 @@
 //! La mémoire pour les agents (catégorie « Mémoire ») : les faits que
 //! l'utilisateur a accepté de retenir (common::memory) et le fil des
 //! conversations de l'Assistant (assistant::store). Retenir ou oublier un
-//! fait passe par une notification : l'agent propose, l'utilisateur décide.
+//! fait, ou le mettre à jour, passe par une notification : l'agent propose,
+//! l'utilisateur décide.
 
 use std::time::Duration;
 
@@ -31,12 +32,26 @@ fn date(t: i64) -> String {
 }
 
 fn meta(f: &Fact) -> String {
+    let mut parts = Vec::new();
     match (f.date, &f.origin) {
-        (None, None) => " (écrit à la main)".into(),
-        (Some(t), None) => format!(" (retenu le {})", date(t)),
-        (Some(t), Some(o)) => format!(" (retenu le {}, {o})", date(t)),
-        (None, Some(o)) => format!(" ({o})"),
+        (None, None) => parts.push("écrit à la main".to_string()),
+        (Some(t), None) => parts.push(format!("retenu le {}", date(t))),
+        (Some(t), Some(o)) => parts.push(format!("retenu le {}, {o}", date(t))),
+        (None, Some(o)) => parts.push(o.clone()),
     }
+    if let Some(t) = f.updated {
+        parts.push(format!("mis à jour le {}", date(t)));
+    }
+    if f.stale(now()) {
+        parts.push("six mois sans nouvelles : demandez si c'est toujours vrai".to_string());
+    }
+    format!(" ({})", parts.join(" ; "))
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 pub fn facts() -> Result<String, String> {
@@ -58,7 +73,10 @@ pub fn facts() -> Result<String, String> {
     for f in &facts {
         out.push_str(&format!("- {}{}\n", f.text, meta(f)));
     }
-    out.push_str("\nIl modifie ce fichier à la main ou dans Réglages > Agent > Mémoire.");
+    out.push_str(
+        "\nIl modifie ce fichier à la main ou dans Réglages > Agent > Mémoire. Si ce qu'il dit \
+         contredit ou précise un fait, proposez la mise à jour (outil mettre_a_jour) : il décide.",
+    );
     // Relus par l'agent : leur relecture par l'utilisateur attendra
     let texts: Vec<&str> = facts.iter().map(|f| f.text.as_str()).collect();
     let _ = m.touch(&texts);
@@ -137,6 +155,34 @@ fn designated(m: &Memory, text: &str) -> Result<String, String> {
                 .join(", ")
         )),
     }
+}
+
+/// Propose de remplacer un fait par un autre ; fait seulement si l'utilisateur l'accepte
+pub fn update(fact: &str, new: &str, why: &str) -> Result<String, String> {
+    let m = open()?;
+    let found = designated(&m, fact)?;
+    let t = memory::check(new)?;
+    if common::text::fold(&t) == common::text::fold(&found) {
+        return Err("Le nouveau texte dit la même chose que l'ancien.".into());
+    }
+    let mut body = format!("« {found} »\n→ « {t} »");
+    if !why.trim().is_empty() {
+        body.push_str(&format!("\n\n{}", why.trim()));
+    }
+    let key = notify_choice(
+        "L'Assistant veut mettre à jour",
+        &body,
+        &[("maj", "Mettre à jour"), ("garder", "Garder tel quel")],
+        ASK_TIMEOUT,
+    )?;
+    if key.as_deref() != Some("maj") {
+        return Err(
+            "Refusé par l'utilisateur (ou pas de réponse) : le fait reste tel quel, n'insistez pas."
+                .into(),
+        );
+    }
+    let kept = m.update(&found, &t, origin().as_deref())?;
+    Ok(format!("Mis à jour : « {found} » → « {kept} »."))
 }
 
 /// Propose d'oublier un fait ; retiré seulement si l'utilisateur l'accepte

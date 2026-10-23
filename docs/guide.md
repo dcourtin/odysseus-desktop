@@ -298,6 +298,10 @@ conversation, quel que soit l'agent.
 - **Il propose, vous décidez** : quand vous lui confiez quelque chose de durable, il
   demande à le retenir dans une notification Garder / Refuser. Rien n'est écrit
   sans votre accord, et oublier passe par la même notification.
+- **Il demande avant de corriger** : si ce que vous dites contredit ou précise un fait
+  retenu (« j'ai changé de NAS »), il propose la mise à jour, ancien texte et nouveau
+  côte à côte, dans une notification Mettre à jour / Garder tel quel. Jamais en
+  silence.
 - **Jamais un secret** : un mot de passe, un jeton, une clé sont refusés d'office.
   Ce qui est à l'écran ou dans un fichier n'est pas un fait : les outils le
   redonnent sur le moment.

@@ -142,7 +142,7 @@ const PERMS: [(&str, &str); 10] = [
     ),
     (
         "Mémoire",
-        "Les faits que vous avez accepté de retenir (préférences, machine), lus à chaque conversation, et vos conversations précédentes. Retenir ou oublier passe toujours par une notification.",
+        "Les faits que vous avez accepté de retenir (préférences, machine), lus à chaque conversation, et vos conversations précédentes. Retenir, mettre à jour ou oublier passe toujours par une notification.",
     ),
     (
         "Voir le bureau",
@@ -2437,6 +2437,9 @@ impl App {
                 (Some(t), Some(o)) => format!("retenu le {} · {o}", fact_date(t)),
                 (None, Some(o)) => o.clone(),
             };
+            if let Some(t) = f.updated {
+                origin.push_str(&format!(" · mis à jour le {}", fact_date(t)));
+            }
             if let Some(t) = f.kept {
                 origin.push_str(&format!(" · gardé le {}", fact_date(t)));
             }

@@ -17,7 +17,9 @@
 //! goûts) : rien n'est oublié tout seul, mais un fait qui a passé six mois
 //! sans être confirmé est proposé à la relecture (`review`), dans Réglages
 //! et au plus une notification par mois (`remind`). « Garder » relance
-//! l'horloge (`keep`), comme un usage par l'agent (`touch`).
+//! l'horloge (`keep`), comme un usage par l'agent (`touch`). Et quand ce que
+//! dit l'utilisateur contredit ou précise un fait, l'agent propose la mise à
+//! jour (`update`) : lui aussi passe par une notification, jamais en silence.
 
 use std::path::{Path, PathBuf};
 
@@ -58,12 +60,14 @@ pub struct Fact {
     pub kept: Option<i64>,
     /// Première rencontre d'un fait écrit à la main : son horloge de relecture
     pub seen: Option<i64>,
+    /// Dernière mise à jour de son texte, avec l'accord de l'utilisateur
+    pub updated: Option<i64>,
 }
 
 impl Fact {
     /// Depuis quand il n'a pas été confirmé : la plus récente des dates connues
     pub fn fresh_since(&self) -> Option<i64> {
-        [self.date, self.used, self.kept, self.seen]
+        [self.date, self.used, self.kept, self.seen, self.updated]
             .into_iter()
             .flatten()
             .max()
@@ -252,6 +256,7 @@ impl Memory {
                     used: meta.and_then(|m| m["utilise"].as_i64()),
                     kept: meta.and_then(|m| m["garde"].as_i64()),
                     seen: meta.and_then(|m| m["vu"].as_i64()),
+                    updated: meta.and_then(|m| m["maj"].as_i64()),
                 }
             })
             .collect()
@@ -319,6 +324,50 @@ impl Memory {
             let _ = self.write_state(&state);
         }
         Ok(true)
+    }
+
+    /// Remplace le texte d'un fait par un autre (l'utilisateur a accepté) ;
+    /// sa date d'origine reste, la mise à jour est datée. Renvoie le nouveau texte.
+    pub fn update(&self, old: &str, new: &str, origin: Option<&str>) -> Result<String, String> {
+        let found = self
+            .find(old)
+            .ok_or_else(|| format!("Rien de tel dans la mémoire : « {} »", normalize(old)))?;
+        let t = check(new)?;
+        if fold(&t) == fold(&found) {
+            return Err("Le nouveau texte dit la même chose que l'ancien".into());
+        }
+        if let Some(same) = self.find(&t) {
+            return Err(format!(
+                "Déjà retenu : « {same} » (proposez plutôt d'oublier l'ancien)"
+            ));
+        }
+        let content = std::fs::read_to_string(&self.file).map_err(|e| e.to_string())?;
+        let lines: Vec<String> = content
+            .lines()
+            .map(|l| {
+                if fact_line(l) == Some(found.as_str()) {
+                    format!("- {t}")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        let tmp = self.file.with_extension("tmp");
+        std::fs::write(&tmp, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &self.file).map_err(|e| e.to_string())?;
+        let mut state = self.read_state();
+        let old_meta = state.remove(&found).unwrap_or_else(|| json!({}));
+        let mut meta = json!({"date": old_meta["date"].as_i64().unwrap_or_else(now), "maj": now()});
+        let origin = origin
+            .map(normalize)
+            .filter(|o| !o.is_empty())
+            .or_else(|| old_meta["origine"].as_str().map(String::from));
+        if let Some(o) = origin {
+            meta["origine"] = json!(o);
+        }
+        state.insert(t.clone(), meta);
+        let _ = self.write_state(&state);
+        Ok(t)
     }
 
     /// Pose une date dans l'état de chaque fait désigné (texte exact)
@@ -397,9 +446,17 @@ impl Memory {
         let mut out = String::from(
             "Ce que l'utilisateur a accepté que tu retiennes (sa mémoire, Réglages > Agent) :\n",
         );
+        let t = now();
         let mut cut = 0;
         for f in &facts {
-            let line = format!("- {}\n", f.text);
+            let line = if f.stale(t) {
+                format!(
+                    "- {} (six mois sans nouvelles : demande si c'est toujours vrai quand le sujet revient)\n",
+                    f.text
+                )
+            } else {
+                format!("- {}\n", f.text)
+            };
             if out.len() + line.len() > MAX_PROMPT_BYTES {
                 cut += 1;
                 continue;
@@ -613,9 +670,70 @@ mod tests {
         assert_eq!(due[0].text, "Travaille sur odysseus");
         let facts = m.facts();
         assert!(facts[0].kept.is_some() && facts[1].used.is_some());
+        // Un fait à relire est signalé au modèle
+        assert!(
+            m.prompt()
+                .unwrap()
+                .contains("Travaille sur odysseus (six mois sans nouvelles")
+        );
         // Oublié : son état part avec lui
         assert!(m.remove("Travaille sur odysseus").unwrap());
         assert!(m.review().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn update_replaces_the_line_and_dates_it() {
+        let (dir, m) = temp("maj");
+        m.add("Le NAS s'appelle Archives", Some("conversation « NAS »"))
+            .unwrap();
+        m.add("Préfère les réponses courtes", None).unwrap();
+        assert!(m.update("inconnu", "Autre chose", None).is_err());
+        assert!(
+            m.update(
+                "le nas s'appelle archives",
+                "LE NAS s'appelle ARCHIVES",
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            m.update(
+                "le nas s'appelle archives",
+                "Préfère les réponses courtes",
+                None
+            )
+            .is_err()
+        );
+        let new = m
+            .update(
+                "le nas s'appelle archives",
+                "  Le NAS « Archives » a été remplacé par un Synology DS224+ ",
+                Some("conversation « Nouveau NAS »"),
+            )
+            .unwrap();
+        assert_eq!(
+            new,
+            "Le NAS « Archives » a été remplacé par un Synology DS224+"
+        );
+        let facts = m.facts();
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].text, new);
+        assert!(facts[0].date.is_some() && facts[0].updated.is_some());
+        assert_eq!(
+            facts[0].origin.as_deref(),
+            Some("conversation « Nouveau NAS »")
+        );
+        assert!(m.find("Le NAS s'appelle Archives").is_none());
+        // Sans origine donnée, l'ancienne reste
+        let again = m
+            .update(&new, "Le NAS est un Synology DS224+", None)
+            .unwrap();
+        assert_eq!(
+            m.facts()[0].origin.as_deref(),
+            Some("conversation « Nouveau NAS »")
+        );
+        assert_eq!(m.facts()[0].text, again);
         let _ = std::fs::remove_dir_all(dir);
     }
 

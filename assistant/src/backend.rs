@@ -47,8 +47,11 @@ fn system_prompt(agent: &AgentConfig) -> String {
             " Mémoire : quand l'utilisateur te confie quelque chose de durable sur lui ou sa machine (une \
              préférence, une habitude, le nom d'un disque, un projet), propose de le retenir avec l'outil \
              retenir, en une phrase ; il décide dans une notification. Jamais un secret, jamais ce qui est à \
-             l'écran ou dans un fichier. Quand il renvoie à une fois précédente, l'outil conversations \
-             retrouve ses conversations passées.",
+             l'écran ou dans un fichier. Quand ce qu'il dit contredit ou précise un fait retenu (il a changé \
+             de NAS, de projet, d'habitude), propose la mise à jour avec l'outil mettre_a_jour, jamais en \
+             silence ; un fait marqué « six mois sans nouvelles », demande-lui s'il est toujours vrai quand \
+             le sujet revient. Quand il renvoie à une fois précédente, l'outil conversations retrouve ses \
+             conversations passées.",
         );
         if let Some(facts) = common::memory::prompt() {
             out.push_str("\n\n");
@@ -149,6 +152,7 @@ pub fn tool_label(name: &str) -> String {
         "lancer_automatisme" => "Lancement d'un automatisme",
         "memoire" => "Mémoire",
         "retenir" => "Souvenir soumis à votre accord",
+        "mettre_a_jour" => "Mise à jour soumise à votre accord",
         "oublier" => "Oubli soumis à votre accord",
         "conversations" => "Conversations précédentes",
         "Read" => "Lecture d'un fichier",
@@ -599,6 +603,7 @@ mod tests {
         let with = system_prompt(&agent);
         assert!(with.contains("noyau"));
         assert!(with.contains("outil retenir"));
+        assert!(with.contains("mettre_a_jour"));
         assert!(!with.contains("Linux From Scratch construit à la main"));
         agent.perms.memory = false;
         let without = system_prompt(&agent);

@@ -516,7 +516,9 @@ impl App {
         let mut hits = Vec::new();
         let region = Region::new(&self.compositor).ok();
         for n in self.store.banners.iter_mut().take(model::MAX_BANNERS) {
-            let card_h = card::height(&self.fonts, n, 3);
+            // Une notification qui attend une décision (boutons) se lit en entier
+            let lines = if n.buttons.is_empty() { 3 } else { 8 };
+            let card_h = card::height(&self.fonts, n, lines);
             // Glisse vers sa place dans la pile
             if n.y == 0.0 {
                 n.y = target;
@@ -547,7 +549,7 @@ impl App {
                 n.y,
                 s,
                 hovered == Some(n.id),
-                3,
+                lines,
             );
             if let Some(r) = region.as_ref() {
                 r.add(

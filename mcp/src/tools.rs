@@ -400,6 +400,19 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "mettre_a_jour",
+        title: "Mettre à jour un fait",
+        cat: Cat::Memory,
+        description: "Propose à l'utilisateur de remplacer un fait de sa mémoire par une version à jour : quand ce qu'il dit contredit ou précise un fait retenu (il a changé de NAS, de projet, d'habitude), ou quand un fait marqué « six mois sans nouvelles » revient dans la conversation et qu'il le confirme autrement. Donnez le fait actuel (texte exact ou morceau qui ne désigne que lui) et le nouveau texte, en une phrase. Il accepte ou refuse dans une notification Mettre à jour / Garder tel quel : ne corrigez jamais en silence, et ne proposez que ce qu'il a dit lui-même.",
+        schema: || {
+            json!({"type": "object", "properties": {
+                "fait": {"type": "string", "description": "Le fait actuel"},
+                "nouveau": {"type": "string", "description": "Le texte à jour, en une phrase, à la troisième personne"},
+                "pourquoi": {"type": "string", "description": "Ce que l'utilisateur a dit qui change le fait"}
+            }, "required": ["fait", "nouveau"]})
+        },
+    },
+    Tool {
         name: "oublier",
         title: "Oublier un fait",
         cat: Cat::Memory,
@@ -691,6 +704,12 @@ fn run(name: &str, args: &Value, settings: &Settings, approved: bool) -> Outcome
         "retenir" => {
             crate::memory::remember(s("fait").unwrap_or(""), s("pourquoi").unwrap_or("")).map(text)
         }
+        "mettre_a_jour" => crate::memory::update(
+            s("fait").unwrap_or(""),
+            s("nouveau").unwrap_or(""),
+            s("pourquoi").unwrap_or(""),
+        )
+        .map(text),
         "oublier" => crate::memory::forget(s("fait").unwrap_or("")).map(text),
         "conversations" => {
             crate::memory::conversations(s("chercher").unwrap_or(""), n("id").map(|v| v as i64))
