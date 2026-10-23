@@ -262,6 +262,31 @@ Compilation sur Debian 13 : `build-essential pkg-config libwayland-dev
 libxkbcommon-dev libudev-dev libinput-dev libgbm-dev libseat-dev libdrm-dev
 libegl-dev libgles-dev libdbus-1-dev libpam0g-dev libsqlite3-dev`, et Rust (rustup).
 
+## Banc d'essai
+
+Pour voir le bureau sans machine sous la main, avant de pousser :
+`tools/banc.sh` fait tourner les applis dans un sway « headless » (sans écran
+ni carte graphique), avec un HOME de démonstration (`target/banc/home`, rien
+n'est lu ni écrit chez vous), un clavier et un pointeur virtuels, et capture
+chaque vue dans `target/banc/captures/`. Les scènes : l'Assistant (contexte,
+lancement d'une appli, fil des conversations, « Demander » depuis une
+notification), Réglages > Agent (autorisations, mémoire, activité), les
+notifications et leur survol, Fichiers, et avec `--compositeur` le compositeur
+odysseus lui-même, imbriqué en rendu logiciel, où Notes reçoit une note tapée
+puis la réponse de l'Assistant appelé en contexte (Super+A) et « Insérer dans
+Notes ».
+
+    tools/banc.sh                       # toutes les scènes des applis
+    tools/banc.sh --compositeur         # plus le compositeur imbriqué
+    tools/banc.sh --scene assistant --garder   # une scène, et la session reste
+
+Le clavier et le pointeur sont `banc-entree` (`tools/banc`) : il publie une
+vraie disposition (fr, ou `BANC_DISPOSITION=us`), la même que le compositeur
+imbriqué, et reste branché toute la session ; `banc-donnees` écrit les données
+de démonstration avec les bibliothèques du dépôt, pour que les formats restent
+justes. Dépendances : `sway grim wl-clipboard dbus`. Ces outils ne sont pas
+installés par `tools/installer.sh`.
+
 ## Licence
 
 MIT — © 2026 David Courtin. Voir [LICENSE](LICENSE). Le compositeur est parti de

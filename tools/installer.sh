@@ -80,8 +80,9 @@ if [ "$BUILD" = oui ]; then
     cargo build --release --quiet
 fi
 # Binaires du dépôt : ceux que cargo vient de produire
+# (sans les outils du banc d'essai, banc-*, qui ne servent qu'au développement)
 bins=$(cargo build --release --quiet --message-format=json 2>/dev/null |
-    grep -o '"executable":"[^"]*"' | sed 's/.*:"\(.*\)"/\1/' | sort -u)
+    grep -o '"executable":"[^"]*"' | sed 's/.*:"\(.*\)"/\1/' | grep -v '/banc-' | sort -u)
 [ -n "$bins" ] || { say "installer.sh : aucun binaire trouvé" >&2; exit 1; }
 
 # --- Copier ---------------------------------------------------------------------

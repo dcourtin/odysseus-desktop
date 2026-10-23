@@ -1,0 +1,25 @@
+[package]
+name = "banc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Banc d'essai d'odysseus-desktop : clavier et pointeur virtuels, données de démonstration, pour les captures sous sway headless (tools/banc.sh)"
+publish = false
+
+[[bin]]
+name = "banc-entree"
+path = "src/entree.rs"
+
+[[bin]]
+name = "banc-donnees"
+path = "src/donnees.rs"
+
+[dependencies]
+common.workspace = true
+assistant = { path = "../../assistant" }
+rusqlite = "0.37"
+serde_json.workspace = true
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+xkbcommon = { version = "0.8", default-features = false }
