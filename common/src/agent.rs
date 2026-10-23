@@ -19,7 +19,7 @@
 //!     "notes": false, "memoire": true, "voir_bureau": true, "voir_ecran": false,
 //!     "agir": false, "presse_papiers": false, "executer": false
 //!   },
-//!   "suggestions": ["Que s'est-il passé pendant mon absence ?", "…"],
+//!   "suggestions": ["Qu'est-ce que j'ai manqué ?", "…"],
 //!   "suggestions_contexte": {
 //!     "selection": ["Explique ça", "Traduis en anglais"],
 //!     "dossier": ["Que contient ce dossier ?"],
@@ -115,7 +115,7 @@ pub struct AgentConfig {
 /// Les questions de départ : récurrentes, et propres à ce bureau
 fn default_suggestions() -> Vec<String> {
     [
-        "Que s'est-il passé pendant mon absence ?",
+        "Qu'est-ce que j'ai manqué ?",
         "Y a-t-il des mises à jour à faire ?",
         "Range mes Téléchargements",
         "Qu'est-ce que tu sais de moi ?",
