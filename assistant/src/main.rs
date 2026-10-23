@@ -115,13 +115,6 @@ const WEAK: i32 = 300;
 const STRONG: i32 = 700;
 const MIN_QUERY: usize = 2;
 
-const SUGGESTIONS: [&str; 4] = [
-    "Qu'est-ce qui chauffe en ce moment ?",
-    "Quelles fenêtres sont ouvertes ?",
-    "Résume mes notifications",
-    "Pourquoi la machine rame ?",
-];
-
 /// Élément de la conversation
 enum Item {
     User {
@@ -1093,8 +1086,10 @@ impl App {
     fn click(&mut self, x: f32, y: f32) {
         match self.hit_at(x, y) {
             Some(Hit::Suggestion(i)) => {
-                self.input = SUGGESTIONS[i].to_string();
-                self.send();
+                if let Some(q) = self.suggestions().get(i) {
+                    self.input = q.clone();
+                    self.send();
+                }
             }
             Some(Hit::Send) => self.send(),
             Some(Hit::Stop) => self.stop(),
@@ -1506,11 +1501,43 @@ impl App {
         }
     }
 
+    /// Les questions proposées (agent.json) : celles du contexte présent
+    /// d'abord, puis celles de base, quatre au plus
+    fn suggestions(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |q: &String| {
+            if out.len() < 4 && !out.contains(q) {
+                out.push(q.clone());
+            }
+        };
+        for chip in &self.chips {
+            let key = match chip.kind {
+                context::Kind::Selection => "selection",
+                context::Kind::Folder => "dossier",
+                context::Kind::Notification => "notification",
+                context::Kind::Clipboard => "presse_papiers",
+                context::Kind::Window => continue,
+            };
+            if let Some((_, list)) = self
+                .agent
+                .context_suggestions
+                .iter()
+                .find(|(k, _)| k == key)
+            {
+                list.iter().for_each(&mut push);
+            }
+        }
+        self.agent.suggestions.iter().for_each(&mut push);
+        out
+    }
+
     fn empty_state(&self, ui: &mut Ui, x: f32, top: f32, w: f32, bottom: f32) {
         let p = theme::palette();
+        let suggestions = self.suggestions();
+        let rows = suggestions.len().div_ceil(2) as f32;
         // Ce qui s'étale sous le titre : suggestions, puis les conversations à reprendre
         let needed = 74.0
-            + 2.0 * 50.0
+            + rows * 50.0
             + if self.recent.is_empty() {
                 0.0
             } else {
@@ -1544,7 +1571,7 @@ impl App {
         // Suggestions, deux par ligne
         let gap = 10.0;
         let sw = (w - gap) / 2.0;
-        for (i, s) in SUGGESTIONS.iter().enumerate() {
+        for (i, s) in suggestions.iter().enumerate() {
             let (col, row) = (i % 2, i / 2);
             let (sx, sy) = (x + col as f32 * (sw + gap), cy + 74.0 + row as f32 * 50.0);
             let hit = Hit::Suggestion(i);
@@ -1562,7 +1589,7 @@ impl App {
         if self.recent.is_empty() {
             return;
         }
-        let mut y = cy + 74.0 + 2.0 * 50.0 + 12.0;
+        let mut y = cy + 74.0 + rows * 50.0 + 12.0;
         ui.bold(x, y, 24.0, 12.0, "Reprendre", p.text_dim);
         let total = self.store.as_ref().map_or(0, Store::count);
         if total > self.recent.len() {

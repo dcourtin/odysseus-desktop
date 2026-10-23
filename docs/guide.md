@@ -257,6 +257,10 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
 - **Depuis une notification** : au survol d'une bannière ou d'une carte du
   centre, le bouton à droite (« Demander ») ouvre l'Assistant avec la
   notification en pastille. La notification reste.
+- **Les questions proposées** quand la conversation est vide se règlent dans
+  `~/.config/odysseus/agent.json` (clé `suggestions`) ; avec `suggestions_contexte`,
+  celles qui vont avec une pastille (« Traduis en anglais » pour une sélection,
+  « Range ce dossier par type » pour un dossier…) passent devant quand elle est là.
 - **La même entrée lance** : tapez « firefox », la pastille « Ouvrir Firefox »
   apparaît et Entrée l'ouvre ; Maj+Entrée pose la question quand même. Avec
   plusieurs mots, Entrée demande et Tab ouvre la première proposition. Les

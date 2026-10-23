@@ -18,9 +18,20 @@
 //!     "lire_systeme": true, "lire_documentation": true, "lire_fichiers": false,
 //!     "notes": false, "memoire": true, "voir_bureau": true, "voir_ecran": false,
 //!     "agir": false, "presse_papiers": false, "executer": false
+//!   },
+//!   "suggestions": ["Que s'est-il passé pendant mon absence ?", "…"],
+//!   "suggestions_contexte": {
+//!     "selection": ["Explique ça", "Traduis en anglais"],
+//!     "dossier": ["Que contient ce dossier ?"],
+//!     "notification": ["Que faire de cette notification ?"],
+//!     "presse_papiers": ["Explique ce que j'ai copié"]
 //!   }
 //! }
 //! ```
+//!
+//! Les suggestions sont les questions proposées par l'Assistant quand la
+//! conversation est vide ; celles du contexte passent devant quand la pastille
+//! correspondante est là (texte sélectionné, dossier de Fichiers…).
 
 use std::path::PathBuf;
 
@@ -92,8 +103,48 @@ pub struct AgentConfig {
     pub custom_command: String,
     pub models: Vec<ModelCard>,
     pub perms: AgentPerms,
+    /// Questions proposées quand la conversation est vide (quatre affichées)
+    pub suggestions: Vec<String>,
+    /// Questions proposées selon le contexte présent : clé (selection, dossier,
+    /// notification, presse_papiers) et ses questions
+    pub context_suggestions: Vec<(String, Vec<String>)>,
     /// Fichier tel que lu : ses clés inconnues sont gardées à l'enregistrement
     raw: Value,
+}
+
+/// Les questions de départ : récurrentes, et propres à ce bureau
+fn default_suggestions() -> Vec<String> {
+    [
+        "Que s'est-il passé pendant mon absence ?",
+        "Y a-t-il des mises à jour à faire ?",
+        "Range mes Téléchargements",
+        "Qu'est-ce que tu sais de moi ?",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// Clés des contextes qui ont leurs propres suggestions
+pub const CONTEXT_KEYS: [&str; 4] = ["selection", "dossier", "notification", "presse_papiers"];
+
+/// Les questions qui vont avec ce qu'on a sous les yeux
+fn default_context_suggestions() -> Vec<(String, Vec<String>)> {
+    [
+        (
+            "selection",
+            vec!["Explique ça", "Traduis en anglais", "Reformule plus court"],
+        ),
+        (
+            "dossier",
+            vec!["Que contient ce dossier ?", "Range ce dossier par type"],
+        ),
+        ("notification", vec!["Que faire de cette notification ?"]),
+        ("presse_papiers", vec!["Explique ce que j'ai copié"]),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+    .collect()
 }
 
 /// Catalogue par défaut : modèles conseillés pour une carte de 16 Go
@@ -145,6 +196,8 @@ impl Default for AgentConfig {
             custom_command: String::new(),
             models: default_models(),
             perms: AgentPerms::default(),
+            suggestions: default_suggestions(),
+            context_suggestions: default_context_suggestions(),
             raw: json!({}),
         }
     }
@@ -205,6 +258,26 @@ impl AgentConfig {
                 .collect();
             if !models.is_empty() {
                 c.models = models;
+            }
+        }
+        let strings = |v: &Value| -> Option<Vec<String>> {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+        };
+        if let Some(list) = strings(&raw["suggestions"]).filter(|l| !l.is_empty()) {
+            c.suggestions = list;
+        }
+        // Une clé présente remplace sa liste (vide : rien pour ce contexte) ; une
+        // clé absente garde la liste par défaut
+        for (key, list) in &mut c.context_suggestions {
+            if let Some(given) = strings(&raw["suggestions_contexte"][key.as_str()]) {
+                *list = given;
             }
         }
         let p = &raw["autorisations"];
@@ -296,6 +369,13 @@ impl AgentConfig {
                 .map(|m| json!({"modele": m.model, "nom": m.name, "taille": m.size, "atouts": m.notes}))
                 .collect(),
         );
+        raw["suggestions"] = json!(self.suggestions);
+        raw["suggestions_contexte"] = Value::Object(
+            self.context_suggestions
+                .iter()
+                .map(|(k, v)| (k.clone(), json!(v)))
+                .collect(),
+        );
         let p = self.perms;
         raw["autorisations"] = json!({
             "lire_systeme": p.read,
@@ -345,6 +425,29 @@ mod tests {
         assert_eq!(c.models.len(), 1);
         assert!(c.perms.screen && c.perms.read && c.perms.docs && !c.perms.act && !c.perms.run);
         assert!(c.perms.memory);
+        assert_eq!(c.suggestions.len(), 4);
+        assert_eq!(c.context_suggestions.len(), 4);
+        let custom = AgentConfig::from_json(json!({
+            "suggestions": ["Une seule", "  "],
+            "suggestions_contexte": {"selection": [], "dossier": ["Trie-moi ça"]}
+        }));
+        assert_eq!(custom.suggestions, vec!["Une seule"]);
+        let get = |k: &str| {
+            custom
+                .context_suggestions
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert!(get("selection").is_empty());
+        assert_eq!(get("dossier"), vec!["Trie-moi ça"]);
+        assert_eq!(get("notification").len(), 1);
+        let back = AgentConfig::from_json(custom.to_json());
+        assert_eq!(back.suggestions, custom.suggestions);
+        assert!(
+            get("selection").is_empty() && back.context_suggestions == custom.context_suggestions
+        );
         let out = c.to_json();
         assert_eq!(out["ma_note"], "à garder");
         assert_eq!(out["ollama"]["options"]["num_ctx"], 16384);

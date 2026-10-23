@@ -2613,7 +2613,7 @@ impl App {
             false,
             Hit::EditAgentJson,
         );
-        let hint = "modèles, commandes, adresse d'Ollama, autorisations";
+        let hint = "modèles, commandes, adresse d'Ollama, autorisations, suggestions";
         ui.text(hint, x + 222.0, y, 34.0, 11.5, p.text_dim);
         y += 34.0 + 24.0;
 
