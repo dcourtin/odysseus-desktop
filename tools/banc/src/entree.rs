@@ -11,6 +11,7 @@
 //!     banc-entree touche ctrl+h Return BackSpace…
 //!     banc-entree pointeur X Y        déplace le curseur
 //!     banc-entree clic [X Y] [droit]  clique (du bouton gauche sinon)
+//!     banc-entree ecran LxH           la taille de l'écran a changé
 //!     banc-entree fin                 arrête le serveur
 //!
 //! Pourquoi pas wtype ? Il fabrique une disposition à lui, où les codes de
@@ -255,7 +256,7 @@ impl Server {
     }
 
     /// Un ordre reçu ; Ok(false) : c'est la fin
-    fn handle(&self, line: &str) -> Result<bool, String> {
+    fn handle(&mut self, line: &str) -> Result<bool, String> {
         let (cmd, arg) = line.split_once('\t').unwrap_or((line, ""));
         let arg = unescape(arg);
         match cmd {
@@ -290,11 +291,20 @@ impl Server {
                 }
                 self.click(button);
             }
+            "ecran" => self.screen = screen_size(&arg)?,
             "fin" => return Ok(false),
             other => return Err(format!("ordre inconnu : {other}")),
         }
         Ok(true)
     }
+}
+
+/// « 1920x1200 »
+fn screen_size(arg: &str) -> Result<(u32, u32), String> {
+    arg.trim()
+        .split_once('x')
+        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+        .ok_or_else(|| format!("taille d'écran attendue : LxH, reçu « {arg} »"))
 }
 
 fn coords(arg: &str) -> Result<(u32, u32), String> {
@@ -374,7 +384,7 @@ fn serve(screen: (u32, u32), layout: &str) -> Result<(), String> {
     let _ = fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock).map_err(|e| format!("{} : {e}", sock.display()))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let server = Server {
+    let mut server = Server {
         conn,
         keyboard,
         pointer,
@@ -461,10 +471,7 @@ fn main() {
                 match a.as_str() {
                     "--ecran" => {
                         let v = it.next().unwrap_or_else(|| usage());
-                        screen = v
-                            .split_once('x')
-                            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
-                            .unwrap_or_else(|| usage());
+                        screen = screen_size(v).unwrap_or_else(|_| usage());
                     }
                     "--disposition" => layout = it.next().unwrap_or_else(|| usage()).clone(),
                     _ => usage(),
@@ -472,7 +479,7 @@ fn main() {
             }
             serve(screen, &layout)
         }
-        Some(cmd @ ("texte" | "touche" | "pointeur" | "clic" | "fin")) => {
+        Some(cmd @ ("texte" | "touche" | "pointeur" | "clic" | "ecran" | "fin")) => {
             send(cmd, &args[1..].join(" "))
         }
         _ => usage(),

@@ -30,8 +30,9 @@ pub fn center_open_file() -> Option<PathBuf> {
 }
 
 const USAGE: &str = "usage : odysseus-notify [--center [show] | --dnd on|off|toggle | --volume |
-       --send TITRE [TEXTE] [--image FICHIER] [--open FICHIER]]
-  --image : vignette de la notification ; --open : un clic ouvre le fichier (Aperçu)";
+       --send TITRE [TEXTE] [--image FICHIER] [--open FICHIER | --lancer COMMANDE]]
+  --image : vignette de la notification ; --open : un clic ouvre le fichier (Aperçu) ;
+  --lancer : un clic exécute la commande (sh -c)";
 
 pub fn run(args: &[String]) -> i32 {
     let result = match args[0].as_str() {
@@ -91,7 +92,15 @@ fn notify(app: &str, title: &str, body: &str, hints: PropMap, replaces: u32) -> 
     .map(|_| ())
 }
 
-/// `--send TITRE [TEXTE] [--image F] [--open F]`
+/// Ce qu'un clic sur la notification déclenche
+enum OnClick {
+    /// Ouvre un fichier (Aperçu)
+    Open(String),
+    /// Exécute une commande (sh -c)
+    Run(String),
+}
+
+/// `--send TITRE [TEXTE] [--image F] [--open F | --lancer CMD]`
 fn send(args: &[String]) -> Result<(), String> {
     let mut texts = Vec::new();
     let (mut image, mut open) = (None, None);
@@ -99,7 +108,8 @@ fn send(args: &[String]) -> Result<(), String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--image" => image = it.next().cloned(),
-            "--open" => open = it.next().cloned(),
+            "--open" => open = it.next().cloned().map(OnClick::Open),
+            "--lancer" => open = it.next().cloned().map(OnClick::Run),
             _ => texts.push(a.clone()),
         }
     }
@@ -112,7 +122,7 @@ fn send(args: &[String]) -> Result<(), String> {
     let Some(target) = open else {
         return notify("odysseus", &title, &body, hints, 0);
     };
-    // Avec --open : on reste à l'écoute ; un clic sur la notification ouvre le fichier
+    // Avec --open ou --lancer : on reste à l'écoute ; un clic sur la notification agit
     let ch = Channel::get_private(BusType::Session).map_err(|e| e.to_string())?;
     let rule = format!("type='signal',interface='{NAME}',path='{PATH}'");
     let add = Message::new_method_call(
@@ -144,7 +154,12 @@ fn send(args: &[String]) -> Result<(), String> {
         while let Some(m) = ch.pop_message() {
             match (m.member().as_deref(), m.get2::<u32, String>()) {
                 (Some("ActionInvoked"), (Some(n), Some(_))) if n == id => {
-                    open_file(&target);
+                    match &target {
+                        OnClick::Open(path) => open_file(path),
+                        OnClick::Run(cmd) => {
+                            let _ = Command::new("/bin/sh").arg("-c").arg(cmd).spawn();
+                        }
+                    }
                     return Ok(());
                 }
                 (Some("NotificationClosed"), (Some(n), _)) if n == id => return Ok(()),

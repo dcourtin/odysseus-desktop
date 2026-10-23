@@ -119,11 +119,17 @@ fn conversations() -> Result<(), String> {
     Ok(())
 }
 
-/// La mémoire : trois faits retenus en conversation, un écrit à la main
+/// La mémoire : quatre faits retenus en conversation, dont un vieux de sept
+/// mois (à relire), et un écrit à la main
 fn memory() -> Result<(), String> {
     let m = Memory::open().ok_or("HOME inconnu")?;
     let t = now();
     let facts = [
+        (
+            "Utilise Firefox, avec les onglets verticaux",
+            "conversation « Firefox rame depuis ce matin »",
+            t - 86_400 * 215,
+        ),
         (
             "Développe en PHP, Python et JavaScript",
             "conversation « Quel langage pour un script de sauvegarde ? »",

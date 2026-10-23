@@ -165,10 +165,11 @@ scene_reglages() {
     say "Scène : Réglages > Agent"
     (odysseus-reglages agent > "$BANC/reglages.log" 2>&1 &); sleep 3
     shot reglages-01-agent
-    # La page entière, sur un écran plus haut
-    swaymsg output HEADLESS-1 resolution "${W}x2300" >/dev/null; sleep 1.5
+    # La page entière, sur un écran plus haut ; puis « Garder » le fait à relire
+    swaymsg output HEADLESS-1 resolution "${W}x2300" >/dev/null; banc-entree ecran "${W}x2300"; sleep 1.5
     shot reglages-02-agent-entier
-    swaymsg output HEADLESS-1 resolution "${W}x${H}" >/dev/null; sleep 1
+    click 1218 1342; pointer_off; shot reglages-03-garde 1.2
+    swaymsg output HEADLESS-1 resolution "${W}x${H}" >/dev/null; banc-entree ecran "${W}x${H}"; sleep 1
     pkill -x odysseus-reglag; sleep 0.3
 }
 

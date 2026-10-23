@@ -305,6 +305,11 @@ conversation, quel que soit l'agent.
   d'origine ; « Oublier » (deux clics) en retire un. Le fichier est
   `~/.config/odysseus/memoire.md`, une ligne par fait : vous l'éditez à la main
   si vous préférez.
+- **Rien n'est oublié tout seul.** Un fait qui a passé six mois sans servir ni être
+  confirmé passe en tête de la page, « À relire », avec Garder et Oublier ; une
+  notification vous le dit, au plus une fois par mois, et l'Assistant le rappelle
+  d'une ligne. Garder relance l'horloge pour six mois, comme une relecture par
+  l'agent.
 - **« Qu'est-ce que tu sais de moi ? »** : l'Assistant répond par la liste exacte.
 - Il retrouve aussi vos conversations précédentes quand vous y renvoyez (« comme la
   dernière fois »). Désactiver la catégorie Mémoire retire tout cela.

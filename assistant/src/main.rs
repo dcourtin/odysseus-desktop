@@ -230,6 +230,8 @@ enum Hit {
     /// Reprendre une conversation, la supprimer
     Open(i64),
     Delete(i64),
+    /// Des faits de la mémoire ont six mois sans nouvelles : ouvrir Réglages > Agent
+    ReviewMemory,
 }
 
 /// Largeur, hauteur du tampon et thème
@@ -280,6 +282,8 @@ struct App {
     conversation: Option<i64>,
     /// Les plus récentes, proposées quand la conversation est vide
     recent: Vec<Summary>,
+    /// Faits de la mémoire à relire (six mois sans nouvelles), comptés à l'ouverture
+    review: usize,
     history: Option<History>,
     /// Conversations supprimées pendant cette session, pour Ctrl+Z
     trash: Vec<Conversation>,
@@ -473,6 +477,7 @@ fn main() {
         store,
         conversation: None,
         recent: Vec::new(),
+        review: common::memory::Memory::open().map_or(0, |m| m.review().len()),
         history: None,
         trash: Vec::new(),
         scroll: 0.0,
@@ -1115,6 +1120,14 @@ impl App {
             Some(Hit::Back) => self.hide_history(),
             Some(Hit::Open(id)) => self.open_conversation(id),
             Some(Hit::Delete(id)) => self.delete_conversation(id),
+            Some(Hit::ReviewMemory) => {
+                let settings = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("odysseus-reglages")))
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "odysseus-reglages".into());
+                self.spawn_detached(&format!("'{settings}' agent"));
+            }
             None => {}
         }
     }
@@ -1543,6 +1556,7 @@ impl App {
             } else {
                 12.0 + 28.0 + self.recent.len() as f32 * 34.0
             }
+            + if self.review > 0 { 36.0 } else { 0.0 }
             + 8.0;
         let cy = (top + (bottom - top) * 0.36)
             .min(bottom - needed)
@@ -1585,11 +1599,42 @@ impl App {
             ui.text(sx + 14.0, sy, 40.0, 13.0, &t, p.text_soft());
             ui.hit((sx, sy, sw, 40.0), hit);
         }
-        // Les dernières conversations, à reprendre
-        if self.recent.is_empty() {
-            return;
-        }
         let mut y = cy + 74.0 + rows * 50.0 + 12.0;
+        // Les dernières conversations, à reprendre
+        if !self.recent.is_empty() {
+            y = self.recent_rows(ui, x, y, w);
+        }
+        // La mémoire à relire : une ligne, qui ouvre Réglages > Agent
+        if self.review > 0 {
+            y += 6.0;
+            let hit = Hit::ReviewMemory;
+            let hovered = ui.hover == Some(hit.clone());
+            let label = format!(
+                "{} de votre mémoire {} six mois sans nouvelles · relire dans Réglages",
+                if self.review == 1 {
+                    "Un fait".to_string()
+                } else {
+                    format!("{} faits", self.review)
+                },
+                if self.review == 1 { "a" } else { "ont" }
+            );
+            let label = ui.truncate(&label, 11.5, w - 30.0);
+            ui.icon(icon::MEMORY, x + 14.0, y + 14.0, 12.0, p.text_dim);
+            ui.text(
+                x + 30.0,
+                y,
+                28.0,
+                11.5,
+                &label,
+                if hovered { p.text } else { p.text_dim },
+            );
+            ui.hit((x, y, w, 28.0), hit);
+        }
+    }
+
+    /// La liste « Reprendre » de l'état vide ; renvoie le bas
+    fn recent_rows(&self, ui: &mut Ui, x: f32, mut y: f32, w: f32) -> f32 {
+        let p = theme::palette();
         ui.bold(x, y, 24.0, 12.0, "Reprendre", p.text_dim);
         let total = self.store.as_ref().map_or(0, Store::count);
         if total > self.recent.len() {
@@ -1626,6 +1671,7 @@ impl App {
             ui.hit((x, y, w, 32.0), hit);
             y += 34.0;
         }
+        y
     }
 
     /// Les pastilles au-dessus de la saisie, en rangées : le contexte, puis

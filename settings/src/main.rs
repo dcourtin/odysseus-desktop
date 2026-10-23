@@ -332,8 +332,10 @@ enum Hit {
     EditAgentJson,
     Perm(usize),
     CopyMcp,
-    /// Mémoire de l'Assistant : oublier un fait (deux clics), ouvrir memoire.md
+    /// Mémoire de l'Assistant : oublier un fait (deux clics), le garder à la
+    /// relecture, ouvrir memoire.md
     Forget(String),
+    KeepFact(String),
     EditMemory,
 }
 
@@ -1322,6 +1324,16 @@ impl App {
                     }
                 } else {
                     self.forget_armed = Some((f, Instant::now()));
+                }
+            }
+            Hit::KeepFact(f) => {
+                let done = common::memory::Memory::open()
+                    .ok_or_else(|| "HOME inconnu".to_string())
+                    .and_then(|m| m.keep(&f));
+                match done {
+                    Ok(true) => self.toast("Gardé : on en reparle dans six mois"),
+                    Ok(false) => self.toast("Ce fait n'y était plus"),
+                    Err(e) => self.toast(e),
                 }
             }
             Hit::EditMemory => {
@@ -2397,6 +2409,66 @@ impl App {
         y
     }
 
+    /// Les faits de la mémoire, une ligne chacun avec date et origine ; à la
+    /// relecture (`review`), un bouton Garder s'ajoute à Oublier. Renvoie le bas.
+    fn memory_rows(
+        &self,
+        ui: &mut Ui,
+        x: f32,
+        y: f32,
+        w: f32,
+        facts: &[common::memory::Fact],
+        review: bool,
+    ) -> f32 {
+        let p = theme::palette();
+        let rh = 58.0;
+        let buttons = if review { 2.0 * 110.0 + 8.0 } else { 110.0 };
+        ui.card(x, y, w, facts.len() as f32 * rh);
+        for (i, f) in facts.iter().enumerate() {
+            let ry = y + i as f32 * rh;
+            if i > 0 {
+                ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
+            }
+            let text = ui.truncate(&f.text, 13.0, w - 50.0 - buttons);
+            ui.text(&text, x + 18.0, ry + 8.0, 22.0, 13.0, p.text);
+            let mut origin = match (f.date, &f.origin) {
+                (None, None) => "écrit à la main".to_string(),
+                (Some(t), None) => format!("retenu le {}", fact_date(t)),
+                (Some(t), Some(o)) => format!("retenu le {} · {o}", fact_date(t)),
+                (None, Some(o)) => o.clone(),
+            };
+            if let Some(t) = f.kept {
+                origin.push_str(&format!(" · gardé le {}", fact_date(t)));
+            }
+            let origin = ui.truncate(&origin, 11.5, w - 50.0 - buttons);
+            ui.text(&origin, x + 18.0, ry + 31.0, 18.0, 11.5, p.text_dim);
+            let armed = self
+                .forget_armed
+                .as_ref()
+                .is_some_and(|(a, at)| *a == f.text && at.elapsed() < Duration::from_secs(4));
+            let bx = x + w - 18.0 - 110.0;
+            ui.button(
+                bx,
+                ry + 12.0,
+                110.0,
+                if armed { "Confirmer ?" } else { "Oublier" },
+                false,
+                Hit::Forget(f.text.clone()),
+            );
+            if review {
+                ui.button(
+                    bx - 118.0,
+                    ry + 12.0,
+                    110.0,
+                    "Garder",
+                    true,
+                    Hit::KeepFact(f.text.clone()),
+                );
+            }
+        }
+        y + facts.len() as f32 * rh
+    }
+
     fn page_agent(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
         let p = theme::palette();
         let mut y = ui.section(x, y, "Agent du bureau");
@@ -2660,10 +2732,20 @@ impl App {
         }
         y += PERMS.len() as f32 * rh + 28.0;
 
-        // Mémoire : les faits retenus, à oublier d'un clic (deux, le second confirme)
+        // Mémoire : les faits retenus, à oublier d'un clic (deux, le second
+        // confirme) ; ceux qui ont six mois sans nouvelles d'abord, à relire
         y = ui.section(x, y, "Mémoire de l'Assistant");
-        let facts = common::memory::facts();
-        if facts.is_empty() {
+        let memory = common::memory::Memory::open();
+        let due: Vec<common::memory::Fact> =
+            memory.as_ref().map(|m| m.review()).unwrap_or_default();
+        let facts: Vec<common::memory::Fact> = memory
+            .as_ref()
+            .map(|m| m.facts())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| !due.contains(f))
+            .collect();
+        if due.is_empty() && facts.is_empty() {
             y = ui.note(
                 x,
                 y,
@@ -2673,43 +2755,35 @@ impl App {
                  Vous pouvez aussi écrire les faits vous-même, une ligne chacun.",
             ) + 4.0;
         } else {
-            let rh = 58.0;
-            ui.card(x, y, w, facts.len() as f32 * rh);
-            for (i, f) in facts.iter().enumerate() {
-                let ry = y + i as f32 * rh;
-                if i > 0 {
-                    ui.rect(x + 16.0, ry, w - 32.0, 1.0, p.ink(0.06));
-                }
-                let text = ui.truncate(&f.text, 13.0, w - 160.0);
-                ui.text(&text, x + 18.0, ry + 8.0, 22.0, 13.0, p.text);
-                let origin = match (f.date, &f.origin) {
-                    (None, None) => "écrit à la main".to_string(),
-                    (Some(t), None) => format!("retenu le {}", fact_date(t)),
-                    (Some(t), Some(o)) => format!("retenu le {} · {o}", fact_date(t)),
-                    (None, Some(o)) => o.clone(),
-                };
-                let origin = ui.truncate(&origin, 11.5, w - 160.0);
-                ui.text(&origin, x + 18.0, ry + 31.0, 18.0, 11.5, p.text_dim);
-                let armed = self
-                    .forget_armed
-                    .as_ref()
-                    .is_some_and(|(a, at)| *a == f.text && at.elapsed() < Duration::from_secs(4));
-                ui.button(
-                    x + w - 18.0 - 110.0,
-                    ry + 12.0,
-                    110.0,
-                    if armed { "Confirmer ?" } else { "Oublier" },
-                    false,
-                    Hit::Forget(f.text.clone()),
+            if !due.is_empty() {
+                ui.text(
+                    &format!(
+                        "À relire : {} sans nouvelles depuis six mois. Toujours vrai ?",
+                        if due.len() == 1 {
+                            "un fait".to_string()
+                        } else {
+                            format!("{} faits", due.len())
+                        }
+                    ),
+                    x + 2.0,
+                    y,
+                    22.0,
+                    12.5,
+                    p.text,
                 );
+                y += 28.0;
+                y = self.memory_rows(ui, x, y, w, &due, true) + 16.0;
             }
-            y += facts.len() as f32 * rh + 8.0;
+            if !facts.is_empty() {
+                y = self.memory_rows(ui, x, y, w, &facts, false) + 8.0;
+            }
             y = ui.note(
                 x,
                 y,
                 w,
                 "Lus en tête de chaque conversation. L'Assistant ne retient ni n'oublie rien \
-                 sans votre accord ; jamais un mot de passe ni une clé.",
+                 sans votre accord ; jamais un mot de passe ni une clé. Rien n'est oublié tout \
+                 seul : un fait qui a passé six mois sans servir vous est proposé à la relecture.",
             ) + 4.0;
         }
         ui.button(x, y, 210.0, "Modifier memoire.md", false, Hit::EditMemory);

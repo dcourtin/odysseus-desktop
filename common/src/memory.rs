@@ -12,6 +12,12 @@
 //!
 //! Ce qui est à l'écran ou dans le dossier ouvert n'est pas un fait : les
 //! outils le donnent sur le moment, rien n'en est gardé ici.
+//!
+//! Les faits vieillissent sans prévenir (on change de NAS, de projet, de
+//! goûts) : rien n'est oublié tout seul, mais un fait qui a passé six mois
+//! sans être confirmé est proposé à la relecture (`review`), dans Réglages
+//! et au plus une notification par mois (`remind`). « Garder » relance
+//! l'horloge (`keep`), comme un usage par l'agent (`touch`).
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +31,10 @@ pub const MAX_FACTS: usize = 40;
 pub const MAX_FACT_CHARS: usize = 200;
 /// Ce qui est donné au modèle (les petits contextes d'Ollama)
 pub const MAX_PROMPT_BYTES: usize = 2048;
+/// Six mois sans usage ni confirmation : à relire
+pub const REVIEW_AFTER: i64 = 180 * 86_400;
+/// Entre deux notifications de relecture
+pub const REMIND_EVERY: i64 = 30 * 86_400;
 
 const HEADER: &str = "# Mémoire de l'Assistant
 
@@ -42,12 +52,34 @@ pub struct Fact {
     pub date: Option<i64>,
     /// D'où il vient : « conversation « … » » ; absent : écrit à la main
     pub origin: Option<String>,
+    /// Dernier usage par un agent (outil memoire)
+    pub used: Option<i64>,
+    /// Dernière fois gardé à la relecture
+    pub kept: Option<i64>,
+    /// Première rencontre d'un fait écrit à la main : son horloge de relecture
+    pub seen: Option<i64>,
+}
+
+impl Fact {
+    /// Depuis quand il n'a pas été confirmé : la plus récente des dates connues
+    pub fn fresh_since(&self) -> Option<i64> {
+        [self.date, self.used, self.kept, self.seen]
+            .into_iter()
+            .flatten()
+            .max()
+    }
+
+    /// Plus de six mois sans usage ni confirmation
+    pub fn stale(&self, now: i64) -> bool {
+        self.fresh_since().is_some_and(|t| now - t > REVIEW_AFTER)
+    }
 }
 
 /// Le fichier des faits et celui de leur état
 pub struct Memory {
     file: PathBuf,
     state: PathBuf,
+    remind: PathBuf,
 }
 
 /// Le fichier des faits (~/.config/odysseus/memoire.md)
@@ -58,6 +90,12 @@ pub fn path() -> Option<PathBuf> {
 fn state_path() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".local/state/odysseus/memoire.json")
+}
+
+/// Date de la dernière notification de relecture
+fn remind_path() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".local/state/odysseus/memoire-relecture")
 }
 
 fn now() -> i64 {
@@ -150,6 +188,7 @@ impl Memory {
         Some(Self {
             file: path()?,
             state: state_path(),
+            remind: remind_path(),
         })
     }
 
@@ -158,6 +197,7 @@ impl Memory {
         Self {
             file: file.to_path_buf(),
             state: state.to_path_buf(),
+            remind: state.with_file_name("memoire-relecture"),
         }
     }
 
@@ -209,6 +249,9 @@ impl Memory {
                     text: f.to_string(),
                     date: meta.and_then(|m| m["date"].as_i64()),
                     origin: meta.and_then(|m| m["origine"].as_str()).map(String::from),
+                    used: meta.and_then(|m| m["utilise"].as_i64()),
+                    kept: meta.and_then(|m| m["garde"].as_i64()),
+                    seen: meta.and_then(|m| m["vu"].as_i64()),
                 }
             })
             .collect()
@@ -276,6 +319,72 @@ impl Memory {
             let _ = self.write_state(&state);
         }
         Ok(true)
+    }
+
+    /// Pose une date dans l'état de chaque fait désigné (texte exact)
+    fn stamp(&self, texts: &[&str], key: &str, when: i64) -> Result<(), String> {
+        let mut state = self.read_state();
+        for t in texts {
+            let entry = state.entry((*t).to_string()).or_insert_with(|| json!({}));
+            entry[key] = json!(when);
+        }
+        self.write_state(&state)
+    }
+
+    /// Un agent vient de relire ces faits : leur horloge de relecture repart
+    pub fn touch(&self, texts: &[&str]) -> Result<(), String> {
+        if texts.is_empty() {
+            return Ok(());
+        }
+        self.stamp(texts, "utilise", now())
+    }
+
+    /// L'utilisateur garde ce fait à la relecture : six mois de plus ; vrai s'il y était
+    pub fn keep(&self, text: &str) -> Result<bool, String> {
+        let Some(found) = self.find(text) else {
+            return Ok(false);
+        };
+        self.stamp(&[&found], "garde", now())?;
+        Ok(true)
+    }
+
+    /// Les faits à relire : plus de six mois sans usage ni confirmation. Un
+    /// fait écrit à la main n'a pas de date : il est daté de sa première
+    /// rencontre ici, et sa relecture viendra six mois plus tard.
+    pub fn review(&self) -> Vec<Fact> {
+        let t = now();
+        let facts = self.facts();
+        let unseen: Vec<&str> = facts
+            .iter()
+            .filter(|f| f.fresh_since().is_none())
+            .map(|f| f.text.as_str())
+            .collect();
+        if !unseen.is_empty() {
+            let _ = self.stamp(&unseen, "vu", t);
+        }
+        facts.into_iter().filter(|f| f.stale(t)).collect()
+    }
+
+    /// S'il y a des faits à relire et qu'on ne l'a pas dit depuis un mois :
+    /// leur nombre, et la date de ce rappel est notée. Sinon rien.
+    pub fn remind(&self) -> Option<usize> {
+        let t = now();
+        let last = std::fs::read_to_string(&self.remind)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        if t - last < REMIND_EVERY {
+            return None;
+        }
+        let n = self.review().len();
+        if n == 0 {
+            return None;
+        }
+        if let Some(d) = self.remind.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        std::fs::write(&self.remind, t.to_string()).ok()?;
+        Some(n)
     }
 
     /// Ce qui est donné au modèle en tête de conversation ; rien s'il n'y a
@@ -464,6 +573,49 @@ mod tests {
         let p = m.prompt().unwrap();
         assert!(p.len() <= MAX_PROMPT_BYTES + 120);
         assert!(p.contains("autres faits non montrés"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn review_after_six_months_keep_and_touch_restart_the_clock() {
+        let (dir, m) = temp("relecture");
+        m.add("Le NAS s'appelle Archives", Some("conversation « NAS »"))
+            .unwrap();
+        m.add("Préfère les réponses courtes", None).unwrap();
+        // À la main, sans état : daté de sa première rencontre
+        let mut text = std::fs::read_to_string(m.file()).unwrap();
+        text.push_str("- Travaille sur odysseus\n");
+        std::fs::write(m.file(), text).unwrap();
+        assert!(m.review().is_empty());
+        assert!(m.facts()[2].seen.is_some());
+        // Le temps passe : on vieillit l'état de sept mois
+        let old = now() - REVIEW_AFTER - 30 * 86_400;
+        let mut state = m.read_state();
+        for (_, v) in state.iter_mut() {
+            for k in ["date", "vu"] {
+                if v.get(k).is_some() {
+                    v[k] = json!(old);
+                }
+            }
+        }
+        m.write_state(&state).unwrap();
+        let due = m.review();
+        assert_eq!(due.len(), 3);
+        assert_eq!(m.remind(), Some(3));
+        // Pas deux rappels dans le mois
+        assert_eq!(m.remind(), None);
+        // Garder relance l'horloge ; un usage par l'agent aussi
+        assert!(m.keep("le nas s'appelle archives").unwrap());
+        assert!(!m.keep("inconnu").unwrap());
+        m.touch(&["Préfère les réponses courtes"]).unwrap();
+        let due = m.review();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].text, "Travaille sur odysseus");
+        let facts = m.facts();
+        assert!(facts[0].kept.is_some() && facts[1].used.is_some());
+        // Oublié : son état part avec lui
+        assert!(m.remove("Travaille sur odysseus").unwrap());
+        assert!(m.review().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

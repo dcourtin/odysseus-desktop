@@ -240,6 +240,8 @@ fn daemon() {
     let mut list: Vec<Automatism> = Vec::new();
     let mut reload = true;
     let mut last_minute: Option<(u32, u32, u32)> = None;
+    // Jour de la dernière vérification de la mémoire de l'Assistant
+    let mut memory_day: Option<u32> = None;
     let mut children: Vec<Child> = Vec::new();
     // Même fichier vu deux fois (création puis écriture) : une seule exécution
     let mut seen: HashMap<PathBuf, Instant> = HashMap::new();
@@ -318,6 +320,31 @@ fn daemon() {
                 }
             }
             last_minute = Some(minute);
+        }
+
+        // La mémoire de l'Assistant : une fois par jour, les faits qui ont six
+        // mois sans nouvelles ; une notification par mois au plus, dont le
+        // clic ouvre Réglages > Agent (rien n'est oublié tout seul)
+        if memory_day != Some(now.ordinal()) {
+            memory_day = Some(now.ordinal());
+            if let Some(n) = common::memory::Memory::open().and_then(|m| m.remind()) {
+                let body = format!(
+                    "{} sans nouvelles depuis six mois. Toujours vrai ? Garder ou oublier, \
+                     dans Réglages > Agent > Mémoire.",
+                    if n == 1 {
+                        "Un fait retenu est".to_string()
+                    } else {
+                        format!("{n} faits retenus sont")
+                    }
+                );
+                let open = format!("'{}' agent", sibling("odysseus-reglages").display());
+                if let Ok(c) = Command::new(sibling("odysseus-notify"))
+                    .args(["--send", "Mémoire de l'Assistant", &body, "--lancer", &open])
+                    .spawn()
+                {
+                    children.push(c);
+                }
+            }
         }
 
         for (id, file) in fire {

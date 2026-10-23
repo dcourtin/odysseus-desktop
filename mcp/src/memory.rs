@@ -59,6 +59,9 @@ pub fn facts() -> Result<String, String> {
         out.push_str(&format!("- {}{}\n", f.text, meta(f)));
     }
     out.push_str("\nIl modifie ce fichier à la main ou dans Réglages > Agent > Mémoire.");
+    // Relus par l'agent : leur relecture par l'utilisateur attendra
+    let texts: Vec<&str> = facts.iter().map(|f| f.text.as_str()).collect();
+    let _ = m.touch(&texts);
     Ok(out)
 }
 
