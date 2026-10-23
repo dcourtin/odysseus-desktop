@@ -639,7 +639,11 @@ impl SeatHandler for Lock {
         if capability == Capability::Keyboard
             && let Some(k) = self.keyboard.take()
         {
-            k.release();
+            // Libéré une fois la distribution des événements finie : la
+            // répétition des touches (smithay-client-toolkit) retire son
+            // minuteur de calloop en disparaissant, ce qui plante si la
+            // boucle est en train de distribuer (clavier débranché)
+            self.loop_handle.insert_idle(move |_| k.release());
         }
     }
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
