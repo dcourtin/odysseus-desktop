@@ -108,10 +108,12 @@ const RECENT: usize = 3;
 const CHIP_ROW: f32 = 30.0;
 /// Applications proposées au plus pour ce qui est tapé
 const MAX_LAUNCH: usize = 3;
-/// En dessous, une application n'est pas proposée ; au-dessus de `STRONG`,
-/// un mot seul l'ouvre avec Entrée (début du nom, d'un mot du nom, sous-chaîne)
+/// En dessous, une application n'est pas proposée ; à partir de `STRONG`
+/// (le nom, ou un mot du nom, commence par ce qui est tapé), un mot seul
+/// l'ouvre avec Entrée. Rien n'est proposé avant deux lettres.
 const WEAK: i32 = 300;
-const STRONG: i32 = 500;
+const STRONG: i32 = 700;
+const MIN_QUERY: usize = 2;
 
 const SUGGESTIONS: [&str; 4] = [
     "Qu'est-ce qui chauffe en ce moment ?",
@@ -687,18 +689,40 @@ impl App {
     /// les meilleurs d'abord (score, indice dans `apps`)
     fn launch_matches(&self) -> Vec<(i32, usize)> {
         let q = self.input.trim();
-        if q.is_empty() || q.starts_with('?') || self.history.is_some() || self.job.is_some() {
+        if q.chars().count() < MIN_QUERY
+            || q.starts_with('?')
+            || self.history.is_some()
+            || self.job.is_some()
+        {
             return Vec::new();
         }
-        let mut scored: Vec<(i32, usize)> = self
-            .apps
-            .iter()
-            .enumerate()
-            .filter_map(|(i, a)| apps::score(q, a).filter(|s| *s >= WEAK).map(|s| (s, i)))
-            .collect();
-        scored.sort_by_key(|&(s, i)| (std::cmp::Reverse(s), !self.apps[i].is_odysseus()));
-        scored.truncate(MAX_LAUNCH);
-        scored
+        let matches = |query: &str, floor: i32| -> Vec<(i32, usize)> {
+            let mut scored: Vec<(i32, usize)> = self
+                .apps
+                .iter()
+                .enumerate()
+                .filter_map(|(i, a)| {
+                    apps::score(query, a)
+                        .filter(|s| *s >= floor)
+                        .map(|s| (s, i))
+                })
+                .collect();
+            scored.sort_by_key(|&(s, i)| (std::cmp::Reverse(s), !self.apps[i].is_odysseus()));
+            scored.truncate(MAX_LAUNCH);
+            scored
+        };
+        let whole = matches(q, WEAK);
+        if !whole.is_empty() {
+            return whole;
+        }
+        // « firefox rame depuis ce matin » : le premier mot désigne nettement une
+        // application, on la propose (Tab ou clic ; Entrée pose la question)
+        match q.split_whitespace().next() {
+            Some(first) if first.len() < q.len() && first.chars().count() >= MIN_QUERY => {
+                matches(first, STRONG)
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Un mot seul qui désigne nettement une application : Entrée l'ouvre
@@ -1484,7 +1508,18 @@ impl App {
 
     fn empty_state(&self, ui: &mut Ui, x: f32, top: f32, w: f32, bottom: f32) {
         let p = theme::palette();
-        let cy = top + (bottom - top) * 0.36;
+        // Ce qui s'étale sous le titre : suggestions, puis les conversations à reprendre
+        let needed = 74.0
+            + 2.0 * 50.0
+            + if self.recent.is_empty() {
+                0.0
+            } else {
+                12.0 + 28.0 + self.recent.len() as f32 * 34.0
+            }
+            + 8.0;
+        let cy = (top + (bottom - top) * 0.36)
+            .min(bottom - needed)
+            .max(top + 56.0);
         ui.icon(
             icon::SPARKLES,
             x + w / 2.0,
@@ -1573,7 +1608,7 @@ impl App {
         let mut rows: Vec<Vec<(char, String, f32, Hit)>> = Vec::new();
         let mut row_w = 0.0;
         let mut push = |glyph: char, label: String, hit: Hit| {
-            let label = ui.truncate(&label, 12.0, 230.0);
+            let label = ui.truncate(&label, 12.0, 200.0);
             let w = ui.measure(&label, 12.0) + 52.0;
             if rows.is_empty() || row_w + w > max_w {
                 rows.push(Vec::new());
@@ -1731,10 +1766,14 @@ impl App {
                 self.apps[i].name
             ),
             (None, Some((_, label, ..))) => {
-                format!(
-                    "Entrée : envoyer · Tab : {} · Échap : fermer",
-                    label.to_lowercase()
-                )
+                // « Ouvrir Firefox » → « ouvrir Firefox » : le nom garde sa casse
+                let mut chars = label.chars();
+                let verb: String = chars
+                    .next()
+                    .map(|c| c.to_lowercase().collect::<String>())
+                    .unwrap_or_default()
+                    + chars.as_str();
+                format!("Entrée : envoyer · Tab : {verb} · Échap : fermer")
             }
             _ => "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre".into(),
         };
