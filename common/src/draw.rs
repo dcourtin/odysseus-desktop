@@ -233,7 +233,9 @@ impl Canvas<'_> {
         if img.width == 0 || img.height == 0 || w < 1.0 || h < 1.0 {
             return;
         }
-        let r = radius.min(w / 2.0).min(h / 2.0);
+        // Rayon d'au moins un demi-pixel : à 0, la couverture des pixels
+        // intérieurs tomberait à 0,5 (image à moitié transparente)
+        let r = radius.max(0.5).min(w / 2.0).min(h / 2.0);
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0 - r, h / 2.0 - r);
         let (sx, sy) = (img.width as f32 / w, img.height as f32 / h);
@@ -513,5 +515,29 @@ impl Text {
             }
             pen += m.advance_width;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opaque_image_without_radius() {
+        let img = Image {
+            width: 2,
+            height: 2,
+            data: [200u8, 100, 50, 255].repeat(4),
+        };
+        let mut buf = vec![0u8; 8 * 8 * 4];
+        let mut c = Canvas {
+            buf: &mut buf,
+            width: 8,
+            height: 8,
+        };
+        c.image(&img, 2.0, 2.0, 4.0, 4.0, 0.0);
+        // Pixel intérieur : l'image telle quelle, opaque
+        let i = ((3 * 8 + 3) * 4) as usize;
+        assert_eq!(&buf[i..i + 4], &[200, 100, 50, 255]);
     }
 }
