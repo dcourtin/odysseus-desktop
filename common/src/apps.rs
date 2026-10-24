@@ -15,6 +15,19 @@ pub struct App {
     pub terminal: bool,
     /// Nom d'icône (Icon=) ou chemin
     pub icon: String,
+    /// Actions proposées par l'appli (sections [Desktop Action …]) : « Nouvelle
+    /// fenêtre », « Nouvelle note »…
+    pub actions: Vec<AppAction>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppAction {
+    /// Clé de la section ([Desktop Action clé])
+    pub key: String,
+    pub name: String,
+    pub exec: String,
+    /// Icône propre à l'action ; vide : celle de l'appli
+    pub icon: String,
 }
 
 impl App {
@@ -58,7 +71,8 @@ fn clean_exec(exec: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn parse(content: &str) -> Option<App> {
+/// Lit un fichier .desktop (sans son identifiant, à remplir par l'appelant)
+pub fn parse(content: &str) -> Option<App> {
     let lang = std::env::var("LANG").unwrap_or_default();
     let short = lang.split(['_', '.']).next().unwrap_or("").to_string();
     let (mut name, mut name_loc, mut comment, mut comment_loc) = (None, None, None, None);
@@ -66,19 +80,41 @@ fn parse(content: &str) -> Option<App> {
     let mut icon = String::new();
     let mut wm_class = String::new();
     let mut in_entry = false;
+    // Actions annoncées (Actions=) et sections [Desktop Action …] : (clé, nom, nom traduit, exec, icône)
+    let mut listed: Vec<String> = Vec::new();
+    let mut sections: Vec<(String, Option<String>, Option<String>, Option<String>, String)> =
+        Vec::new();
     for line in content.lines() {
         let line = line.trim();
         if line.starts_with('[') {
             in_entry = line == "[Desktop Entry]";
-            continue;
-        }
-        if !in_entry {
+            if let Some(k) = line
+                .strip_prefix("[Desktop Action ")
+                .and_then(|r| r.strip_suffix(']'))
+            {
+                sections.push((k.trim().to_string(), None, None, None, String::new()));
+            } else if !in_entry {
+                // Autre section : on n'en lit rien
+                sections.push((String::new(), None, None, None, String::new()));
+            }
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         let (key, value) = (key.trim(), value.trim().to_string());
+        if !in_entry {
+            if let Some(sec) = sections.last_mut().filter(|s| !s.0.is_empty()) {
+                match key {
+                    "Name" => sec.1 = Some(value),
+                    "Exec" => sec.3 = Some(value),
+                    "Icon" => sec.4 = value,
+                    k if !short.is_empty() && k == format!("Name[{short}]") => sec.2 = Some(value),
+                    _ => {}
+                }
+            }
+            continue;
+        }
         match key {
             "Name" => name = Some(value),
             "Comment" => comment = Some(value),
@@ -88,6 +124,14 @@ fn parse(content: &str) -> Option<App> {
             "Type" => kind = Some(value),
             "Terminal" => terminal = value == "true",
             "NoDisplay" | "Hidden" => hidden |= value == "true",
+            "Actions" => {
+                listed = value
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|k| !k.is_empty())
+                    .map(String::from)
+                    .collect()
+            }
             k if !short.is_empty() && k == format!("Name[{short}]") => name_loc = Some(value),
             k if !short.is_empty() && k == format!("Comment[{short}]") => comment_loc = Some(value),
             _ => {}
@@ -96,6 +140,19 @@ fn parse(content: &str) -> Option<App> {
     if hidden || kind.as_deref() != Some("Application") {
         return None;
     }
+    // Seules les actions annoncées comptent, dans leur ordre
+    let actions = listed
+        .iter()
+        .filter_map(|k| {
+            let (key, name, name_loc, exec, icon) = sections.iter().find(|s| &s.0 == k)?;
+            Some(AppAction {
+                key: key.clone(),
+                name: name_loc.clone().or(name.clone())?,
+                exec: clean_exec(exec.as_deref()?),
+                icon: icon.clone(),
+            })
+        })
+        .collect();
     Some(App {
         id: String::new(),
         wm_class,
@@ -104,6 +161,7 @@ fn parse(content: &str) -> Option<App> {
         exec: clean_exec(&exec?),
         terminal,
         icon,
+        actions,
     })
 }
 
@@ -161,6 +219,7 @@ pub fn with_automatisms(mut list: Vec<App>) -> Vec<App> {
             exec: format!("'{}' lancer '{}'", exe.display(), a.id),
             terminal: false,
             icon: String::new(),
+            actions: Vec::new(),
         });
     }
     list
@@ -181,6 +240,29 @@ impl App {
             self.exec.clone()
         }
     }
+}
+
+/// Appli d'une fenêtre (son app_id Wayland) : par identifiant, classe de
+/// fenêtre ou commande (Dock, roue)
+pub fn for_window(app_id: &str, apps: &[App]) -> Option<usize> {
+    let key = app_id.to_lowercase();
+    if key.is_empty() {
+        return None;
+    }
+    let last = |s: &str| s.rsplit('.').next().unwrap_or(s).to_lowercase();
+    apps.iter()
+        .position(|a| a.id.to_lowercase() == key)
+        .or_else(|| apps.iter().position(|a| a.wm_class.to_lowercase() == key))
+        .or_else(|| apps.iter().position(|a| last(&a.id) == key))
+        .or_else(|| {
+            apps.iter().position(|a| {
+                a.exec
+                    .split_whitespace()
+                    .next()
+                    .and_then(|c| c.rsplit('/').next())
+                    .is_some_and(|c| c.to_lowercase() == key)
+            })
+        })
 }
 
 /// Score de correspondance (plus haut = meilleur), None si aucune.

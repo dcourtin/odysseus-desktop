@@ -375,6 +375,27 @@ impl Odysseus {
     }
 
     /// Lance un programme d'odysseus installé à côté du compositeur.
+    /// Ouvre la roue de raccourcis autour du pointeur (position dans son écran)
+    pub fn open_wheel(&self) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let loc = pointer.current_location();
+        let origin = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o))
+            .map(|g| g.to_f64())
+            .find(|g| g.contains(loc))
+            .map(|g| g.loc)
+            .unwrap_or_default();
+        let (x, y) = (loc.x - origin.x, loc.y - origin.y);
+        self.spawn_sibling(
+            "odysseus-roue",
+            &["--x", &format!("{x:.0}"), "--y", &format!("{y:.0}")],
+        );
+    }
+
     pub fn spawn_sibling(&self, name: &str, args: &[&str]) {
         let path = std::env::current_exe()
             .ok()

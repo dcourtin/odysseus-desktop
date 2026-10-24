@@ -10,6 +10,7 @@ mod agents;
 mod automatismes;
 mod fonds;
 mod maj;
+mod roue;
 mod system;
 mod trousseau;
 
@@ -194,6 +195,7 @@ enum Page {
     Energie,
     Raccourcis,
     Dock,
+    Roue,
     Reception,
     Automatismes,
     Trousseau,
@@ -216,7 +218,7 @@ const WIZARD: [Option<Page>; 7] = [
 /// Pied de page de l'accueil (navigation)
 const FOOTER_H: f32 = 72.0;
 
-const PAGES: [Page; 13] = [
+const PAGES: [Page; 14] = [
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
@@ -224,6 +226,7 @@ const PAGES: [Page; 13] = [
     Page::Energie,
     Page::Raccourcis,
     Page::Dock,
+    Page::Roue,
     Page::Reception,
     Page::Automatismes,
     Page::Trousseau,
@@ -242,6 +245,7 @@ impl Page {
             Page::Energie => ("Énergie", icon::BATTERY_CHARGING),
             Page::Raccourcis => ("Raccourcis", icon::COMMAND),
             Page::Dock => ("Dock", icon::APP),
+            Page::Roue => ("Roue", icon::CIRCLE_DOT),
             Page::Reception => ("Réception", icon::INBOX),
             Page::Automatismes => ("Automatismes", icon::ZAP),
             Page::Trousseau => ("Trousseau", icon::LOCK),
@@ -260,6 +264,7 @@ impl Page {
             "energie" | "énergie" | "veille" => Page::Energie,
             "raccourcis" => Page::Raccourcis,
             "dock" => Page::Dock,
+            "roue" => Page::Roue,
             "reception" | "réception" | "localsend" => Page::Reception,
             "automatismes" => Page::Automatismes,
             "trousseau" | "secrets" => Page::Trousseau,
@@ -310,6 +315,13 @@ enum Hit {
     ScreenOff(u32),
     LockToggle,
     ReceptionToggle,
+    /// Réglages > Roue : choisir une place, y mettre un élément du catalogue,
+    /// la vider, la déplacer, reprendre les favoris du Dock
+    RoueSlot(usize),
+    RoueAdd(usize),
+    RoueRemove,
+    RoueMove(i8),
+    RoueReset,
     Suspend(u32),
     DockHide(&'static str),
     DockSize(u32),
@@ -382,6 +394,8 @@ struct App {
     settings: Settings,
     /// Thème personnalisé (Apparence), tel qu'enregistré
     custom: theme::Custom,
+    /// Page Roue, chargée à son ouverture
+    roue: Option<roue::RouePage>,
     /// Agent du bureau : ~/.config/odysseus/agent.json (modifiable à la main)
     agent: common::agent::AgentConfig,
     screen: Option<Screen>,
@@ -570,6 +584,7 @@ fn main() {
         wizard: std::env::args().any(|a| a == "--accueil").then_some(0),
         settings: Settings::load(),
         custom: theme::Custom::load(),
+        roue: None,
         agent: common::agent::AgentConfig::load(),
         screen: system::screen(),
         night: system::night_mode(),
@@ -607,6 +622,9 @@ fn main() {
     app.about = about(&app.screen);
     if app.page == Page::Agent {
         app.agent_status = agents::status();
+    }
+    if app.page == Page::Roue {
+        app.roue = Some(roue::RouePage::load());
     }
     app.load_thumbs();
     // Fonds d'odysseus pas encore calculés : un fil, l'un après l'autre
@@ -1076,6 +1094,9 @@ impl App {
         if p == Page::Trousseau {
             self.refresh_keyrings();
         }
+        if p == Page::Roue {
+            self.roue = Some(roue::RouePage::load());
+        }
         if p == Page::MisesAJour {
             self.updates.refresh();
         }
@@ -1261,6 +1282,15 @@ impl App {
             Hit::LockToggle => {
                 self.settings.lock_on_idle = !self.settings.lock_on_idle;
                 self.save();
+            }
+            Hit::RoueSlot(_)
+            | Hit::RoueAdd(_)
+            | Hit::RoueRemove
+            | Hit::RoueMove(_)
+            | Hit::RoueReset => {
+                if let Some(msg) = self.roue.as_mut().and_then(|r| r.click(&hit)) {
+                    self.toast(msg);
+                }
             }
             Hit::ReceptionToggle => {
                 self.settings.reception = !self.settings.reception;
@@ -1564,6 +1594,10 @@ impl App {
             Page::Energie => self.page_energie(ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(ui, cx, top, cw),
             Page::Dock => self.page_dock(ui, cx, top, cw),
+            Page::Roue => match self.roue.as_ref() {
+                Some(r) => r.draw(ui, cx, top, cw),
+                None => top,
+            },
             Page::Reception => self.page_reception(ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(ui, cx, top, cw),
             Page::Trousseau => self.page_trousseau(ui, cx, top, cw),
@@ -1600,6 +1634,9 @@ impl App {
             p.text_dim,
         );
         let mut y = 88.0 + t;
+        // Lignes resserrées quand la fenêtre est trop basse pour toutes les pages
+        let step = ((self.height as f32 - y - 8.0) / PAGES.len() as f32).clamp(30.0, 40.0);
+        let row = step - 2.0;
         for page in PAGES {
             let (label, glyph) = page.info();
             let selected = page == self.page;
@@ -1609,24 +1646,24 @@ impl App {
                     10.0,
                     y,
                     SIDEBAR_W - 20.0,
-                    38.0,
+                    row,
                     8.0,
                     p.accent.with_alpha(0.2),
                 );
             } else if hovered {
-                ui.rounded(10.0, y, SIDEBAR_W - 20.0, 38.0, 8.0, p.ink(0.05));
+                ui.rounded(10.0, y, SIDEBAR_W - 20.0, row, 8.0, p.ink(0.05));
             }
             // Icônes monochromes, comme dans la barre : l'accent pour la page ouverte
             let icon_color = if selected { p.accent } else { p.text_soft() };
-            ui.icon(glyph, 32.0, y + 19.0, 16.0, icon_color);
+            ui.icon(glyph, 32.0, y + row / 2.0, 16.0, icon_color);
             let font_color = if selected { p.text } else { p.text_soft() };
             if selected {
-                ui.bold_text(label, 54.0, y, 38.0, 13.5, font_color);
+                ui.bold_text(label, 54.0, y, row, 13.5, font_color);
             } else {
-                ui.text(label, 54.0, y, 38.0, 13.5, font_color);
+                ui.text(label, 54.0, y, row, 13.5, font_color);
             }
-            ui.hit((10.0, y, SIDEBAR_W - 20.0, 38.0), Hit::Page(page));
-            y += 40.0;
+            ui.hit((10.0, y, SIDEBAR_W - 20.0, row), Hit::Page(page));
+            y += step;
         }
     }
 

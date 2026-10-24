@@ -56,6 +56,30 @@ applis ouvertes qui n'en font pas partie, et la corbeille.
 - **Réglages > Dock** : quand le masquer (quand une fenêtre passe dessous,
   toujours, jamais) et la taille des icônes.
 
+## La roue
+
+Huit raccourcis en cercle, qui s'ouvrent là où se trouve la souris : plus besoin
+d'aller jusqu'au Dock.
+
+- **L'ouvrir** : Super+R, un clic du milieu sur le bureau, ou Super + clic du
+  milieu n'importe où (au-dessus d'une fenêtre, le clic ne lui parvient pas).
+- **Choisir** : un clic sur une place, ou au clavier les chiffres 1 à 8
+  (la place 1 est en haut, puis dans le sens des aiguilles d'une montre),
+  les flèches et Entrée. Échap, un clic au centre ou à côté la ferme.
+- **Une appli déjà ouverte** (un point sous son icône) revient au premier plan ;
+  si sa fenêtre est déjà devant, c'est la suivante.
+- **Ce qu'on y met** (Réglages > Roue) : des applications, des actions
+  d'applications (comme « Nouvelle note » de Notes) et des entrées proposées par
+  les applis. Les deux dernières portent un petit point d'accent. Une place vide
+  ouvre Réglages > Roue. Sans réglage, la roue reprend les favoris du Dock.
+- **Pour les applis** : une appli propose une entrée en déposant un fichier
+  .desktop (Name, Exec, Icon, Comment) dans `~/.local/share/odysseus/roue` ou
+  `/usr/share/odysseus/roue`, ou par
+  `odysseus-roue proposer --id ID --nom NOM --commande CMD [--icone I] [--description D]`
+  (une notification vous prévient ; `odysseus-roue retirer ID` la reprend,
+  `odysseus-roue liste` montre tout). Une proposition n'entre jamais seule dans
+  la roue : c'est vous qui la placez, dans Réglages > Roue.
+
 ## Fenêtres et bureaux
 
 - **Les trois boutons**, en haut à gauche de chaque fenêtre : fermer, réduire,
@@ -393,7 +417,7 @@ quand on veut : Réglages > À propos > « Revoir l'accueil ».
 Apparence (trois thèmes d'odysseus, ou le vôtre : base sombre ou claire, accent et fond parmi des teintes méditerranéennes ; le texte, les panneaux et les liserés s'accordent d'eux-mêmes, et toucher un choix le met en vigueur sur tout le bureau), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
-Raccourcis, Dock, Réception (fichiers envoyés depuis vos autres appareils, voir plus haut), Automatismes, Trousseau, Mises à jour, Agent, À propos.
+Raccourcis, Dock, Roue (les huit places de la roue, voir plus haut), Réception (fichiers envoyés depuis vos autres appareils, voir plus haut), Automatismes, Trousseau, Mises à jour, Agent, À propos.
 
 ## Verrouillage et énergie
 

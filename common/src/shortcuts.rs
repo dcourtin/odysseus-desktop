@@ -13,6 +13,7 @@ pub const LEFT: &[Section] = &[
         &[
             (&["Super", "Entrée"], "Terminal"),
             (&["Super", "Espace"], "Lanceur"),
+            (&["Super", "R"], "Roue (aussi : clic du milieu sur le bureau)"),
             (&["Super", "Q"], "Fermer la fenêtre"),
             (&["Super", "F"], "Agrandir / restaurer"),
             (&["Super", "Tab"], "Fenêtre suivante"),

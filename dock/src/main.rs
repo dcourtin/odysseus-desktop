@@ -208,26 +208,9 @@ fn save_pinned(pinned: &[String]) {
     }
 }
 
-/// Appli d'une fenêtre : par identifiant, classe de fenêtre ou commande
+/// Appli d'une fenêtre (voir `apps::for_window`)
 fn app_index(app_id: &str, apps: &[App]) -> Option<usize> {
-    let key = app_id.to_lowercase();
-    if key.is_empty() {
-        return None;
-    }
-    let last = |s: &str| s.rsplit('.').next().unwrap_or(s).to_lowercase();
-    apps.iter()
-        .position(|a| a.id.to_lowercase() == key)
-        .or_else(|| apps.iter().position(|a| a.wm_class.to_lowercase() == key))
-        .or_else(|| apps.iter().position(|a| last(&a.id) == key))
-        .or_else(|| {
-            apps.iter().position(|a| {
-                a.exec
-                    .split_whitespace()
-                    .next()
-                    .and_then(|c| c.rsplit('/').next())
-                    .is_some_and(|c| c.to_lowercase() == key)
-            })
-        })
+    common::apps::for_window(app_id, apps)
 }
 
 fn parse_windows(json: &str) -> Vec<Win> {

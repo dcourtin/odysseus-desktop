@@ -1,0 +1,15 @@
+[package]
+name = "roue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "odysseus-roue : roue de raccourcis autour du pointeur, et interface des applis pour y proposer des entrées"
+
+[[bin]]
+name = "odysseus-roue"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+smithay-client-toolkit.workspace = true
+serde_json.workspace = true

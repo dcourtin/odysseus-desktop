@@ -12,6 +12,7 @@ pub mod ipc;
 pub mod memory;
 pub mod net;
 pub mod settings;
+pub mod roue;
 pub mod shortcuts;
 pub mod stats;
 pub mod sysinfo;

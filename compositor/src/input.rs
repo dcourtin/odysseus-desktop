@@ -22,6 +22,7 @@ use crate::{
 /// Codes evdev des boutons gauche et droit
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
 
 /// Actions déclenchées par les raccourcis du compositeur
 #[derive(Clone, Copy, Debug)]
@@ -48,6 +49,8 @@ enum Action {
     Shortcuts,
     /// Super+A : panneau de l'Assistant
     Assistant,
+    /// Super+R : roue de raccourcis au pointeur
+    Wheel,
     /// Super+← / → / ↑ : ranger la fenêtre active ; Super+↓ : la restaurer
     Snap(crate::snap::Zone),
     Unsnap,
@@ -162,6 +165,7 @@ impl Odysseus {
                                 Keysym::l | Keysym::L => Some(Action::Lock),
                                 Keysym::k | Keysym::K => Some(Action::Shortcuts),
                                 Keysym::a | Keysym::A => Some(Action::Assistant),
+                                Keysym::r | Keysym::R => Some(Action::Wheel),
                                 Keysym::Left => Some(Action::Snap(crate::snap::Zone::Left)),
                                 Keysym::Right => Some(Action::Snap(crate::snap::Zone::Right)),
                                 Keysym::Up => Some(Action::Snap(crate::snap::Zone::Top)),
@@ -231,6 +235,23 @@ impl Odysseus {
                     );
                     pointer.frame(self);
                     return;
+                }
+
+                // Roue : clic du milieu sur le bureau, ou Super + clic du milieu partout
+                // (le clic n'est alors pas transmis à la fenêtre)
+                if button == BTN_MIDDLE
+                    && ButtonState::Pressed == button_state
+                    && !pointer.is_grabbed()
+                {
+                    let loc = pointer.current_location();
+                    let on_desktop = self.focusable_layer_at(loc).is_none()
+                        && self.space.element_under(loc).is_none()
+                        && self.titlebar_under(loc).is_none()
+                        && self.edge_under(loc).is_none();
+                    if on_desktop || self.mod_key.held(&keyboard.modifier_state()) {
+                        self.open_wheel();
+                        return;
+                    }
                 }
 
                 // Clic sur une couche (barre, lanceur) : pas de changement de fenêtre active
@@ -415,6 +436,7 @@ impl Odysseus {
             // Super+A : la bulle arrive avec le contexte (fenêtre active, sélection…)
             // et se place près de la fenêtre
             Action::Assistant => self.spawn_sibling("odysseus-assistant", &["--contexte"]),
+            Action::Wheel => self.open_wheel(),
             Action::Snap(zone) => {
                 if let Some(window) = self.focused_window() {
                     self.snap_window(&window, zone);
