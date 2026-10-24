@@ -184,6 +184,8 @@ fn main() {
 
     // Portail d'apparence : Firefox et GTK suivent le thème clair ou sombre
     let portal = portal::Portal::connect();
+    // Police et couleurs d'odysseus pour les applis tierces (à jour après une mise à jour d'odysseus)
+    common::accord::apply();
     if let Some(fd) = portal.as_ref().map(|p| p.fd()) {
         handle
             .insert_source(
@@ -221,6 +223,8 @@ fn main() {
             |_, fd, app| {
                 theme::drain(fd.as_fd());
                 if theme::reload() {
+                    // Applis tierces (GTK, Firefox) : couleurs du nouveau thème
+                    common::accord::apply();
                     app.draw_banners();
                     app.redraw_center();
                     if let Some(portal) = app.portal.as_ref() {

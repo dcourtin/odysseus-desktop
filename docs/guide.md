@@ -419,6 +419,22 @@ confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit)
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
 Raccourcis, Dock, Roue (les huit places de la roue, voir plus haut), Réception (fichiers envoyés depuis vos autres appareils, voir plus haut), Automatismes, Trousseau, Mises à jour, Agent, À propos.
 
+## Les applis d'ailleurs (Firefox, Obsidian…)
+
+Elles ne dessinent pas avec odysseus, mais suivent ce qu'il leur donne :
+
+- **La police** : Inter, celle du bureau, est la police du système
+  (`~/.config/fontconfig/conf.d/50-odysseus.conf`) et celle de GTK.
+- **Les couleurs** : celles du thème, y compris le vôtre, passent aux applis GTK
+  et à Firefox (thème « Système », par défaut) : barre d'onglets, barre d'adresse,
+  menus, dialogues. Le fichier `~/.config/gtk-3.0/odysseus.css` est réécrit à
+  chaque changement de thème ; vos propres règles vont dans `gtk.css`, après sa
+  ligne @import. Pour Firefox, odysseus ajoute à chaque profil une préférence
+  (`widget.gtk.libadwaita-colors.enabled`, dans `user.js`) sans laquelle il
+  garderait ses couleurs à lui ; la retirer de `user.js` les lui rend.
+- **Clair ou sombre, et la couleur d'accent** : aussitôt, même ouvertes. Le
+  reste se voit à leur prochain lancement.
+
 ## Verrouillage et énergie
 
 Super+L verrouille. Après 10 minutes d'inactivité, l'écran s'éteint et la session
