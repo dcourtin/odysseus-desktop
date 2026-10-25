@@ -320,12 +320,17 @@ enum Hit {
     LockToggle,
     ReceptionToggle,
     /// Réglages > Roue : choisir une place, y mettre un élément du catalogue,
-    /// la vider, la déplacer, reprendre les favoris du Dock
+    /// la vider, la déplacer, reprendre les favoris du Dock ; en faire un
+    /// dossier, l'ouvrir, en revenir, le renommer
     RoueSlot(usize),
     RoueAdd(usize),
     RoueRemove,
     RoueMove(i8),
     RoueReset,
+    RoueFolder,
+    RoueOpen,
+    RoueBack,
+    RoueRename,
     Suspend(u32),
     DockHide(&'static str),
     DockSize(u32),
@@ -1291,7 +1296,11 @@ impl App {
             | Hit::RoueAdd(_)
             | Hit::RoueRemove
             | Hit::RoueMove(_)
-            | Hit::RoueReset => {
+            | Hit::RoueReset
+            | Hit::RoueFolder
+            | Hit::RoueOpen
+            | Hit::RoueBack
+            | Hit::RoueRename => {
                 if let Some(msg) = self.roue.as_mut().and_then(|r| r.click(&hit)) {
                     self.toast(msg);
                 }
@@ -1459,6 +1468,15 @@ impl App {
     }
 
     fn key(&mut self, event: KeyEvent) {
+        // Nom d'un dossier de la roue en cours de saisie
+        if self.page == Page::Roue
+            && let Some(r) = self.roue.as_mut().filter(|r| r.renaming())
+        {
+            if let Some(msg) = r.key(&event) {
+                self.toast(msg);
+            }
+            return self.draw();
+        }
         match event.keysym {
             Keysym::q | Keysym::w if self.modifiers.ctrl => self.exit = true,
             Keysym::Escape if self.confirm.is_some() => self.revert_mode(),

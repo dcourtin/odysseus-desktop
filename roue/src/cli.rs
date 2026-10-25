@@ -77,16 +77,24 @@ fn list() {
     let catalog = roue::catalog(&apps);
     let wheel = roue::load(&apps);
     println!("Roue (depuis le haut, sens des aiguilles d'une montre) :");
+    let label = |slot: &roue::Slot| {
+        catalog
+            .iter()
+            .find(|it| &it.slot == slot)
+            .map(|it| format!("{} ({})", it.name, slot.to_text()))
+            .unwrap_or_else(|| format!("{} (introuvable)", slot.to_text()))
+    };
     for (i, place) in wheel.iter().enumerate() {
-        let label = match place {
-            None => "—".to_string(),
-            Some(slot) => catalog
-                .iter()
-                .find(|it| &it.slot == slot)
-                .map(|it| format!("{} ({})", it.name, slot.to_text()))
-                .unwrap_or_else(|| format!("{} (introuvable)", slot.to_text())),
-        };
-        println!("  {}. {label}", i + 1);
+        match place {
+            None => println!("  {}. —", i + 1),
+            Some(roue::Slot::Dossier(f)) => {
+                println!("  {}. Dossier « {} »", i + 1, f.name);
+                for (j, slot) in f.filled().enumerate() {
+                    println!("       {}. {}", j + 1, label(slot));
+                }
+            }
+            Some(slot) => println!("  {}. {}", i + 1, label(slot)),
+        }
     }
     let proposals = roue::proposals();
     if !proposals.is_empty() {

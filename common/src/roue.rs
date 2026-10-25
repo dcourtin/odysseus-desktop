@@ -11,9 +11,14 @@
 //!   `/usr/share`…), ou écrit par `odysseus-roue proposer`. Une proposition
 //!   n'entre jamais seule dans la roue : l'utilisateur l'y place dans Réglages.
 //!
+//! - un dossier : il ouvre un second anneau autour de la roue, avec jusqu'à
+//!   huit places à lui (applications, actions, propositions ; pas de dossier
+//!   dans un dossier).
+//!
 //! Fichier `~/.config/odysseus/roue` : une ligne par place, dans le sens des
 //! aiguilles d'une montre depuis le haut — « app:ID », « action:ID:CLÉ »,
-//! « entree:ID » ou « - » (place vide). Sans fichier : les favoris du Dock.
+//! « entree:ID », « dossier:NOM » ou « - » (place vide). Les places d'un
+//! dossier suivent sa ligne, en retrait. Sans fichier : les favoris du Dock.
 
 use std::path::PathBuf;
 
@@ -27,6 +32,28 @@ pub enum Slot {
     App(String),
     Action(String, String),
     Entree(String),
+    Dossier(Box<Folder>),
+}
+
+/// Dossier : un nom et ses places, ouvertes en second anneau
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Folder {
+    pub name: String,
+    pub places: [Option<Slot>; SLOTS],
+}
+
+impl Folder {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            places: Default::default(),
+        }
+    }
+
+    /// Places remplies, dans l'ordre
+    pub fn filled(&self) -> impl Iterator<Item = &Slot> {
+        self.places.iter().flatten()
+    }
 }
 
 impl Slot {
@@ -40,6 +67,7 @@ impl Slot {
                 (!id.is_empty() && !key.is_empty()).then(|| Slot::Action(id.into(), key.into()))
             }
             "entree" if !rest.is_empty() => Some(Slot::Entree(rest.into())),
+            "dossier" if !rest.is_empty() => Some(Slot::Dossier(Box::new(Folder::new(rest)))),
             _ => None,
         }
     }
@@ -49,6 +77,21 @@ impl Slot {
             Slot::App(id) => format!("app:{id}"),
             Slot::Action(id, key) => format!("action:{id}:{key}"),
             Slot::Entree(id) => format!("entree:{id}"),
+            Slot::Dossier(f) => format!("dossier:{}", f.name),
+        }
+    }
+
+    pub fn folder(&self) -> Option<&Folder> {
+        match self {
+            Slot::Dossier(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn folder_mut(&mut self) -> Option<&mut Folder> {
+        match self {
+            Slot::Dossier(f) => Some(f),
+            _ => None,
         }
     }
 }
@@ -61,12 +104,34 @@ pub fn config_path() -> Option<PathBuf> {
 
 pub fn parse(text: &str) -> Wheel {
     let mut wheel: Wheel = Default::default();
-    let lines = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'));
-    for (place, line) in wheel.iter_mut().zip(lines) {
-        *place = Slot::parse(line);
+    // Place courante de la roue, et place suivante dans son dossier
+    let mut top: Option<usize> = None;
+    let mut inner = 0;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if raw.starts_with([' ', '\t']) {
+            // Place d'un dossier : jamais un dossier
+            let folder = top
+                .and_then(|t| wheel[t].as_mut())
+                .and_then(Slot::folder_mut);
+            if let Some(folder) = folder
+                && inner < SLOTS
+            {
+                folder.places[inner] = Slot::parse(line).filter(|s| s.folder().is_none());
+                inner += 1;
+            }
+            continue;
+        }
+        let next = top.map_or(0, |t| t + 1);
+        if next >= SLOTS {
+            break;
+        }
+        wheel[next] = Slot::parse(line);
+        top = Some(next);
+        inner = 0;
     }
     wheel
 }
@@ -74,11 +139,25 @@ pub fn parse(text: &str) -> Wheel {
 pub fn to_text(wheel: &Wheel) -> String {
     let mut out = String::from(
         "# Roue d'odysseus (Réglages > Roue) : une place par ligne, depuis le haut,\n\
-         # dans le sens des aiguilles d'une montre — app:ID, action:ID:CLÉ, entree:ID ou -\n",
+         # dans le sens des aiguilles d'une montre — app:ID, action:ID:CLÉ, entree:ID,\n\
+         # dossier:NOM (ses places suivent, en retrait) ou -\n",
     );
     for place in wheel {
         out.push_str(&place.as_ref().map_or("-".into(), Slot::to_text));
         out.push('\n');
+        if let Some(folder) = place.as_ref().and_then(Slot::folder) {
+            // Jusqu'à la dernière place remplie
+            let n = folder
+                .places
+                .iter()
+                .rposition(Option::is_some)
+                .map_or(0, |i| i + 1);
+            for p in &folder.places[..n] {
+                out.push_str("  ");
+                out.push_str(&p.as_ref().map_or("-".into(), Slot::to_text));
+                out.push('\n');
+            }
+        }
     }
     out
 }
@@ -113,7 +192,9 @@ pub fn default(apps: &[App]) -> Wheel {
         })
         .unwrap_or_else(|| FALLBACK.iter().map(|s| s.to_string()).collect());
     let mut wheel: Wheel = Default::default();
-    let present = pinned.into_iter().filter(|id| apps.iter().any(|a| &a.id == id));
+    let present = pinned
+        .into_iter()
+        .filter(|id| apps.iter().any(|a| &a.id == id));
     for (place, id) in wheel.iter_mut().zip(present) {
         *place = Some(Slot::App(id));
     }
@@ -311,9 +392,27 @@ mod tests {
         w[0] = Some(Slot::App("odysseus-files".into()));
         w[2] = Some(Slot::Action("odysseus-notes".into(), "nouvelle".into()));
         w[7] = Some(Slot::Entree("com.exemple.capture".into()));
+        let mut art = Folder::new("Artcraft");
+        art.places[0] = Some(Slot::App("photocraft".into()));
+        art.places[2] = Some(Slot::App("vectorcraft".into()));
+        w[4] = Some(Slot::Dossier(Box::new(art)));
         assert_eq!(parse(&to_text(&w)), w);
-        assert_eq!(Slot::parse("action:org.a.B:new-window"),
-            Some(Slot::Action("org.a.B".into(), "new-window".into())));
+        // Pas de dossier dans un dossier ; un dossier vide reste un dossier
+        let w = parse("dossier:A\n  dossier:B\n  app:x\ndossier:Vide\napp:y\n");
+        let a = w[0].as_ref().and_then(Slot::folder).unwrap();
+        assert_eq!(a.places[0], None);
+        assert_eq!(a.places[1], Some(Slot::App("x".into())));
+        assert_eq!(
+            w[1].as_ref()
+                .and_then(Slot::folder)
+                .map(|f| f.filled().count()),
+            Some(0)
+        );
+        assert_eq!(w[2], Some(Slot::App("y".into())));
+        assert_eq!(
+            Slot::parse("action:org.a.B:new-window"),
+            Some(Slot::Action("org.a.B".into(), "new-window".into()))
+        );
         assert_eq!(Slot::parse("app:"), None);
         assert!(valid_id("com.exemple-1_x") && !valid_id("../x") && !valid_id(".x"));
     }

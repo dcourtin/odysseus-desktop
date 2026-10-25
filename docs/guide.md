@@ -66,12 +66,23 @@ d'aller jusqu'au Dock.
 - **Choisir** : un clic sur une place, ou au clavier les chiffres 1 à 8
   (la place 1 est en haut, puis dans le sens des aiguilles d'une montre),
   les flèches et Entrée. Échap, un clic au centre ou à côté la ferme.
+- **Les dossiers** : une place peut tenir un dossier (par exemple « Artcraft »
+  avec Photocraft et Vectorcraft). Son icône montre en petit ce qu'il contient.
+  Passer la souris dessus ouvre un second anneau autour de la roue, avec ses
+  places : on glisse jusqu'à l'appli et on clique (ou on relâche le clic du
+  milieu). Au clavier, son chiffre l'ouvre, puis les chiffres et les flèches
+  choisissent dans le dossier ; Échap referme le dossier, puis la roue.
 - **Une appli déjà ouverte** (un point sous son icône) revient au premier plan ;
   si sa fenêtre est déjà devant, c'est la suivante.
 - **Ce qu'on y met** (Réglages > Roue) : des applications, des actions
   d'applications (comme « Nouvelle note » de Notes) et des entrées proposées par
   les applis. Les deux dernières portent un petit point d'accent. Une place vide
   ouvre Réglages > Roue. Sans réglage, la roue reprend les favoris du Dock.
+- **Faire un dossier** (Réglages > Roue) : choisir une place, « En faire un
+  dossier » (ce que tenait la place y entre), taper son nom puis Entrée.
+  « Ouvrir » (ou un second clic sur le dossier) montre ses huit places, qu'on
+  remplit depuis la liste comme celles de la roue ; « Retour à la roue » en
+  sort, « Renommer » change son nom. Pas de dossier dans un dossier.
 - **Pour les applis** : une appli propose une entrée en déposant un fichier
   .desktop (Name, Exec, Icon, Comment) dans `~/.local/share/odysseus/roue` ou
   `/usr/share/odysseus/roue`, ou par

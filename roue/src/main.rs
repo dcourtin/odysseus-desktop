@@ -3,9 +3,11 @@
 //!
 //! Huit places en cercle, choisies dans Réglages > Roue : applications (un
 //! point signale celles qui sont ouvertes ; on ramène alors leur fenêtre),
-//! actions d'applications, entrées proposées par les applis. Clic sur une
-//! place, ou chiffres 1 à 8, flèches et Entrée ; Échap, clic au centre ou à
-//! côté pour fermer. Une place vide ouvre Réglages > Roue.
+//! actions d'applications, entrées proposées par les applis, dossiers. Un
+//! dossier ouvre un second anneau autour de la roue, à son survol ou à son
+//! choix. Clic sur une place, ou chiffres 1 à 8, flèches et Entrée ; Échap
+//! referme le dossier puis la roue, comme un clic au centre ou à côté. Une
+//! place vide ouvre Réglages > Roue.
 //!
 //! Arguments : `--x X --y Y` (position du pointeur sur l'écran, donnée par le
 //! compositeur) ; sans eux, la roue s'ouvre là où le pointeur entre.
@@ -22,7 +24,7 @@ use std::{
 use common::{
     apps::{self, App},
     draw::{Canvas, Image, Text},
-    roue::{self, Item, SLOTS},
+    roue::{self, Item, SLOTS, Slot},
     theme::{self, Rgba, icon},
 };
 use smithay_client_toolkit::{
@@ -65,6 +67,9 @@ const R_ITEMS: f32 = 100.0;
 const R_HOVER: f32 = 34.0;
 const ICON: f32 = 40.0;
 const R_CENTER: f32 = 36.0;
+/// Second anneau (dossier ouvert) : rayon des icônes et bord extérieur
+const R_RING_ITEMS: f32 = 196.0;
+const R_RING: f32 = 242.0;
 /// Écart minimal entre la roue et le bord de l'écran
 const EDGE: f32 = 16.0;
 /// Apparition : la roue grandit un peu en s'ouvrant
@@ -80,12 +85,16 @@ struct Place {
     /// Fenêtres de l'appli (identifiant, active) ; vide : pas ouverte
     windows: Vec<(u64, bool)>,
     icon: Option<Option<Image>>,
+    /// Dossier : son nom et ses places remplies (une place vide s'il n'en a pas)
+    folder: Option<(String, Vec<Place>)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Target {
     Center,
     Slot(usize),
+    /// Place du dossier ouvert
+    Inner(usize),
     Outside,
 }
 
@@ -105,6 +114,8 @@ struct Roue {
     /// Centre voulu (position du pointeur), avant mise à l'écart des bords
     anchor: Option<(f32, f32)>,
     hover: Option<Target>,
+    /// Dossier ouvert (place de la roue)
+    open: Option<usize>,
     /// Le pointeur a quitté le centre depuis l'ouverture (geste « appuyer,
     /// glisser, relâcher » du clic du milieu)
     travelled: bool,
@@ -175,25 +186,39 @@ fn windows() -> Vec<(u64, String, bool)> {
 fn places(apps: &[App]) -> Vec<Place> {
     let catalog = roue::catalog(apps);
     let wins = windows();
+    let place = |slot: Option<&Slot>| {
+        let item = slot.and_then(|s| catalog.iter().find(|it| &it.slot == s).cloned());
+        let windows = item
+            .as_ref()
+            .and_then(|it| it.app)
+            .map(|ai| {
+                wins.iter()
+                    .filter(|(_, app_id, _)| apps::for_window(app_id, apps) == Some(ai))
+                    .map(|(id, _, focused)| (*id, *focused))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Place {
+            item,
+            windows,
+            icon: None,
+            folder: None,
+        }
+    };
     roue::load(apps)
-        .into_iter()
-        .map(|slot| {
-            let item = slot.and_then(|s| catalog.iter().find(|it| it.slot == s).cloned());
-            let windows = item
-                .as_ref()
-                .and_then(|it| it.app)
-                .map(|ai| {
-                    wins.iter()
-                        .filter(|(_, app_id, _)| apps::for_window(app_id, apps) == Some(ai))
-                        .map(|(id, _, focused)| (*id, *focused))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Place {
-                item,
-                windows,
-                icon: None,
+        .iter()
+        .map(|slot| match slot.as_ref().and_then(Slot::folder) {
+            Some(f) => {
+                let mut inner: Vec<Place> = f.filled().map(|s| place(Some(s))).collect();
+                if inner.is_empty() {
+                    inner.push(place(None));
+                }
+                Place {
+                    folder: Some((f.name.clone(), inner)),
+                    ..place(None)
+                }
             }
+            None => place(slot.as_ref()),
         })
         .collect()
 }
@@ -251,6 +276,7 @@ fn main() {
         places: places(&apps),
         anchor,
         hover: None,
+        open: None,
         travelled: false,
         width: 0,
         height: 0,
@@ -288,7 +314,13 @@ impl Roue {
     fn center(&self) -> Option<(f32, f32)> {
         let (x, y) = self.anchor?;
         let (w, h) = (self.width as f32, self.height as f32);
-        let m = R_DISC + EDGE;
+        // Place pour le second anneau s'il y a un dossier
+        let outer = if self.places.iter().any(|p| p.folder.is_some()) {
+            R_RING
+        } else {
+            R_DISC
+        };
+        let m = outer + EDGE;
         // Place pour le nom sous la roue
         let below = 48.0;
         Some((
@@ -303,6 +335,24 @@ impl Roue {
         (cx + R_ITEMS * k * a.cos(), cy + R_ITEMS * k * a.sin())
     }
 
+    /// Angle (degrés depuis le haut) et nombre des places du dossier ouvert
+    fn ring(&self) -> Option<(f32, usize)> {
+        let i = self.open?;
+        let n = self.places.get(i)?.folder.as_ref()?.1.len();
+        Some((i as f32 * 360.0 / SLOTS as f32, n))
+    }
+
+    /// Centre de la place j du dossier ouvert : autour de l'angle du dossier
+    fn inner_pos(j: usize, (base, n): (f32, usize), (cx, cy): (f32, f32), k: f32) -> (f32, f32) {
+        let step = 360.0 / SLOTS as f32;
+        let deg = base + (j as f32 - (n as f32 - 1.0) / 2.0) * step;
+        let a = (deg - 90.0).to_radians();
+        (
+            cx + R_RING_ITEMS * k * a.cos(),
+            cy + R_RING_ITEMS * k * a.sin(),
+        )
+    }
+
     fn target(&self, x: f32, y: f32) -> Target {
         let Some((cx, cy)) = self.center() else {
             return Target::Outside;
@@ -312,12 +362,23 @@ impl Roue {
         if d <= R_CENTER {
             return Target::Center;
         }
-        if d > R_DISC {
-            return Target::Outside;
-        }
         // Angle depuis le haut, sens des aiguilles d'une montre
         let a = (dy.atan2(dx).to_degrees() + 90.0).rem_euclid(360.0);
         let step = 360.0 / SLOTS as f32;
+        if d > R_DISC {
+            // Dans le second anneau : la place du dossier la plus proche
+            let Some((base, n)) = self.ring().filter(|_| d <= R_RING) else {
+                return Target::Outside;
+            };
+            let first = base - (n as f32 - 1.0) / 2.0 * step;
+            let off = (a - first + step / 2.0).rem_euclid(360.0);
+            let j = (off / step) as usize;
+            return if j < n {
+                Target::Inner(j)
+            } else {
+                Target::Outside
+            };
+        }
         Target::Slot(((a + step / 2.0) / step) as usize % SLOTS)
     }
 
@@ -345,11 +406,33 @@ impl Roue {
         }
     }
 
+    /// Choix d'une place de la roue : un dossier s'ouvre, le reste se lance
     fn activate(&mut self, i: usize) {
+        if self.places.get(i).is_some_and(|p| p.folder.is_some()) {
+            self.open = Some(i);
+            self.hover = Some(Target::Inner(0));
+            return self.draw();
+        }
         self.exit = true;
-        let Some(place) = self.places.get(i) else {
-            return;
-        };
+        if let Some(place) = self.places.get(i) {
+            Self::launch(place);
+        }
+    }
+
+    /// Choix d'une place du dossier ouvert
+    fn activate_inner(&mut self, j: usize) {
+        let place = self
+            .open
+            .and_then(|i| self.places.get(i))
+            .and_then(|p| p.folder.as_ref())
+            .and_then(|f| f.1.get(j));
+        if let Some(place) = place {
+            self.exit = true;
+            Self::launch(place);
+        }
+    }
+
+    fn launch(place: &Place) {
         let Some(item) = place.item.as_ref() else {
             // Place vide : la remplir dans Réglages
             return Self::sibling("odysseus-reglages", &["roue"]);
@@ -372,8 +455,21 @@ impl Roue {
     }
 
     fn set_hover(&mut self, t: Option<Target>) {
-        if t != self.hover {
+        // Survoler un dossier l'ouvre, survoler une autre place le referme
+        let open = match t {
+            Some(Target::Slot(i)) => self.places[i].folder.is_some().then_some(i),
+            _ => self.open,
+        };
+        if t != self.hover || open != self.open {
             self.hover = t;
+            self.open = open;
+            self.draw();
+        }
+    }
+
+    fn close_folder(&mut self) {
+        if let Some(i) = self.open.take() {
+            self.hover = Some(Target::Slot(i));
             self.draw();
         }
     }
@@ -381,8 +477,43 @@ impl Roue {
     fn key(&mut self, event: KeyEvent) {
         // Chiffres de la rangée du haut par code physique (AZERTY compris)
         let code = event.raw_code;
-        if (2..=9).contains(&code) {
-            return self.activate((code - 2) as usize);
+        let digit = if (2..=9).contains(&code) {
+            Some((code - 2) as usize)
+        } else {
+            let k = event.keysym.raw();
+            (Keysym::KP_1.raw()..=Keysym::KP_8.raw())
+                .contains(&k)
+                .then(|| (k - Keysym::KP_1.raw()) as usize)
+        };
+        // Dossier ouvert : les touches vont à ses places
+        if let Some((_, n)) = self.ring() {
+            let current = match self.hover {
+                Some(Target::Inner(j)) => Some(j),
+                _ => None,
+            };
+            if let Some(j) = digit {
+                return self.activate_inner(j);
+            }
+            match event.keysym {
+                Keysym::Escape | Keysym::BackSpace => self.close_folder(),
+                Keysym::Return | Keysym::KP_Enter | Keysym::space => match current {
+                    Some(j) => self.activate_inner(j),
+                    None => self.close_folder(),
+                },
+                Keysym::Right | Keysym::Down | Keysym::Tab => {
+                    let j = current.map_or(0, |j| (j + 1) % n);
+                    self.set_hover(Some(Target::Inner(j)));
+                }
+                Keysym::Left | Keysym::Up | Keysym::ISO_Left_Tab => {
+                    let j = current.map_or(n - 1, |j| (j + n - 1) % n);
+                    self.set_hover(Some(Target::Inner(j)));
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(i) = digit {
+            return self.activate(i);
         }
         let current = match self.hover {
             Some(Target::Slot(i)) => Some(i),
@@ -390,9 +521,6 @@ impl Roue {
         };
         match event.keysym {
             Keysym::Escape => self.exit = true,
-            k if (Keysym::KP_1.raw()..=Keysym::KP_8.raw()).contains(&k.raw()) => {
-                self.activate((k.raw() - Keysym::KP_1.raw()) as usize)
-            }
             Keysym::Return | Keysym::KP_Enter | Keysym::space => match current {
                 Some(i) => self.activate(i),
                 None => self.exit = true,
@@ -415,6 +543,7 @@ impl Roue {
         }
         let s = self.scale.max(1) as f32;
         let center = self.center();
+        let ring = self.ring();
         let (w, h) = (self.width * s as u32, self.height * s as u32);
         let Ok((buffer, data)) =
             self.pool
@@ -437,7 +566,24 @@ impl Roue {
         if let Some((cx, cy)) = center {
             let k = 0.88 + 0.12 * ease;
             let (x, y, r) = (cx * s, cy * s, R_DISC * k * s);
-            c.shadow(x - r, y - r + 10.0 * s, 2.0 * r, 2.0 * r, r, 36.0 * s, 0.45);
+            // Dossier ouvert : un anneau autour de la roue
+            if ring.is_some() {
+                let ro = R_RING * k * s;
+                c.shadow(
+                    x - ro,
+                    y - ro + 10.0 * s,
+                    2.0 * ro,
+                    2.0 * ro,
+                    ro,
+                    36.0 * s,
+                    0.35,
+                );
+                c.fill_circle(x, y, ro, p.panel_border());
+                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.94));
+                c.fill_circle(x, y, r + 5.0 * s, p.ink(0.06));
+            } else {
+                c.shadow(x - r, y - r + 10.0 * s, 2.0 * r, 2.0 * r, r, 36.0 * s, 0.45);
+            }
             c.fill_circle(x, y, r, p.panel_border());
             c.fill_circle(x, y, r - s, p.panel.with_alpha(0.97));
             // Centre : fermer
@@ -456,66 +602,44 @@ impl Roue {
                 .icon(&mut c, icon::CLOSE, x, y, 16.0 * s, p.text_dim);
 
             let icon_px = (ICON * s).round() as u32;
+            let fonts = (&self.icons, &self.bold);
             for i in 0..SLOTS {
                 let (ix, iy) = Self::slot_pos(i, (cx, cy), k);
                 let (ix, iy) = (ix * s, iy * s);
-                if self.hover == Some(Target::Slot(i)) {
+                if self.hover == Some(Target::Slot(i)) || self.open == Some(i) {
                     c.fill_circle(ix, iy, R_HOVER * s, p.accent.with_alpha(0.22));
                 }
-                let place = &mut self.places[i];
-                let Some(item) = place.item.as_ref() else {
-                    c.fill_circle(ix, iy, 18.0 * s, p.ink(0.05));
-                    self.icons
-                        .icon(&mut c, icon::PLUS, ix, iy, 15.0 * s, p.ink(0.35));
-                    continue;
-                };
-                let img = place
-                    .icon
-                    .get_or_insert_with(|| common::icons::load(&item.icon, icon_px));
-                let half = ICON / 2.0 * s;
-                match img {
-                    Some(img) => c.image(img, ix - half, iy - half, 2.0 * half, 2.0 * half, 0.0),
-                    None => {
-                        // Sans icône : l'initiale sur une pastille de couleur
-                        let hash = item.name.bytes().map(|b| b as usize).sum::<usize>();
-                        c.fill_circle(
-                            ix,
-                            iy,
-                            half,
-                            Rgba::hex(ICON_COLORS[hash % ICON_COLORS.len()], 1.0),
-                        );
-                        let initial: String =
-                            item.name.chars().take(1).collect::<String>().to_uppercase();
-                        self.bold.draw_centered(
-                            &mut c,
-                            &initial,
-                            ix,
-                            iy - half,
-                            2.0 * half,
-                            18.0 * s,
-                            Rgba::hex(0x1d1916, 1.0),
-                        );
+                draw_place(&mut c, fonts, &mut self.places[i], ix, iy, s, icon_px);
+            }
+            if let (Some(ring), Some(open)) = (ring, self.open)
+                && let Some((_, inner)) = self.places[open].folder.as_mut()
+            {
+                for (j, place) in inner.iter_mut().enumerate() {
+                    let (ix, iy) = Self::inner_pos(j, ring, (cx, cy), k);
+                    let (ix, iy) = (ix * s, iy * s);
+                    if self.hover == Some(Target::Inner(j)) {
+                        c.fill_circle(ix, iy, R_HOVER * s, p.accent.with_alpha(0.22));
                     }
-                }
-                // Action ou proposition : petit repère dans le coin
-                if item.app.is_none() {
-                    c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, p.panel);
-                    c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, p.accent);
-                }
-                if !place.windows.is_empty() {
-                    c.fill_circle(ix, iy + half + 7.0 * s, 2.5 * s, p.text_dim);
+                    draw_place(&mut c, fonts, place, ix, iy, s, icon_px);
                 }
             }
 
             // Nom de la place survolée, sous la roue
+            let describe = |place: &Place| match (&place.folder, place.item.as_ref()) {
+                (Some((name, _)), _) => format!("{name} · dossier"),
+                (None, Some(it)) if it.app.is_none() && !it.detail.is_empty() => {
+                    format!("{} · {}", it.name, it.detail)
+                }
+                (None, Some(it)) => it.name.clone(),
+                (None, None) => "Choisir dans Réglages".to_string(),
+            };
             let label = match self.hover {
-                Some(Target::Slot(i)) => Some(match self.places[i].item.as_ref() {
-                    Some(it) if it.app.is_none() && !it.detail.is_empty() => {
-                        format!("{} · {}", it.name, it.detail)
-                    }
-                    Some(it) => it.name.clone(),
-                    None => "Choisir dans Réglages".to_string(),
-                }),
+                Some(Target::Slot(i)) => Some(describe(&self.places[i])),
+                Some(Target::Inner(j)) => self
+                    .open
+                    .and_then(|i| self.places[i].folder.as_ref())
+                    .and_then(|f| f.1.get(j))
+                    .map(describe),
                 Some(Target::Center) => Some("Fermer".to_string()),
                 _ => None,
             };
@@ -523,7 +647,8 @@ impl Roue {
                 let px = 13.5 * s;
                 let label = self.regular.truncate(&label, px, 360.0 * s);
                 let lw = self.regular.measure(&label, px) + 28.0 * s;
-                let (lx, ly, lh) = (x - lw / 2.0, y + r + 12.0 * s, 32.0 * s);
+                let below = if ring.is_some() { R_RING * k * s } else { r };
+                let (lx, ly, lh) = (x - lw / 2.0, y + below + 12.0 * s, 32.0 * s);
                 c.fill_rounded(lx, ly, lw, lh, lh / 2.0, p.panel_border());
                 c.fill_rounded(
                     lx + s,
@@ -547,6 +672,107 @@ impl Roue {
     }
 }
 
+/// Icône d'une place, centrée en (ix, iy) (pixels de l'écran)
+fn draw_place(
+    c: &mut Canvas,
+    (icons, bold): (&Text, &Text),
+    place: &mut Place,
+    ix: f32,
+    iy: f32,
+    s: f32,
+    icon_px: u32,
+) {
+    let p = theme::palette();
+    let half = ICON / 2.0 * s;
+    if let Some((_, inner)) = place.folder.as_mut() {
+        // Dossier : une pastille avec ses premières icônes en petit
+        c.fill_rounded(
+            ix - half,
+            iy - half,
+            2.0 * half,
+            2.0 * half,
+            12.0 * s,
+            p.accent.with_alpha(0.20),
+        );
+        let filled: Vec<&mut Place> = inner
+            .iter_mut()
+            .filter(|pl| pl.item.is_some())
+            .take(4)
+            .collect();
+        if filled.is_empty() {
+            icons.icon(c, icon::FOLDER, ix, iy, 20.0 * s, p.accent);
+            return;
+        }
+        // Grille de deux colonnes au plus, centrée dans la pastille
+        let mini = 15.0 * s;
+        let gap = 3.0 * s;
+        let cols = filled.len().min(2) as f32;
+        let rows = filled.len().div_ceil(2) as f32;
+        let x0 = ix - (cols * mini + (cols - 1.0) * gap) / 2.0;
+        let y0 = iy - (rows * mini + (rows - 1.0) * gap) / 2.0;
+        for (n, pl) in filled.into_iter().enumerate() {
+            let (col, row) = ((n % 2) as f32, (n / 2) as f32);
+            let mx = x0 + col * (mini + gap);
+            let my = y0 + row * (mini + gap);
+            let Some(item) = pl.item.as_ref() else {
+                continue;
+            };
+            match pl
+                .icon
+                .get_or_insert_with(|| common::icons::load(&item.icon, icon_px))
+            {
+                Some(img) => c.image(img, mx, my, mini, mini, 0.0),
+                None => c.fill_circle(
+                    mx + mini / 2.0,
+                    my + mini / 2.0,
+                    mini / 2.0,
+                    initial_color(&item.name),
+                ),
+            }
+        }
+        return;
+    }
+    let Some(item) = place.item.as_ref() else {
+        c.fill_circle(ix, iy, 18.0 * s, p.ink(0.05));
+        icons.icon(c, icon::PLUS, ix, iy, 15.0 * s, p.ink(0.35));
+        return;
+    };
+    let img = place
+        .icon
+        .get_or_insert_with(|| common::icons::load(&item.icon, icon_px));
+    match img {
+        Some(img) => c.image(img, ix - half, iy - half, 2.0 * half, 2.0 * half, 0.0),
+        None => {
+            // Sans icône : l'initiale sur une pastille de couleur
+            c.fill_circle(ix, iy, half, initial_color(&item.name));
+            let initial: String = item.name.chars().take(1).collect::<String>().to_uppercase();
+            bold.draw_centered(
+                c,
+                &initial,
+                ix,
+                iy - half,
+                2.0 * half,
+                18.0 * s,
+                Rgba::hex(0x1d1916, 1.0),
+            );
+        }
+    }
+    // Action ou proposition : petit repère dans le coin
+    if item.app.is_none() {
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, p.panel);
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, p.accent);
+    }
+    if !place.windows.is_empty() {
+        c.fill_circle(ix, iy + half + 7.0 * s, 2.5 * s, p.text_dim);
+    }
+}
+
+/// Couleur de pastille d'une appli sans icône, tirée de son nom
+fn initial_color(name: &str) -> Rgba {
+    let hash = name.bytes().map(|b| b as usize).sum::<usize>();
+    Rgba::hex(ICON_COLORS[hash % ICON_COLORS.len()], 1.0)
+}
+
 impl CompositorHandler for Roue {
     fn scale_factor_changed(
         &mut self,
@@ -559,6 +785,9 @@ impl CompositorHandler for Roue {
             self.scale = factor;
             for place in &mut self.places {
                 place.icon = None;
+                for inner in place.folder.iter_mut().flat_map(|f| f.1.iter_mut()) {
+                    inner.icon = None;
+                }
             }
             self.draw();
         }
@@ -728,7 +957,7 @@ impl PointerHandler for Roue {
                         self.anchor = Some((x, y));
                     }
                     let t = self.target(x, y);
-                    if matches!(t, Target::Slot(_)) {
+                    if matches!(t, Target::Slot(_) | Target::Inner(_)) {
                         self.travelled = true;
                     }
                     let hover = (t != Target::Outside).then_some(t);
@@ -738,17 +967,18 @@ impl PointerHandler for Roue {
                     button: BTN_LEFT, ..
                 } => match self.target(x, y) {
                     Target::Slot(i) => self.activate(i),
+                    Target::Inner(j) => self.activate_inner(j),
                     _ => self.exit = true,
                 },
                 // Clic du milieu maintenu, glissé vers une place puis relâché
                 PointerEventKind::Release {
-                    button: BTN_MIDDLE,
-                    ..
-                } if self.travelled => {
-                    if let Target::Slot(i) = self.target(x, y) {
-                        self.activate(i);
-                    }
-                }
+                    button: BTN_MIDDLE, ..
+                } if self.travelled => match self.target(x, y) {
+                    // Relâché sur un dossier : il reste ouvert
+                    Target::Slot(i) if self.places[i].folder.is_none() => self.activate(i),
+                    Target::Inner(j) => self.activate_inner(j),
+                    _ => {}
+                },
                 _ => {}
             }
         }
