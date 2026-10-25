@@ -486,7 +486,7 @@ const TOOLS: &[Tool] = &[
         name: "executer",
         title: "Exécuter une commande",
         cat: Cat::Run,
-        description: "Lance une commande shell (sh -c) avec les droits de l'utilisateur, jamais root (pas de sudo). L'utilisateur la voit d'abord dans une notification et l'autorise ou la refuse : expliquez-lui pourquoi dans « raison ». Pas d'entrée clavier, 2 minutes au plus ; renvoie le code de sortie et la sortie (erreurs comprises). Préférez les outils de lecture quand ils suffisent ; une commande à la fois, courte et lisible.",
+        description: "Lance une commande shell (sh -c) avec les droits de l'utilisateur, jamais root (pas de sudo). L'utilisateur la voit d'abord dans une notification et l'autorise ou la refuse, sauf s'il a choisi « Commandes sans accord » dans Réglages > Agent (l'outil autorisations le dit) : expliquez-lui pourquoi dans « raison », elle est consignée. Pas d'entrée clavier, 2 minutes au plus ; renvoie le code de sortie et la sortie (erreurs comprises). Préférez les outils de lecture quand ils suffisent ; une commande à la fois, courte et lisible.",
         schema: || {
             json!({"type": "object", "properties": {
                 "commande": {"type": "string"},
@@ -568,7 +568,8 @@ pub fn call(name: &str, args: &Value) -> Value {
             tool.cat.label()
         ))});
     }
-    let outcome = run(name, args, &settings, false);
+    // Commandes sans accord (Réglages > Agent) : lancées comme un automatisme validé
+    let outcome = run(name, args, &settings, perms.run_auto);
     // Commande, souvenir ou oubli refusés dans la notification : consignés comme refusés
     match &outcome {
         Err(e)
@@ -832,6 +833,12 @@ fn permissions(p: &AgentPerms) -> String {
             if cat.allowed(p) { "permis" } else { "refusé" },
             tools.join(", ")
         ));
+    }
+    if p.run && p.run_auto {
+        out.push_str(
+            "- Commandes sans accord : l'utilisateur a choisi de ne pas être consulté à chaque commande ; \
+             elles partent directement, consignées dans le journal. Restez prudent : rien de destructeur sans le lui dire.\n",
+        );
     }
     out
 }

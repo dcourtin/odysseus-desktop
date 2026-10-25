@@ -17,7 +17,8 @@
 //!   "autorisations": {
 //!     "lire_systeme": true, "lire_documentation": true, "lire_fichiers": false,
 //!     "notes": false, "memoire": true, "voir_bureau": true, "voir_ecran": false,
-//!     "agir": false, "presse_papiers": false, "executer": false
+//!     "agir": false, "presse_papiers": false, "executer": false,
+//!     "executer_sans_accord": false
 //!   },
 //!   "suggestions": ["Qu'est-ce que j'ai manqué ?", "…"],
 //!   "suggestions_contexte": {
@@ -59,8 +60,11 @@ pub struct AgentPerms {
     pub act: bool,
     /// Lire et écrire le presse-papiers
     pub clipboard: bool,
-    /// Lancer des commandes, chacune confirmée par l'utilisateur
+    /// Lancer des commandes, chacune confirmée par l'utilisateur…
     pub run: bool,
+    /// … sauf si l'utilisateur a choisi de ne pas être consulté (mode
+    /// automatique) : chaque commande reste consignée dans le journal
+    pub run_auto: bool,
 }
 
 impl Default for AgentPerms {
@@ -76,6 +80,7 @@ impl Default for AgentPerms {
             act: false,
             clipboard: false,
             run: false,
+            run_auto: false,
         }
     }
 }
@@ -294,6 +299,7 @@ impl AgentConfig {
             act: flag("agir", d.act),
             clipboard: flag("presse_papiers", d.clipboard),
             run: flag("executer", d.run),
+            run_auto: flag("executer_sans_accord", d.run_auto),
         };
         c.raw = raw;
         c
@@ -388,6 +394,7 @@ impl AgentConfig {
             "agir": p.act,
             "presse_papiers": p.clipboard,
             "executer": p.run,
+            "executer_sans_accord": p.run_auto,
         });
         raw
     }
@@ -424,7 +431,10 @@ mod tests {
         assert_eq!(c.ollama_url, "http://127.0.0.1:11434");
         assert_eq!(c.models.len(), 1);
         assert!(c.perms.screen && c.perms.read && c.perms.docs && !c.perms.act && !c.perms.run);
-        assert!(c.perms.memory);
+        assert!(c.perms.memory && !c.perms.run_auto);
+        let auto = AgentConfig::from_json(json!({"autorisations": {"executer": true, "executer_sans_accord": true}}));
+        assert!(auto.perms.run && auto.perms.run_auto);
+        assert_eq!(auto.to_json()["autorisations"]["executer_sans_accord"], true);
         assert_eq!(c.suggestions.len(), 4);
         assert_eq!(c.context_suggestions.len(), 4);
         let custom = AgentConfig::from_json(json!({

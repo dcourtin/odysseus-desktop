@@ -146,7 +146,7 @@ pub fn tool_label(name: &str) -> String {
         "deplacer_fenetre" => "Déplacement d'une fenêtre",
         "son" => "Son",
         "ne_pas_deranger" => "Ne pas déranger",
-        "executer" => "Commande soumise à votre accord",
+        "executer" => "Commande de l'agent",
         "creer_automatisme" => "Création d'un automatisme",
         "lister_automatismes" => "Automatismes",
         "lancer_automatisme" => "Lancement d'un automatisme",

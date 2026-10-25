@@ -124,7 +124,7 @@ const AGENTS: [(&str, &str, &str); 3] = [
     ),
 ];
 /// Autorisations d'odysseus-mcp : titre, explication
-const PERMS: [(&str, &str); 10] = [
+const PERMS: [(&str, &str); 11] = [
     (
         "Lire l'état du système",
         "Charge, températures, mémoire, disques, réseau, écran, réglages, journaux d'odysseus.",
@@ -164,6 +164,10 @@ const PERMS: [(&str, &str); 10] = [
     (
         "Exécuter des commandes",
         "Chaque commande vous est montrée dans une notification : rien ne se lance sans votre accord. Jamais en root.",
+    ),
+    (
+        "Commandes sans accord",
+        "Option de la précédente, pour un agent de confiance : ses commandes partent sans notification. Chacune reste consignée dans le journal ci-dessous.",
     ),
 ];
 /// Dock : masquage et taille des icônes
@@ -1429,7 +1433,8 @@ impl App {
                     6 => &mut p.screen,
                     7 => &mut p.act,
                     8 => &mut p.clipboard,
-                    _ => &mut p.run,
+                    9 => &mut p.run,
+                    _ => &mut p.run_auto,
                 };
                 *flag = !*flag;
                 self.save_agent();
@@ -2745,6 +2750,7 @@ impl App {
             perms.act,
             perms.clipboard,
             perms.run,
+            perms.run_auto,
         ];
         for (i, (title, detail)) in PERMS.iter().enumerate() {
             let ry = y + i as f32 * rh;

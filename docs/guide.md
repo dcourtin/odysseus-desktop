@@ -292,11 +292,12 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
   s'exécute par Tab ou d'un clic. Le lanceur (Super+Espace) reste, et « ? »
   y renvoie à l'Assistant.
 - Les outils qu'il utilise s'affichent au passage. Une commande shell ne se lance
-  qu'après votre accord, dans une notification Autoriser / Refuser.
+  qu'après votre accord, dans une notification Autoriser / Refuser, sauf si vous
+  avez choisi « Commandes sans accord » dans Réglages > Agent.
 
 ### Ce que l'agent peut faire (Réglages > Agent)
 
-Dix autorisations, chacune activable :
+Dix autorisations, chacune activable, et une option :
 
 | Autorisation | Ce qu'elle permet |
 |---|---|
@@ -310,6 +311,7 @@ Dix autorisations, chacune activable :
 | Agir sur le bureau | notifier, ouvrir, lancer, ranger les fenêtres, régler thème, fond, lumière de nuit, échelle |
 | Presse-papiers | lire et écrire |
 | Exécuter des commandes | chacune approuvée par vous, jamais en administrateur |
+| Commandes sans accord | option de la précédente, pour un agent de confiance : plus de notification, chaque commande reste consignée |
 
 Chaque appel est consigné, et visible dans la même page.
 

@@ -1,7 +1,9 @@
 //! Commandes lancées par l'agent (catégorie « Exécuter des commandes ») :
 //! chacune est d'abord montrée à l'utilisateur dans une notification
-//! « Autoriser / Refuser » ; sans réponse en 90 s, c'est non. Lancées avec
-//! les droits de l'utilisateur (jamais root), sans entrée, 2 minutes au plus.
+//! « Autoriser / Refuser » ; sans réponse en 90 s, c'est non. Sauf
+//! « Commandes sans accord » (Réglages > Agent) ou automatisme validé :
+//! elles partent directement. Lancées avec les droits de l'utilisateur
+//! (jamais root), sans entrée, 2 minutes au plus.
 
 use std::{
     collections::HashMap,
@@ -128,8 +130,8 @@ pub fn choose(title: &str, question: &str, choices: &[String]) -> Result<Option<
         .filter(|i| *i < choices.len()))
 }
 
-/// Lance une commande ; sans `approved` (automatisme validé), l'utilisateur
-/// l'autorise d'abord dans une notification
+/// Lance une commande ; sans `approved` (automatisme validé, ou commandes
+/// sans accord), l'utilisateur l'autorise d'abord dans une notification
 pub fn execute(
     command: &str,
     dir: Option<&str>,
