@@ -295,6 +295,7 @@ installés par `tools/installer.sh`.
 
 MIT — © 2026 David Courtin. Voir [LICENSE](LICENSE). Le compositeur est parti de
 *smallvil* (Smithay, MIT) : voir `compositor/LICENSE-smithay.txt`.
-Les icônes des applis d'odysseus sont des dessins originaux (symboles courants sur
-une même tuile : dossier, bloc-notes, roue dentée, photo, bulle de dialogue),
-générés par `tools/icones.py`.
+Les icônes des applis d'odysseus sont des dessins originaux (symboles courants au
+trait : dossier, page lignée, roue dentée, photo, bulle de dialogue), générés par
+`tools/icones.py` ; dans odysseus, elles prennent la couleur d'accent et le fond du
+thème actif (feuille de style passée à librsvg par `common::icons`).

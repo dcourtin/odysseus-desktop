@@ -1,15 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" data-odysseus-theme="1">
   <!-- Icône d'odysseus (tools/icones.py) : Assistant, bulle de dialogue -->
-  <defs>
-    <linearGradient id="fond-odysseus-assistant" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#e8906d"/>
-      <stop offset="1" stop-color="#c9653f"/>
-    </linearGradient>
-  </defs>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond-odysseus-assistant)"/>
-  <path d="M64 30c21 0 36 12 36 28S85 86 64 86c-4 0-8-.4-11.5-1.3L38 96l3.5-15C33 76 28 68 28 58c0-16 15-28 36-28z" fill="#ffffff"/>
-  <circle cx="50" cy="58" r="5" fill="#c9653f"/>
-  <circle cx="64" cy="58" r="5" fill="#c9653f"/>
-  <circle cx="78" cy="58" r="5" fill="#c9653f"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
+  <rect class="tuile" x="8" y="8" width="112" height="112" rx="28" fill="#262624"/>
+  <rect class="bord" x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
+  <g class="trait" fill="none" stroke="#d97757" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 32c20 0 34 11.5 34 26S84 84 64 84c-4 0-7.6-.4-11-1.2L38 94l3.6-14.4C34.5 75 30 67 30 58c0-14.5 14-26 34-26z"/>
+  </g>
+  <circle class="plein" cx="50" cy="58" r="4.5" fill="#d97757"/>
+  <circle class="plein" cx="64" cy="58" r="4.5" fill="#d97757"/>
+  <circle class="plein" cx="78" cy="58" r="4.5" fill="#d97757"/>
 </svg>

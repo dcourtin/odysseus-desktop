@@ -2,6 +2,10 @@
 //! en images prémultipliées. Une icône seulement disponible en SVG est
 //! convertie une fois en PNG par `rsvg-convert` (librsvg), puis gardée dans
 //! ~/.cache/odysseus/icons : aucun moteur SVG dans les programmes du bureau.
+//!
+//! Les icônes d'odysseus (attribut `data-odysseus-theme`, voir tools/icones.py)
+//! prennent les couleurs du thème actif : une feuille de style tirée de la
+//! palette est passée à librsvg, et le cache est propre à chaque palette.
 
 use std::path::{Path, PathBuf};
 
@@ -61,24 +65,65 @@ fn lookup(name: &str, size: u32) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
+/// Feuille de style des icônes d'odysseus pour la palette active
+fn theme_css() -> String {
+    let p = crate::theme::palette();
+    let css = |c: crate::theme::Rgba| {
+        format!(
+            "rgba({}, {}, {}, {:.3})",
+            (c.r * 255.0).round(),
+            (c.g * 255.0).round(),
+            (c.b * 255.0).round(),
+            c.a
+        )
+    };
+    format!(
+        ".tuile {{ fill: {}; }}\n.bord {{ stroke: {}; stroke-opacity: 1; }}\n\
+         .trait {{ stroke: {}; }}\n.plein {{ fill: {}; }}\n",
+        css(p.background.with_alpha(1.0)),
+        css(p.ink(0.14)),
+        css(p.accent),
+        css(p.accent),
+    )
+}
+
+/// Empreinte courte (FNV-1a) : nom de fichier propre à une feuille de style
+fn fingerprint(text: &str) -> String {
+    let h = text.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    });
+    format!("{:08x}", h as u32)
+}
+
 /// SVG → PNG en cache (rsvg-convert), à la taille demandée.
 fn rasterize_svg(svg: &Path, size: u32) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let dir = PathBuf::from(home).join(".cache/odysseus/icons");
     let stem = svg.file_stem()?.to_string_lossy();
-    let out = dir.join(format!("{stem}-{size}.png"));
+    // Icône d'odysseus : aux couleurs du thème, un PNG par palette
+    let themed = std::fs::read(svg)
+        .ok()
+        .is_some_and(|b| b.windows(19).any(|w| w == b"data-odysseus-theme"));
+    let css = themed.then(theme_css);
+    let out = match &css {
+        Some(css) => dir.join(format!("{stem}-{size}-{}.png", fingerprint(css))),
+        None => dir.join(format!("{stem}-{size}.png")),
+    };
     let fresh = match (out.metadata(), svg.metadata()) {
         (Ok(o), Ok(s)) => o.modified().ok() >= s.modified().ok(),
         _ => false,
     };
     if !fresh {
         std::fs::create_dir_all(&dir).ok()?;
-        let status = std::process::Command::new("rsvg-convert")
-            .args(["-w", &size.to_string(), "-h", &size.to_string(), "-o"])
-            .arg(&out)
-            .arg(svg)
-            .status()
-            .ok()?;
+        let mut cmd = std::process::Command::new("rsvg-convert");
+        cmd.args(["-w", &size.to_string(), "-h", &size.to_string(), "-o"])
+            .arg(&out);
+        if let Some(css) = &css {
+            let sheet = dir.join(format!("theme-{}.css", fingerprint(css)));
+            std::fs::write(&sheet, css).ok()?;
+            cmd.arg("-s").arg(sheet);
+        }
+        let status = cmd.arg(svg).status().ok()?;
         if !status.success() {
             return None;
         }

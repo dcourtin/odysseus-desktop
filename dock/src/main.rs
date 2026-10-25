@@ -291,7 +291,12 @@ fn main() {
             Generic::new(fd, Interest::READ, Mode::Level),
             |_, fd, dock| {
                 theme::drain(fd.as_fd());
-                theme::reload();
+                if theme::reload() {
+                    // Icônes d'odysseus aux couleurs du thème : à recharger
+                    for item in &mut dock.items {
+                        item.icon = None;
+                    }
+                }
                 dock.settings = Settings::load();
                 // Désactivé : sa surface part avec lui ; Réglages le relance
                 if !dock.settings.dock {

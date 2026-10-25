@@ -1,12 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" data-odysseus-theme="1">
   <!-- Icône d'odysseus (tools/icones.py) : Réglages, roue dentée -->
-  <defs>
-    <linearGradient id="fond-odysseus-reglages" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#9a958f"/>
-      <stop offset="1" stop-color="#6d6863"/>
-    </linearGradient>
-  </defs>
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond-odysseus-reglages)"/>
-  <path d="M92.42 58.24L101.68 59.07L101.68 68.93L92.42 69.76L88.17 80.02L94.13 87.16L87.16 94.13L80.02 88.17L69.76 92.42L68.93 101.68L59.07 101.68L58.24 92.42L47.98 88.17L40.84 94.13L33.87 87.16L39.83 80.02L35.58 69.76L26.32 68.93L26.32 59.07L35.58 58.24L39.83 47.98L33.87 40.84L40.84 33.87L47.98 39.83L58.24 35.58L59.07 26.32L68.93 26.32L69.76 35.58L80.02 39.83L87.16 33.87L94.13 40.84L88.17 47.98zM76 64a12 12 0 1 0 -24 0a12 12 0 1 0 24 0z" fill="#ffffff" fill-rule="evenodd" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
+  <rect class="tuile" x="8" y="8" width="112" height="112" rx="28" fill="#262624"/>
+  <rect class="bord" x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
+  <g class="trait" fill="none" stroke="#d97757" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M90.41 58.37L99.70 59.33L99.70 68.67L90.41 69.63L86.65 78.69L92.54 85.94L85.94 92.54L78.69 86.65L69.63 90.41L68.67 99.70L59.33 99.70L58.37 90.41L49.31 86.65L42.06 92.54L35.46 85.94L41.35 78.69L37.59 69.63L28.30 68.67L28.30 59.33L37.59 58.37L41.35 49.31L35.46 42.06L42.06 35.46L49.31 41.35L58.37 37.59L59.33 28.30L68.67 28.30L69.63 37.59L78.69 41.35L85.94 35.46L92.54 42.06L86.65 49.31z"/>
+    <circle cx="64" cy="64" r="10"/>
+  </g>
 </svg>

@@ -33,6 +33,10 @@ qui sert d'écran de connexion : le mot de passe donné, le bureau apparaît en
 fondu. Rien du bureau n'est visible avant. En secours, Ctrl+Alt+F2 offre une
 connexion en mode texte.
 
+Les icônes des applis d'odysseus (Fichiers, Notes, Réglages, Aperçu, Assistant)
+sont dessinées au trait, dans la couleur d'accent du thème, sur une tuile de sa
+couleur de fond : elles changent avec le thème choisi dans Réglages > Apparence.
+
 ## La barre du haut
 
 De gauche à droite : les bureaux (clic, ou molette pour passer de l'un à l'autre),
