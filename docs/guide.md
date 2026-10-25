@@ -432,6 +432,14 @@ Elles ne dessinent pas avec odysseus, mais suivent ce qu'il leur donne :
   ligne @import. Pour Firefox, odysseus ajoute à chaque profil une préférence
   (`widget.gtk.libadwaita-colors.enabled`, dans `user.js`) sans laquelle il
   garderait ses couleurs à lui ; la retirer de `user.js` les lui rend.
+- **Obsidian** : son thème est en CSS, coffre par coffre. Dans chaque coffre
+  connu, odysseus dépose un extrait `.obsidian/snippets/odysseus.css` tiré de la
+  palette (fonds, texte, accent, bordures, sélection) et l'active dans
+  `appearance.json`, avec le thème de base en clair ou sombre ; vos autres
+  réglages d'apparence restent. Obsidian recharge l'extrait aussitôt. Pour
+  rendre à un coffre les couleurs d'Obsidian, désactivez l'extrait dans
+  Réglages > Apparence > Extraits CSS ; vos propres extraits passent après
+  celui d'odysseus.
 - **Clair ou sombre, et la couleur d'accent** : aussitôt, même ouvertes. Le
   reste se voit à leur prochain lancement.
 

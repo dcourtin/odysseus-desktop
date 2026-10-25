@@ -14,6 +14,12 @@
 //!   `widget.gtk.libadwaita-colors.enabled` est mise à faux dans le `user.js`
 //!   de chaque profil (le reste du fichier est gardé), pour qu'il prenne
 //!   celles d'odysseus.
+//! - Obsidian : son interface est une page web avec son propre thème en CSS,
+//!   coffre par coffre. Dans chaque coffre connu (`~/.config/obsidian/obsidian.json`),
+//!   un extrait `.obsidian/snippets/odysseus.css` reprend la palette (fonds,
+//!   texte, accent, bordures, sélection, police) et `appearance.json` l'active
+//!   et met le thème de base en clair ou sombre ; les autres réglages du
+//!   coffre restent. Obsidian recharge l'extrait dès qu'il change.
 //!
 //! Écrit à chaque changement de thème ([`crate::theme::set`]) et au démarrage
 //! du démon de notifications ; une appli déjà ouverte le prend à sa relance
@@ -56,6 +62,7 @@ pub fn apply() {
         let _ = update_settings_ini(&dir.join("settings.ini"), p.ink == 0xffffff);
     }
     firefox_profiles(&config);
+    obsidian_vaults(&config, p);
 }
 
 const FIREFOX_PREF: &str = "user_pref(\"widget.gtk.libadwaita-colors.enabled\", false); // odysseus : couleurs du thème du bureau";
@@ -284,6 +291,161 @@ fn gtk4_css(p: &Palette) -> String {
     format!("{}{}", header(p), named_colors(p))
 }
 
+/// Nom de l'extrait, tel qu'Obsidian le liste (sans l'extension)
+const OBSIDIAN_SNIPPET: &str = "odysseus";
+
+/// Chemins des coffres connus d'Obsidian (`obsidian.json`), qui existent encore
+fn obsidian_vault_paths(registry: &str) -> Vec<PathBuf> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(registry) else {
+        return Vec::new();
+    };
+    let Some(vaults) = json.get("vaults").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    vaults
+        .values()
+        .filter_map(|v| v.get("path").and_then(|p| p.as_str()))
+        .map(PathBuf::from)
+        .filter(|p| p.join(".obsidian").is_dir())
+        .collect()
+}
+
+/// Dépose l'extrait dans chaque coffre et l'active
+fn obsidian_vaults(config: &Path, p: &Palette) {
+    let Ok(registry) = std::fs::read_to_string(config.join("obsidian/obsidian.json")) else {
+        return;
+    };
+    let css = obsidian_css(p);
+    for vault in obsidian_vault_paths(&registry) {
+        let dir = vault.join(".obsidian");
+        let _ = write_if_changed(&dir.join(format!("snippets/{OBSIDIAN_SNIPPET}.css")), &css);
+        let path = dir.join("appearance.json");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        if let Some(text) = obsidian_appearance(&existing, p.ink == 0xffffff) {
+            let _ = write_if_changed(&path, &text);
+        }
+    }
+}
+
+/// `appearance.json` avec l'extrait activé et le thème de base accordé
+/// (« obsidian » sombre, « moonstone » clair) ; None : rien à changer. Le
+/// reste du fichier (police, taille, accent choisi…) est gardé, compact comme
+/// l'écrit Obsidian.
+fn obsidian_appearance(existing: &str, dark: bool) -> Option<String> {
+    let mut json = match serde_json::from_str::<serde_json::Value>(existing) {
+        Ok(serde_json::Value::Object(o)) => o,
+        _ if existing.trim().is_empty() => serde_json::Map::new(),
+        // Fichier que l'on ne comprend pas : on n'y touche pas
+        _ => return None,
+    };
+    let theme = if dark { "obsidian" } else { "moonstone" };
+    let mut changed = json.get("theme").and_then(|t| t.as_str()) != Some(theme);
+    json.insert("theme".into(), theme.into());
+    let snippets = json
+        .entry("enabledCssSnippets")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if !snippets.is_array() {
+        *snippets = serde_json::Value::Array(Vec::new());
+    }
+    let list = snippets.as_array_mut()?;
+    if !list.iter().any(|s| s.as_str() == Some(OBSIDIAN_SNIPPET)) {
+        list.push(OBSIDIAN_SNIPPET.into());
+        changed = true;
+    }
+    changed.then(|| serde_json::Value::Object(json).to_string())
+}
+
+/// Teinte, saturation et luminosité (degrés, %, %) : Obsidian dérive ses
+/// couleurs d'accent de `--accent-h/s/l`
+fn hsl(c: Rgba) -> (u32, u32, u32) {
+    let (r, g, b) = (c.r.clamp(0.0, 1.0), c.g.clamp(0.0, 1.0), c.b.clamp(0.0, 1.0));
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < 1e-6 {
+        return (0, 0, (l * 100.0).round() as u32);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    } * 60.0;
+    (h.round() as u32 % 360, (s * 100.0).round() as u32, (l * 100.0).round() as u32)
+}
+
+/// Extrait CSS d'Obsidian : ses variables de thème, posées sur `body` clair
+/// comme sombre puisque la palette d'odysseus fait foi
+fn obsidian_css(p: &Palette) -> String {
+    let (bg, fg, dim) = (css(p.content), css(p.text), css(p.text_dim));
+    let faint = css(p.text_dim.with_alpha(0.6));
+    let (acc, on) = (css(p.accent), css(p.on_accent));
+    let acc_hover = css(p.accent.mix(p.ink(1.0), 0.12));
+    let (h, s, l) = hsl(p.accent);
+    let border = css(p.panel_border());
+    let border_hover = css(p.ink(0.2));
+    let (tile, tile_hover) = (css(p.tile()), css(p.tile_hover()));
+    let surface = css(p.content.mix(p.surface.with_alpha(1.0), p.surface.a));
+    let sidebar = css(p.sidebar);
+    let panel = css(p.panel.with_alpha(1.0));
+    let selection = css(p.accent.with_alpha(0.3));
+    let (danger, success) = (css(p.danger), css(p.success));
+    let slider = css(p.ink(0.35));
+    format!(
+        "/* Écrit par odysseus d'après le thème « {name} », à chaque changement de thème :\n   \
+         ne pas modifier ici (vos propres extraits passent après celui-ci). */\n\
+body.theme-dark, body.theme-light {{
+  --accent-h: {h}; --accent-s: {s}%; --accent-l: {l}%;
+  --font-interface-theme: \"{FONT_FAMILY}\";
+  --background-primary: {bg};
+  --background-primary-alt: {sidebar};
+  --background-secondary: {sidebar};
+  --background-secondary-alt: {surface};
+  --background-modifier-hover: {tile};
+  --background-modifier-active-hover: {tile_hover};
+  --background-modifier-border: {border};
+  --background-modifier-border-hover: {border_hover};
+  --background-modifier-border-focus: {acc};
+  --background-modifier-form-field: {bg};
+  --background-modifier-message: {panel};
+  --background-modifier-error: {danger};
+  --background-modifier-success: {success};
+  --text-normal: {fg};
+  --text-muted: {dim};
+  --text-faint: {faint};
+  --text-accent: {acc};
+  --text-accent-hover: {acc_hover};
+  --text-on-accent: {on};
+  --text-error: {danger};
+  --text-success: {success};
+  --text-selection: {selection};
+  --interactive-normal: {tile};
+  --interactive-hover: {tile_hover};
+  --interactive-accent: {acc};
+  --interactive-accent-hover: {acc_hover};
+  --titlebar-background: {surface};
+  --titlebar-background-focused: {surface};
+  --titlebar-text-color: {dim};
+  --titlebar-text-color-focused: {fg};
+  --divider-color: {border};
+  --scrollbar-bg: transparent;
+  --scrollbar-thumb-bg: {slider};
+  --scrollbar-active-thumb-bg: {slider};
+  --checkbox-color: {acc};
+  --checkbox-color-hover: {acc_hover};
+  --link-color: {acc};
+  --link-color-hover: {acc_hover};
+  --modal-background: {bg};
+  --prompt-border-color: {border};
+}}
+",
+        name = p.name,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +483,50 @@ mod tests {
     }
 
     #[test]
+    fn obsidian_appearance_keeps_rest() {
+        let t = obsidian_appearance("{}", true).unwrap();
+        assert_eq!(t, r#"{"enabledCssSnippets":["odysseus"],"theme":"obsidian"}"#);
+        // Déjà accordé : rien à écrire ; thème changé : seul « theme » bouge
+        assert!(obsidian_appearance(&t, true).is_none());
+        let clair = obsidian_appearance(&t, false).unwrap();
+        assert!(clair.contains(r#""theme":"moonstone""#));
+        assert_eq!(clair.matches("odysseus").count(), 1);
+        let t = obsidian_appearance(
+            r##"{"accentColor":"#ff0000","enabledCssSnippets":["mien"],"baseFontSize":15}"##,
+            true,
+        )
+        .unwrap();
+        assert!(t.contains(r##""accentColor":"#ff0000""##));
+        assert!(t.contains(r#""baseFontSize":15"#));
+        assert!(t.contains(r#""enabledCssSnippets":["mien","odysseus"]"#));
+        assert!(obsidian_appearance("", true).is_some());
+        // Illisible : on n'y touche pas
+        assert!(obsidian_appearance("pas du json", true).is_none());
+    }
+
+    #[test]
+    fn obsidian_vaults_parse() {
+        let tmp = std::env::temp_dir().join(format!("odysseus-accord-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(tmp.join("coffre/.obsidian"));
+        let registry = format!(
+            r#"{{"vaults":{{"a":{{"path":"{}"}},"b":{{"path":"{}"}}}}}}"#,
+            tmp.join("coffre").display(),
+            tmp.join("disparu").display()
+        );
+        assert_eq!(obsidian_vault_paths(&registry), vec![tmp.join("coffre")]);
+        assert!(obsidian_vault_paths("{}").is_empty());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn hsl_values() {
+        assert_eq!(hsl(Rgba::hex(0xff0000, 1.0)), (0, 100, 50));
+        assert_eq!(hsl(Rgba::hex(0x00ff00, 1.0)), (120, 100, 50));
+        assert_eq!(hsl(Rgba::hex(0x808080, 1.0)), (0, 0, 50));
+        assert_eq!(hsl(Rgba::hex(0xd97757, 1.0)), (15, 63, 60));
+    }
+
+    #[test]
     fn css_colors() {
         assert_eq!(css(Rgba::hex(0xd97757, 1.0)), "#d97757");
         assert_eq!(css(Rgba::hex(0xffffff, 0.1)), "rgba(255,255,255,0.10)");
@@ -328,5 +534,8 @@ mod tests {
         let text = gtk3_css(p);
         assert!(text.contains(&format!("@define-color accent_color {};", css(p.accent))));
         assert!(text.contains("headerbar"));
+        let obs = obsidian_css(p);
+        assert!(obs.contains(&format!("--interactive-accent: {};", css(p.accent))));
+        assert!(obs.contains("body.theme-dark, body.theme-light {"));
     }
 }
