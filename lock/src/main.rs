@@ -132,7 +132,8 @@ fn main() {
         .expect("minuterie");
 
     let user = std::env::var("USER").unwrap_or_else(|_| "david".into());
-    let full_name = full_name(&user);
+    // Nom et photo choisis dans Réglages > Compte (common::account)
+    let full_name = common::account::display_name();
     let mut lock = Lock {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -150,7 +151,7 @@ fn main() {
         bold: Text::load(theme::FONT_BOLD).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
         background: None,
-        avatar: load_avatar(),
+        avatar: common::account::load_avatar(),
         user,
         full_name,
         width: 0,
@@ -191,68 +192,6 @@ fn main() {
     }
     // Laisse le temps au déverrouillage de partir avant de fermer la connexion
     let _ = conn.flush();
-}
-
-/// Nom complet (champ GECOS de /etc/passwd), sinon l'identifiant avec une majuscule.
-fn full_name(user: &str) -> String {
-    let gecos = std::fs::read_to_string("/etc/passwd")
-        .ok()
-        .and_then(|passwd| {
-            passwd.lines().find_map(|line| {
-                let fields: Vec<&str> = line.split(':').collect();
-                (fields.first() == Some(&user) && fields.len() > 4)
-                    .then(|| fields[4].split(',').next().unwrap_or("").to_string())
-            })
-        });
-    match gecos.filter(|g| !g.is_empty()) {
-        Some(name) => name,
-        None => {
-            let mut chars = user.chars();
-            chars
-                .next()
-                .map(|c| c.to_uppercase().chain(chars).collect())
-                .unwrap_or_default()
-        }
-    }
-}
-
-/// Photo de l'utilisateur : ~/.face (PNG ou JPEG), comme les autres bureaux.
-fn load_avatar() -> Option<Image> {
-    let path = std::path::PathBuf::from(std::env::var("HOME").ok()?).join(".face");
-    let img = image::ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .decode()
-        .ok()?
-        .thumbnail(256, 256)
-        .to_rgba8();
-    let (width, height) = img.dimensions();
-    let mut data = img.into_raw();
-    for px in data.as_chunks_mut::<4>().0 {
-        let a = px[3] as u32;
-        let (r, g, b) = (px[0] as u32, px[1] as u32, px[2] as u32);
-        *px = [
-            (b * a / 255) as u8,
-            (g * a / 255) as u8,
-            (r * a / 255) as u8,
-            a as u8,
-        ];
-    }
-    Some(Image {
-        width,
-        height,
-        data,
-    })
-}
-
-/// Initiales du nom complet (« DC »)
-fn initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|w| w.chars().next())
-        .take(2)
-        .flat_map(char::to_uppercase)
-        .collect()
 }
 
 impl Lock {
@@ -425,7 +364,7 @@ impl Lock {
                 canvas.fill_circle(cx, avatar_cy, avatar_r, white(0.22));
                 self.bold.draw_centered(
                     &mut canvas,
-                    &initials(&self.full_name),
+                    &common::account::initials(&self.full_name),
                     cx,
                     avatar_cy - avatar_r,
                     2.0 * avatar_r,

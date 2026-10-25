@@ -10,6 +10,7 @@ mod agents;
 mod automatismes;
 mod fonds;
 mod maj;
+mod compte;
 mod roue;
 mod system;
 mod trousseau;
@@ -193,6 +194,7 @@ const KEYBOARDS: [(&str, &str); 8] = [
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
     Apparence,
+    Compte,
     Fond,
     Ecran,
     Clavier,
@@ -222,7 +224,8 @@ const WIZARD: [Option<Page>; 7] = [
 /// Pied de page de l'accueil (navigation)
 const FOOTER_H: f32 = 72.0;
 
-const PAGES: [Page; 14] = [
+const PAGES: [Page; 15] = [
+    Page::Compte,
     Page::Apparence,
     Page::Fond,
     Page::Ecran,
@@ -242,6 +245,7 @@ const PAGES: [Page; 14] = [
 impl Page {
     fn info(self) -> (&'static str, char) {
         match self {
+            Page::Compte => ("Compte", icon::USER),
             Page::Apparence => ("Apparence", icon::PALETTE),
             Page::Fond => ("Fond d'écran", icon::IMAGE),
             Page::Ecran => ("Écran", icon::MONITOR),
@@ -261,6 +265,7 @@ impl Page {
 
     fn from_arg(arg: &str) -> Option<Self> {
         Some(match arg {
+            "compte" | "utilisateur" | "photo" => Page::Compte,
             "apparence" => Page::Apparence,
             "fond" => Page::Fond,
             "ecran" | "écran" => Page::Ecran,
@@ -322,6 +327,12 @@ enum Hit {
     /// Réglages > Roue : choisir une place, y mettre un élément du catalogue,
     /// la vider, la déplacer, reprendre les favoris du Dock ; en faire un
     /// dossier, l'ouvrir, en revenir, le renommer
+    /// Réglages > Compte : une image récente comme photo, retirer la photo,
+    /// modifier le nom, changer le mot de passe
+    ComptePhoto(usize),
+    CompteRemovePhoto,
+    CompteName,
+    ComptePassword,
     RoueSlot(usize),
     RoueAdd(usize),
     RoueRemove,
@@ -371,6 +382,9 @@ enum Msg {
     Locale(Result<String, String>),
     /// Fin de la mise à jour d'odysseus (récupération, compilation)
     Upgraded(Result<String, String>),
+    /// Réglages > Compte : vignette d'une image récente, photo posée
+    Photo(PathBuf, Option<Image>),
+    Avatar(Result<(), String>),
 }
 
 /// Nouvelle définition en attente de confirmation
@@ -415,6 +429,10 @@ struct App {
     fonds: Vec<fonds::Fond>,
     about: Vec<(&'static str, String)>,
     user: (String, String),
+    /// Photo de l'utilisateur (~/.face), dans l'en-tête de la barre latérale
+    avatar: Option<Image>,
+    /// Page Compte, chargée à son ouverture
+    compte: Option<compte::ComptePage>,
     hits: Vec<(Rect, Hit)>,
     hover: Option<Hit>,
     scroll: f32,
@@ -602,7 +620,9 @@ fn main() {
         locale: system::current_locale(),
         fonds,
         about: Vec::new(),
-        user: system::user_name(),
+        user: (common::account::display_name(), common::account::login()),
+        avatar: common::account::load_avatar(),
+        compte: None,
         hits: Vec::new(),
         hover: None,
         scroll: 0.0,
@@ -635,6 +655,9 @@ fn main() {
     }
     if app.page == Page::Roue {
         app.roue = Some(roue::RouePage::load());
+    }
+    if app.page == Page::Compte {
+        app.compte = Some(compte::ComptePage::load(app.msgs.clone()));
     }
     app.load_thumbs();
     // Fonds d'odysseus pas encore calculés : un fil, l'un après l'autre
@@ -852,6 +875,18 @@ impl App {
     fn on_msg(&mut self, msg: Msg) {
         match msg {
             Msg::Upgraded(result) => self.on_upgraded(result),
+            Msg::Photo(path, thumb) => {
+                if let Some(c) = self.compte.as_mut() {
+                    c.on_photo(path, thumb);
+                }
+            }
+            Msg::Avatar(result) => {
+                if let Some(c) = self.compte.as_mut() {
+                    let msg = c.on_avatar(result);
+                    self.toast(msg);
+                }
+                self.avatar = common::account::load_avatar();
+            }
             Msg::Thumb(path, thumb) => {
                 if let Some(f) = self.fonds.iter_mut().find(|f| f.path == path) {
                     f.thumb = thumb;
@@ -865,6 +900,17 @@ impl App {
                         let thumb = fonds::thumbnail(&p);
                         let _ = tx.send(Msg::Thumb(p, thumb));
                     });
+                }
+            }
+            // Sur la page Compte, une image déposée devient la photo
+            Msg::Dropped(paths) if self.page == Page::Compte => {
+                match paths.iter().find(|p| common::account::is_photo(p)) {
+                    Some(path) => {
+                        if let Some(c) = self.compte.as_mut() {
+                            c.set_avatar(path);
+                        }
+                    }
+                    None => self.toast("Déposez une photo (JPEG, PNG ou HEIC)"),
                 }
             }
             Msg::Dropped(paths) => {
@@ -1107,6 +1153,9 @@ impl App {
         if p == Page::Roue {
             self.roue = Some(roue::RouePage::load());
         }
+        if p == Page::Compte {
+            self.compte = Some(compte::ComptePage::load(self.msgs.clone()));
+        }
         if p == Page::MisesAJour {
             self.updates.refresh();
         }
@@ -1293,6 +1342,16 @@ impl App {
                 self.settings.lock_on_idle = !self.settings.lock_on_idle;
                 self.save();
             }
+            Hit::ComptePhoto(_)
+            | Hit::CompteRemovePhoto
+            | Hit::CompteName
+            | Hit::ComptePassword => {
+                if let Some(msg) = self.compte.as_mut().and_then(|c| c.click(&hit)) {
+                    self.toast(msg);
+                }
+                self.user.0 = common::account::display_name();
+                self.avatar = common::account::load_avatar();
+            }
             Hit::RoueSlot(_)
             | Hit::RoueAdd(_)
             | Hit::RoueRemove
@@ -1477,6 +1536,16 @@ impl App {
     }
 
     fn key(&mut self, event: KeyEvent) {
+        // Nom affiché en cours de saisie (Réglages > Compte)
+        if self.page == Page::Compte
+            && let Some(c) = self.compte.as_mut().filter(|c| c.editing())
+        {
+            if let Some(msg) = c.key(&event) {
+                self.toast(msg);
+            }
+            self.user.0 = common::account::display_name();
+            return self.draw();
+        }
         // Nom d'un dossier de la roue en cours de saisie
         if self.page == Page::Roue
             && let Some(r) = self.roue.as_mut().filter(|r| r.renaming())
@@ -1626,6 +1695,10 @@ impl App {
             Page::Energie => self.page_energie(ui, cx, top, cw),
             Page::Raccourcis => self.page_raccourcis(ui, cx, top, cw),
             Page::Dock => self.page_dock(ui, cx, top, cw),
+            Page::Compte => match self.compte.as_ref() {
+                Some(c) => c.draw(ui, cx, top, cw),
+                None => top,
+            },
             Page::Roue => match self.roue.as_ref() {
                 Some(r) => r.draw(ui, cx, top, cw),
                 None => top,
@@ -1645,17 +1718,19 @@ impl App {
         ui.rect(SIDEBAR_W - 1.0, 0.0, 1.0, self.height as f32, p.ink(0.06));
         // Carte de l'utilisateur
         let (full, login) = &self.user;
-        let initials: String = full
-            .split_whitespace()
-            .filter_map(|w| w.chars().next())
-            .take(2)
-            .collect::<String>()
-            .to_uppercase();
         let s = ui.s;
         self.chrome.draw(ui.c, CHROME_Y, s);
         let t = SIDE_TOP;
-        ui.circle(40.0, 44.0 + t, 20.0, p.accent);
-        ui.centered(&initials, 40.0, 34.0 + t, 20.0, 14.0, true, p.on_accent);
+        // Photo (~/.face), sinon les initiales ; un clic mène à Réglages > Compte
+        match self.avatar.as_ref() {
+            Some(img) => ui.image(img, 20.0, 24.0 + t, 40.0, 40.0, 20.0),
+            None => {
+                ui.circle(40.0, 44.0 + t, 20.0, p.accent);
+                let initials = common::account::initials(full);
+                ui.centered(&initials, 40.0, 34.0 + t, 20.0, 14.0, true, p.on_accent);
+            }
+        }
+        ui.hit((14.0, 18.0 + t, SIDEBAR_W - 28.0, 52.0), Hit::Page(Page::Compte));
         ui.bold_text(full, 70.0, 24.0 + t, 22.0, 14.0, p.text);
         ui.text(
             &format!("{login} · session odysseus"),

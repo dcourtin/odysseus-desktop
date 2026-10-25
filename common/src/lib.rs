@@ -2,6 +2,7 @@
 //! le protocole entre le compositeur et le shell.
 
 pub mod accord;
+pub mod account;
 pub mod agent;
 pub mod apps;
 pub mod auto;

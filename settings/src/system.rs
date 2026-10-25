@@ -238,20 +238,6 @@ pub fn suspend_now() {
     });
 }
 
-/// Nom complet de l'utilisateur (champ GECOS de /etc/passwd), sinon son identifiant
-pub fn user_name() -> (String, String) {
-    let login = std::env::var("USER").unwrap_or_else(|_| "utilisateur".into());
-    let full = std::fs::read_to_string("/etc/passwd")
-        .unwrap_or_default()
-        .lines()
-        .find(|l| l.starts_with(&format!("{login}:")))
-        .and_then(|l| l.split(':').nth(4))
-        .map(|g| g.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|g| !g.is_empty())
-        .unwrap_or_else(|| login.clone());
-    (full, login)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

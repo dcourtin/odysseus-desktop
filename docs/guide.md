@@ -458,10 +458,21 @@ quand on veut : Réglages > À propos > « Revoir l'accueil ».
 
 ## Réglages
 
-Apparence (trois thèmes d'odysseus, ou le vôtre : base sombre ou claire, accent et fond parmi des teintes méditerranéennes ; le texte, les panneaux et les liserés s'accordent d'eux-mêmes, et toucher un choix le met en vigueur sur tout le bureau), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la
+Compte (votre photo, votre nom, votre mot de passe ; voir ci-dessous), Apparence (trois thèmes d'odysseus, ou le vôtre : base sombre ou claire, accent et fond parmi des teintes méditerranéennes ; le texte, les panneaux et les liserés s'accordent d'eux-mêmes, et toucher un choix le met en vigueur sur tout le bureau), Fond d'écran (glisser une image depuis Fichiers pour l'ajouter, la croix sur une de vos images pour la mettre à la corbeille), Écran (définition gardée seulement si on la
 confirme, sinon retour au bout de 15 s ; fréquence ; taille ; lumière de nuit),
 Clavier et langue, Énergie (extinction de l'écran, verrouillage, veille),
 Raccourcis, Dock, Roue (les huit places de la roue, voir plus haut), Réception (fichiers envoyés depuis vos autres appareils, voir plus haut), Automatismes, Trousseau, Mises à jour, Agent, À propos.
+
+**Réglages > Compte** (un clic sur votre nom, en haut des Réglages, y mène) :
+- **Photo** : un clic sur une de vos images récentes (dossiers Images et
+  Téléchargements, photos HEIC comprises), ou une image glissée depuis Fichiers.
+  Elle est recadrée en carré, au centre, et paraît sur l'écran de verrouillage et
+  dans les Réglages. « Retirer la photo » revient aux initiales.
+- **Nom** : celui qu'affiche odysseus ; effacé, le nom du système revient.
+  L'identifiant de connexion ne change pas.
+- **Mot de passe** : « Changer… » ouvre un terminal où `passwd` demande l'ancien
+  puis le nouveau. C'est celui du verrou, de la connexion et de sudo ; le
+  trousseau a le sien (Réglages > Trousseau).
 
 ## Les applis d'ailleurs (Firefox, Obsidian…)
 
