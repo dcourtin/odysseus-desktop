@@ -228,6 +228,8 @@ graphique). Partage d'écran : xdg-desktop-portal et xdg-desktop-portal-wlr (0.8
 pour ext-image-copy-capture), avec `/usr/share/xdg-desktop-portal/odysseus-portals.conf`
 (Settings → odysseus, ScreenCast → wlr) et `odysseus.portal` ; la session écrit la
 configuration de xdg-desktop-portal-wlr (`~/.config/xdg-desktop-portal-wlr/odysseus`).
+Les unités des portails exigent `graphical-session.target` : la session écrit et démarre
+`~/.config/systemd/user/odysseus-session.target`, qui la tire, et l'arrête à la sortie.
 Trousseau : oo7-daemon 0.7 (Secret Service, unité systemd utilisateur), libsecret pour les
 applications, `git-credential-oo7` ; le module `pam_oo7.so` ouvre le trousseau avec le mot de
 passe de connexion (lignes à ajouter dans `/etc/pam.d/login` et `/etc/pam.d/passwd`).

@@ -14,6 +14,7 @@ else
     ROOT=$HERE
 fi
 # Journaux : ODYSSEUS_LOGDIR permet à une session de test de ne pas toucher aux vrais
+# (une telle session ne touche pas non plus à la cible systemd de la vraie, voir plus bas)
 LOGDIR="${ODYSSEUS_LOGDIR:-$HOME/.local/state/odysseus}"
 mkdir -p "$LOGDIR"
 # Journal de la session précédente gardé pour diagnostiquer un plantage
@@ -47,13 +48,43 @@ mkdir -p "$XDPW"
 printf '# Écrit par odysseus-session.sh à chaque connexion\n[screencast]\nchooser_type=dmenu\nchooser_cmd=%s\nmax_fps=30\n' \
   "$ROOT/odysseus-partage" > "$XDPW/odysseus"
 
+# Cible systemd de la session : les portails (xdg-desktop-portal, qui donne clair ou
+# sombre et l'accent à Firefox et Obsidian, et le partage d'écran) exigent que
+# graphical-session.target soit active (Requisite). Cette cible ne se démarre pas à la
+# main : odysseus-session.target la tire, démarrée une fois le compositeur prêt et
+# arrêtée à la sortie. Pas pour une session d'essai : la cible est celle de la vraie.
+UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+TARGET=""
+if [ -z "${ODYSSEUS_LOGDIR:-}" ] && command -v systemctl >/dev/null 2>&1; then
+    TARGET=odysseus-session.target
+    unit="[Unit]
+Description=Session odysseus
+Documentation=https://github.com/dcourtin/odysseus-desktop
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
+"
+    if [ "$(cat "$UNITS/$TARGET" 2>/dev/null)" != "$(printf '%s' "$unit")" ]; then
+        mkdir -p "$UNITS"
+        printf '%s' "$unit" > "$UNITS/$TARGET"
+        systemctl --user daemon-reload 2>/dev/null
+    fi
+fi
+START_TARGET=""
+[ -n "$TARGET" ] && START_TARGET="systemctl --user start $TARGET 2>>'$LOGDIR/session.log';"
+
 # Premier démarrage : l'accueil (Réglages en mode pas à pas), tant qu'il n'a pas été terminé
 WELCOME=""
 if [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/odysseus/accueil" ]; then
     WELCOME="(sleep 2; '$ROOT/odysseus-reglages' --accueil) 2>>'$LOGDIR/accueil.log' &"
 fi
 
-# Au démarrage : l'affichage est transmis au bus de session (le démon de notifications
-# peut y être relancé à la demande, voir ~/.local/share/dbus-1/services), puis
-# démons de notifications, des automatismes et de la réception de fichiers, Dock et barre
-exec "$ROOT/compositor" -c "dbus-update-activation-environment WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP; '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-reception' 2>>'$LOGDIR/reception.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & $WELCOME exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
+# Au démarrage : l'affichage est transmis au bus de session et à systemd (le démon de
+# notifications et les portails y sont lancés à la demande, voir
+# ~/.local/share/dbus-1/services), la cible de session est démarrée, puis démons de
+# notifications, des automatismes et de la réception de fichiers, Dock et barre
+"$ROOT/compositor" -c "dbus-update-activation-environment --systemd WAYLAND_DISPLAY SWAYSOCK XDG_CURRENT_DESKTOP XDG_SESSION_TYPE; $START_TARGET '$ROOT/odysseus-notify' 2>>'$LOGDIR/notify.log' & '$ROOT/odysseus-auto' 2>>'$LOGDIR/auto.log' & '$ROOT/odysseus-reception' 2>>'$LOGDIR/reception.log' & '$ROOT/odysseus-dock' 2>>'$LOGDIR/dock.log' & $WELCOME exec '$ROOT/shell-bar'" > "$LOGDIR/compositor.log" 2>&1
+status=$?
+# Sortie de session : les portails s'arrêtent avec la cible
+[ -n "$TARGET" ] && systemctl --user stop "$TARGET" 2>>"$LOGDIR/session.log"
+exit $status
