@@ -1,9 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <!-- Icône d'odysseus (tools/icones.py) : Notes, tablette de cire -->
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="#f3eee3"/>
-  <rect x="30" y="28" width="58" height="72" rx="12" fill="#1d1916"/>
-  <path d="M44 50h30M44 64h22" stroke="#f3eee3" stroke-width="6" stroke-linecap="round"/>
-  <path d="M100 36L80 92" stroke="#f3eee3" stroke-width="13" stroke-linecap="round"/>
-  <path d="M100 36L80 92" stroke="#1d1916" stroke-width="6" stroke-linecap="round"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.2"/>
+  <!-- Icône d'odysseus (tools/icones.py) : Notes, bloc-notes -->
+  <defs>
+    <linearGradient id="fond-odysseus-notes" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfaf3"/>
+      <stop offset="1" stop-color="#efe9dc"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond-odysseus-notes)"/>
+  <path d="M8 36a28 28 0 0 1 28-28h56a28 28 0 0 1 28 28v6H8z" fill="#f2c14e"/>
+  <path d="M30 60h68M30 76h68M30 92h44" stroke="#cfc6b6" stroke-width="5" stroke-linecap="round"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
 </svg>

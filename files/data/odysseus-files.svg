@@ -1,10 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <!-- Icône d'odysseus (tools/icones.py) : Fichiers, amphore -->
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="#d97757"/>
-  <path d="M56 37C44 33 37 41 42 53M72 37C84 33 91 41 86 53" fill="none" stroke="#1d1916" stroke-width="6" stroke-linecap="round"/>
-  <rect x="49" y="26" width="30" height="7" rx="3.5" fill="#1d1916"/>
-  <path d="M57 33h14v10C86 47 93 57 93 69c0 13-10 23-21 29H56C45 92 35 82 35 69c0-12 7-22 22-26z" fill="#1d1916"/>
-  <rect x="54" y="98" width="20" height="6" rx="3" fill="#1d1916"/>
-  <path d="M44 68h40" stroke="#d97757" stroke-width="5" stroke-linecap="round"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.2"/>
+  <!-- Icône d'odysseus (tools/icones.py) : Fichiers, dossier -->
+  <defs>
+    <linearGradient id="fond-odysseus-files" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5c9cf2"/>
+      <stop offset="1" stop-color="#3a73d1"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond-odysseus-files)"/>
+  <path d="M30 42a8 8 0 0 1 8-8h16l8 8h28a8 8 0 0 1 8 8v4H30z" fill="#cfe1ff"/>
+  <rect x="30" y="50" width="68" height="46" rx="8" fill="#ffffff"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
 </svg>

@@ -1,86 +1,85 @@
 #!/usr/bin/env python3
-"""Icônes des applis d'odysseus : céramique grecque, en formes modernes.
-Chaque appli est un objet de l'Odyssée réduit à une silhouette pleine, sur un
-fond uni tiré des vases antiques (terre cuite, fond blanc, noir, ocre). Les
-découpes prennent la couleur du fond ; un liseré sombre détache la tuile.
+"""Icônes des applis d'odysseus : des symboles courants, simples, sur une même
+tuile. Chaque appli a sa couleur (un léger dégradé, plus clair en haut) et un
+dessin blanc, lisible jusqu'à la taille de la roue et de la barre.
 
-  Fichiers   amphore (on y rangeait tout)
-  Notes      tablette de cire et stylet
-  Réglages   lyre (on l'accorde)
-  Aperçu     œil de proue (les trières en portaient un, pour voir)
-  Assistant  chouette d'Athéna, qui guide Ulysse
+  Fichiers   dossier
+  Notes      bloc-notes (tuile claire, bandeau jaune)
+  Réglages   roue dentée
+  Aperçu     photo (montagne et soleil)
+  Assistant  bulle de dialogue
 
 Lancer depuis la racine du dépôt : python3 tools/icones.py
 """
 
+import math
+
 GABARIT = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <!-- Icône d'odysseus (tools/icones.py) : {nom}, {objet} -->
-  <rect x="8" y="8" width="112" height="112" rx="28" fill="{fond}"/>
+  <defs>
+    <linearGradient id="fond-{id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="{haut}"/>
+      <stop offset="1" stop-color="{bas}"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#fond-{id})"/>
 {dessin}
-  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.2"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#000000" stroke-opacity="0.18"/>
 </svg>
 """
 
-NOIR = "#1d1916"
-TERRE = "#d97757"
-
-# Fonds : couleur de la tuile, couleur de la figure
-FONDS = {
-    "terre": (TERRE, NOIR),
-    "blanc": ("#f3eee3", NOIR),
-    "noir": ("#3a312c", TERRE),
-    "ocre": ("#e3a24f", NOIR),
-}
+BLANC = "#ffffff"
 
 
-def amphore(f, c):
-    return f"""  <path d="M56 37C44 33 37 41 42 53M72 37C84 33 91 41 86 53" fill="none" stroke="{f}" stroke-width="6" stroke-linecap="round"/>
-  <rect x="49" y="26" width="30" height="7" rx="3.5" fill="{f}"/>
-  <path d="M57 33h14v10C86 47 93 57 93 69c0 13-10 23-21 29H56C45 92 35 82 35 69c0-12 7-22 22-26z" fill="{f}"/>
-  <rect x="54" y="98" width="20" height="6" rx="3" fill="{f}"/>
-  <path d="M44 68h40" stroke="{c}" stroke-width="5" stroke-linecap="round"/>"""
+def dossier():
+    return """  <path d="M30 42a8 8 0 0 1 8-8h16l8 8h28a8 8 0 0 1 8 8v4H30z" fill="#cfe1ff"/>
+  <rect x="30" y="50" width="68" height="46" rx="8" fill="#ffffff"/>"""
 
 
-def tablette(f, c):
-    return f"""  <rect x="30" y="28" width="58" height="72" rx="12" fill="{f}"/>
-  <path d="M44 50h30M44 64h22" stroke="{c}" stroke-width="6" stroke-linecap="round"/>
-  <path d="M100 36L80 92" stroke="{c}" stroke-width="13" stroke-linecap="round"/>
-  <path d="M100 36L80 92" stroke="{f}" stroke-width="6" stroke-linecap="round"/>"""
+def bloc_notes():
+    return """  <path d="M8 36a28 28 0 0 1 28-28h56a28 28 0 0 1 28 28v6H8z" fill="#f2c14e"/>
+  <path d="M30 60h68M30 76h68M30 92h44" stroke="#cfc6b6" stroke-width="5" stroke-linecap="round"/>"""
 
 
-def lyre(f, c):
-    return f"""  <path d="M42 32v30a22 22 0 0 0 44 0V32" fill="none" stroke="{f}" stroke-width="10" stroke-linecap="round"/>
-  <path d="M36 44h56" stroke="{f}" stroke-width="7" stroke-linecap="round"/>
-  <path d="M56 44v38M64 44v40M72 44v38" stroke="{f}" stroke-width="3.5" stroke-linecap="round"/>
-  <rect x="52" y="90" width="24" height="8" rx="4" fill="{f}"/>"""
+def roue_dentee():
+    # Huit dents trapézoïdales autour d'un disque, trou au centre
+    cx = cy = 64
+    r_out, r_in, n = 38, 29, 8
+    pts = []
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        for da, r in ((-0.20, r_in), (-0.13, r_out), (0.13, r_out), (0.20, r_in)):
+            pts.append((cx + r * math.cos(a + da), cy + r * math.sin(a + da)))
+    d = "M" + "L".join(f"{x:.2f} {y:.2f}" for x, y in pts) + "z"
+    hole = f"M{cx + 12} {cy}a12 12 0 1 0 -24 0a12 12 0 1 0 24 0z"
+    return f"""  <path d="{d}{hole}" fill="{BLANC}" fill-rule="evenodd" stroke="{BLANC}" stroke-width="3" stroke-linejoin="round"/>"""
 
 
-def oeil(f, c):
-    return f"""  <path d="M22 64C34 42 50 34 64 34s30 8 42 30c-12 22-28 30-42 30S34 86 22 64z" fill="{f}"/>
-  <circle cx="64" cy="64" r="17" fill="{c}"/>
-  <circle cx="64" cy="64" r="9" fill="{f}"/>"""
+def photo():
+    return """  <rect x="28" y="34" width="72" height="60" rx="10" fill="#ffffff"/>
+  <circle cx="81" cy="52" r="7" fill="#f2c14e"/>
+  <path d="M34 88l20-24 14 16 8-9 18 17z" fill="#2f9a8e" stroke="#2f9a8e" stroke-width="2" stroke-linejoin="round"/>"""
 
 
-def chouette(f, c):
-    return f"""  <path d="M40 40l-2-12 14 8M88 40l2-12-14 8" fill="{f}" stroke="{f}" stroke-width="4" stroke-linejoin="round"/>
-  <ellipse cx="64" cy="70" rx="28" ry="32" fill="{f}"/>
-  <circle cx="52" cy="60" r="11.5" fill="{c}"/>
-  <circle cx="76" cy="60" r="11.5" fill="{c}"/>
-  <circle cx="53" cy="61" r="5.5" fill="{f}"/>
-  <circle cx="75" cy="61" r="5.5" fill="{f}"/>
-  <path d="M64 70l-4.5 4 4.5 6 4.5-6z" fill="{c}"/>"""
+def bulle():
+    return """  <path d="M64 30c21 0 36 12 36 28S85 86 64 86c-4 0-8-.4-11.5-1.3L38 96l3.5-15C33 76 28 68 28 58c0-16 15-28 36-28z" fill="#ffffff"/>
+  <circle cx="50" cy="58" r="5" fill="#c9653f"/>
+  <circle cx="64" cy="58" r="5" fill="#c9653f"/>
+  <circle cx="78" cy="58" r="5" fill="#c9653f"/>"""
 
 
+# Chemin, nom, objet, couleur du haut et du bas de la tuile, dessin
 ICONES = [
-    ("files/data/odysseus-files.svg", "Fichiers", "amphore", "terre", amphore),
-    ("notes/data/odysseus-notes.svg", "Notes", "tablette de cire", "blanc", tablette),
-    ("settings/data/odysseus-reglages.svg", "Réglages", "lyre", "noir", lyre),
-    ("preview/data/odysseus-apercu.svg", "Aperçu", "œil de proue", "ocre", oeil),
-    ("assistant/data/odysseus-assistant.svg", "Assistant", "chouette d'Athéna", "blanc", chouette),
+    ("files/data/odysseus-files.svg", "Fichiers", "dossier", "#5c9cf2", "#3a73d1", dossier),
+    ("notes/data/odysseus-notes.svg", "Notes", "bloc-notes", "#fdfaf3", "#efe9dc", bloc_notes),
+    ("settings/data/odysseus-reglages.svg", "Réglages", "roue dentée", "#9a958f", "#6d6863", roue_dentee),
+    ("preview/data/odysseus-apercu.svg", "Aperçu", "photo", "#4cc2b3", "#2a9488", photo),
+    ("assistant/data/odysseus-assistant.svg", "Assistant", "bulle de dialogue", "#e8906d", "#c9653f", bulle),
 ]
 
-for chemin, nom, objet, fond, dessin in ICONES:
-    tuile, figure = FONDS[fond]
+for chemin, nom, objet, haut, bas, dessin in ICONES:
     with open(chemin, "w") as f:
-        f.write(GABARIT.format(nom=nom, objet=objet, fond=tuile, dessin=dessin(figure, tuile)))
+        # Identifiant propre à chaque icône : plusieurs peuvent cohabiter dans un document
+        ident = chemin.rsplit("/", 1)[-1].removesuffix(".svg")
+        f.write(GABARIT.format(id=ident, nom=nom, objet=objet, haut=haut, bas=bas, dessin=dessin()))
     print(chemin)

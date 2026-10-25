@@ -295,6 +295,6 @@ installés par `tools/installer.sh`.
 
 MIT — © 2026 David Courtin. Voir [LICENSE](LICENSE). Le compositeur est parti de
 *smallvil* (Smithay, MIT) : voir `compositor/LICENSE-smithay.txt`.
-Les icônes des applis d'odysseus sont des dessins originaux (céramique grecque en
-formes pleines : amphore, tablette de cire, lyre, œil de proue, chouette
-d'Athéna), générés par `tools/icones.py`.
+Les icônes des applis d'odysseus sont des dessins originaux (symboles courants sur
+une même tuile : dossier, bloc-notes, roue dentée, photo, bulle de dialogue),
+générés par `tools/icones.py`.
