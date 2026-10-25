@@ -53,8 +53,10 @@ applis ouvertes qui n'en font pas partie, et la corbeille.
 - **Il ne prend pas de place** : une fenêtre agrandie occupe tout l'écran, et
   le Dock s'efface dès qu'une fenêtre passe dessous ; pousser la souris contre
   le bas de l'écran le fait revenir.
-- **Réglages > Dock** : quand le masquer (quand une fenêtre passe dessous,
-  toujours, jamais) et la taille des icônes.
+- **Réglages > Dock** : l'afficher ou non, quand le masquer (quand une
+  fenêtre passe dessous, toujours, jamais) et la taille des icônes. Sans Dock,
+  la roue (Super+R) et le lanceur (Super+Espace) ouvrent les applis ; choisir
+  dans la roue une appli dont la fenêtre est réduite la ramène.
 
 ## La roue
 

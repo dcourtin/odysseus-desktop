@@ -267,6 +267,10 @@ fn create_layer(
 }
 
 fn main() {
+    // Désactivé dans Réglages > Dock : rien à afficher
+    if !Settings::load().dock {
+        return;
+    }
     let conn = Connection::connect_to_env().expect("pas de compositeur Wayland");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
     let qh: QueueHandle<Dock> = event_queue.handle();
@@ -289,6 +293,10 @@ fn main() {
                 theme::drain(fd.as_fd());
                 theme::reload();
                 dock.settings = Settings::load();
+                // Désactivé : sa surface part avec lui ; Réglages le relance
+                if !dock.settings.dock {
+                    std::process::exit(0);
+                }
                 // Favoris modifiés à la main (~/.config/odysseus/dock) : suivis aussi
                 dock.pinned = load_pinned(&dock.apps);
                 dock.rebuild();

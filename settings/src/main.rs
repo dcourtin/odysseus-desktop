@@ -332,6 +332,7 @@ enum Hit {
     RoueBack,
     RoueRename,
     Suspend(u32),
+    DockToggle,
     DockHide(&'static str),
     DockSize(u32),
     SleepNow,
@@ -1312,6 +1313,14 @@ impl App {
             Hit::Suspend(min) => {
                 self.settings.suspend_min = min;
                 self.save();
+            }
+            Hit::DockToggle => {
+                self.settings.dock = !self.settings.dock;
+                self.save();
+                // Réactivé : il s'était arrêté, on le relance
+                if self.settings.dock {
+                    system::spawn_sibling("odysseus-dock", &[]);
+                }
             }
             Hit::DockHide(mode) => {
                 self.settings.dock_hide = mode.into();
@@ -2301,6 +2310,26 @@ impl App {
     }
 
     fn page_dock(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
+        let p = theme::palette();
+        let mut y = y;
+        ui.card(x, y, w, ROW_H);
+        ui.text("Afficher le Dock", x + 18.0, y, ROW_H, 13.5, p.text);
+        ui.switch(
+            x + w - 18.0 - 40.0,
+            y + 14.0,
+            self.settings.dock,
+            Hit::DockToggle,
+        );
+        y += ROW_H + 8.0;
+        if !self.settings.dock {
+            return ui.note(
+                x,
+                y,
+                w,
+                "Sans Dock, la roue (Super+R) et le lanceur (Super+Espace) ouvrent les applis ; choisir dans la roue une appli dont la fenêtre est réduite la ramène.",
+            );
+        }
+        y += 20.0;
         let mut y = ui.section(x, y, "Masquer le Dock");
         let sel = DOCK_HIDE
             .iter()

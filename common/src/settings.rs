@@ -31,6 +31,8 @@ pub struct Settings {
     /// répétitions par seconde
     pub repeat_delay: u32,
     pub repeat_rate: u32,
+    /// Dock affiché ; désactivé, il ne se lance plus (Réglages le relance)
+    pub dock: bool,
     /// Dock : masquage (« intelligent » : quand une fenêtre passe dessous,
     /// « toujours », « jamais ») et taille des icônes (pixels logiques)
     pub dock_hide: String,
@@ -54,6 +56,7 @@ impl Default for Settings {
             keyboard: "auto".into(),
             repeat_delay: 300,
             repeat_rate: 25,
+            dock: true,
             dock_hide: "intelligent".into(),
             dock_size: 48,
             reception: false,
@@ -94,6 +97,7 @@ impl Settings {
                 "clavier" if !value.is_empty() => s.keyboard = value.to_string(),
                 "repetition_delai" => s.repeat_delay = num().unwrap_or(300).clamp(150, 1500),
                 "repetition_vitesse" => s.repeat_rate = num().unwrap_or(25).clamp(5, 60),
+                "dock" => s.dock = value != "non",
                 "dock_masquage" if ["intelligent", "toujours", "jamais"].contains(&value) => {
                     s.dock_hide = value.to_string()
                 }
@@ -136,6 +140,7 @@ impl Settings {
         line("clavier", self.keyboard.clone());
         line("repetition_delai", self.repeat_delay.to_string());
         line("repetition_vitesse", self.repeat_rate.to_string());
+        line("dock", if self.dock { "oui" } else { "non" }.into());
         line("dock_masquage", self.dock_hide.clone());
         line("dock_taille", self.dock_size.to_string());
         line("reception", if self.reception { "oui" } else { "non" }.into());
@@ -199,6 +204,7 @@ mod tests {
             keyboard: "fr:mac".into(),
             repeat_delay: 450,
             repeat_rate: 30,
+            dock: false,
             dock_hide: "toujours".into(),
             dock_size: 56,
             reception: true,
