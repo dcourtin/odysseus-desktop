@@ -36,6 +36,9 @@ const LOCKED_SCREEN_OFF: Duration = Duration::from_secs(30);
 pub enum LockState {
     #[default]
     Unlocked,
+    /// Ouverture de session (`ODYSSEUS_VERROU=1`) : verrouillé avant même que le
+    /// verrou ne se connecte ; écran noir, aucune entrée transmise
+    Pending,
     /// Demande reçue : confirmée au client après une image noire affichée
     Locking(SessionLocker),
     Locked,
@@ -49,6 +52,13 @@ impl Odysseus {
     /// Surface du verrou (une seule sortie gérée).
     pub fn lock_surface(&self) -> Option<&LockSurface> {
         self.lock_surfaces.first()
+    }
+
+    /// Ouverture de session verrouillée : rien du bureau n'est montré avant que
+    /// le mot de passe ait été donné au verrou.
+    pub fn start_locked(&mut self) {
+        self.lock_state = LockState::Pending;
+        self.lock_session();
     }
 
     /// Lance le verrou s'il n'est pas déjà affiché.

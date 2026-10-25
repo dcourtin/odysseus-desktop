@@ -817,6 +817,16 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
             mode.size,
         ));
     }
+    // Ouverture de session : voile et logo, hors des captures
+    if !state.is_locked() {
+        elements.extend(crate::render::splash_elements(
+            state,
+            &output,
+            &mut udev.renderer,
+            &udev.shaders,
+            mode.size,
+        ));
+    }
     // La scène seule (sans curseur ni couche de capture) : c'est ce qu'on capture
     let scene_start = elements.len();
     match crate::lock::lock_elements(state, &output, &mut udev.renderer) {

@@ -17,6 +17,7 @@ mod render;
 mod screencast;
 mod screenshot;
 mod snap;
+mod splash;
 mod state;
 mod udev;
 mod wallpaper;
@@ -66,6 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Dans une session graphique (sway…) : fenêtre winit ; sur un tty : DRM
     let nested =
         std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    // Ouverture de session verrouillée (service odysseus-session@ttyN) : le verrou
+    // sert d'écran de connexion, rien du bureau n'est montré avant lui
+    if std::env::var("ODYSSEUS_VERROU").as_deref() == Ok("1") {
+        data.state.start_locked();
+    }
     if nested {
         crate::winit::init_winit(&mut event_loop, &mut data)?;
     } else {

@@ -376,6 +376,47 @@ fn label_element(
     .map(OdysseusElement::CursorTheme)
 }
 
+/// Ouverture de session (voir `splash`) : logo et indicateur sur un voile de la
+/// couleur du thème, au-dessus du bureau ; rien une fois le bureau montré.
+pub fn splash_elements(
+    state: &crate::Odysseus,
+    output: &Output,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    fb_size: Size<i32, Physical>,
+) -> Vec<OdysseusElement> {
+    let mut out = Vec::new();
+    let (Some(splash), Some(geo)) = (state.splash.as_ref(), state.space.output_geometry(output))
+    else {
+        return out;
+    };
+    let scale = output.current_scale().fractional_scale();
+    let frame = Frame {
+        scale,
+        transform: output.current_transform(),
+        fb_size,
+        radius: 0.0,
+        border_color: [0.0; 4],
+    };
+    // Origine de la sortie : les éléments sont relatifs à elle
+    let screen = Rectangle::from_size(geo.size.to_f64());
+    let center = Point::from((screen.size.w / 2.0, screen.size.h / 2.0));
+    out.extend(splash.logo_element(renderer, center, scale));
+    let veil = splash.veil_alpha();
+    if veil > 0.0 {
+        let bg = theme::palette().background;
+        out.push(fill_element(
+            shaders,
+            &frame,
+            screen,
+            0.0,
+            [bg.r * veil, bg.g * veil, bg.b * veil, veil],
+            [0.0; 4],
+        ));
+    }
+    out
+}
+
 /// Couche de la capture d'écran, au-dessus de tout (sauf le curseur) : voile,
 /// rectangle tracé et ses dimensions, fenêtre surlignée, éclair de confirmation.
 pub fn overlay_elements(
@@ -524,6 +565,7 @@ pub fn single_window_elements(
         opening: &empty_open,
         closing: &[],
         hide_top_layer: false,
+        top_alpha: 1.0,
         motions: &empty_motion,
         slide: None,
         snap_preview: None,
@@ -639,6 +681,7 @@ fn layer_elements(
     renderer: &mut GlesRenderer,
     scale: f64,
     layer: Layer,
+    alpha: f32,
 ) -> Vec<OdysseusElement> {
     let map = layer_map_for_output(output);
     let mut elements = Vec::new();
@@ -648,7 +691,7 @@ fn layer_elements(
         };
         let loc = geo.loc.to_physical_precise_round(scale);
         let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            surface.render_elements(renderer, loc, Scale::from(scale), 1.0);
+            surface.render_elements(renderer, loc, Scale::from(scale), alpha);
         elements.extend(surfaces.into_iter().map(OdysseusElement::Layer));
     }
     elements
@@ -827,6 +870,8 @@ pub struct Scene<'a> {
     pub closing: &'a [Closing],
     /// Fenêtre plein écran au premier plan : la barre s'efface
     pub hide_top_layer: bool,
+    /// Opacité de la barre et du Dock (fondu de l'ouverture de session)
+    pub top_alpha: f32,
     pub motions: &'a HashMap<ObjectId, crate::anim::Motion>,
     pub slide: Option<&'a crate::anim::WorkspaceSlide>,
     pub snap_preview: Option<crate::anim::SnapPreview>,
@@ -861,9 +906,15 @@ pub fn output_elements(
         .map(|g| g.size.w as f64)
         .unwrap_or(1920.0);
 
-    let mut elements = layer_elements(output, renderer, scale, Layer::Overlay);
-    if !scene.hide_top_layer {
-        elements.extend(layer_elements(output, renderer, scale, Layer::Top));
+    let mut elements = layer_elements(output, renderer, scale, Layer::Overlay, 1.0);
+    if !scene.hide_top_layer && scene.top_alpha > 0.0 {
+        elements.extend(layer_elements(
+            output,
+            renderer,
+            scale,
+            Layer::Top,
+            scene.top_alpha,
+        ));
     }
 
     // Fenêtres en cours de fermeture : fondu et rétrécissement de 100 % à 94 %
@@ -962,8 +1013,14 @@ pub fn output_elements(
             ));
         }
     }
-    elements.extend(layer_elements(output, renderer, scale, Layer::Bottom));
-    elements.extend(layer_elements(output, renderer, scale, Layer::Background));
+    elements.extend(layer_elements(output, renderer, scale, Layer::Bottom, 1.0));
+    elements.extend(layer_elements(
+        output,
+        renderer,
+        scale,
+        Layer::Background,
+        1.0,
+    ));
     if let (Some(wallpaper), Some(geo)) = (wallpaper, space.output_geometry(output)) {
         elements.push(OdysseusElement::Wallpaper(wallpaper.element(geo.size)));
     }

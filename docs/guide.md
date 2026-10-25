@@ -21,6 +21,18 @@ lit aussi (documentation « guide ») : on peut lui demander « comment je fais�
 | parler à l'Assistant | Super+A, ou son icône dans la barre |
 | retrouver tous les raccourcis | Super+K |
 
+## L'ouverture de session
+
+À la connexion, le fond d'écran paraît tout de suite, voilé, avec « odysseus » et
+un petit indicateur qui tourne : la barre et le Dock se lancent en coulisse. Dès
+qu'ils sont prêts (au plus 4 secondes), le voile s'efface en fondu et ils
+apparaissent ensemble, sans que le bureau se monte pièce par pièce.
+
+Au démarrage du PC, la session s'ouvre d'elle-même sur l'écran de verrouillage,
+qui sert d'écran de connexion : le mot de passe donné, le bureau apparaît en
+fondu. Rien du bureau n'est visible avant. En secours, Ctrl+Alt+F2 offre une
+connexion en mode texte.
+
 ## La barre du haut
 
 De gauche à droite : les bureaux (clic, ou molette pour passer de l'un à l'autre),

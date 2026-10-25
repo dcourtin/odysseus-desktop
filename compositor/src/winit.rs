@@ -117,15 +117,21 @@ pub fn init_winit(
                         let (renderer, mut framebuffer) = backend.bind().unwrap();
                         let elements = match crate::lock::lock_elements(state, &output, renderer) {
                             Some(lock) => lock,
-                            None => crate::render::output_elements(
-                                &state.space,
-                                &output,
-                                renderer,
-                                &shaders,
-                                size,
-                                wallpaper.as_ref(),
-                                &state.scene(focused.as_ref()),
-                            ),
+                            None => {
+                                let mut elements = crate::render::splash_elements(
+                                    state, &output, renderer, &shaders, size,
+                                );
+                                elements.extend(crate::render::output_elements(
+                                    &state.space,
+                                    &output,
+                                    renderer,
+                                    &shaders,
+                                    size,
+                                    wallpaper.as_ref(),
+                                    &state.scene(focused.as_ref()),
+                                ));
+                                elements
+                            }
                         };
                         damage_tracker
                             .render_output(

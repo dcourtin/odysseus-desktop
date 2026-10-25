@@ -153,6 +153,8 @@ pub struct Odysseus {
     pub motions: HashMap<ObjectId, crate::anim::Motion>,
     pub slide: Option<crate::anim::WorkspaceSlide>,
     pub snap_preview: Option<crate::anim::SnapPreview>,
+    /// Ouverture de session : voile et logo jusqu'à ce que la barre et le Dock soient là
+    pub splash: Option<crate::splash::Splash>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,6 +310,7 @@ impl Odysseus {
             motions: HashMap::new(),
             slide: None,
             snap_preview: None,
+            splash: crate::splash::Splash::new(),
         }
     }
 
@@ -328,6 +331,14 @@ impl Odysseus {
         self.closing
             .retain(|c| c.start.elapsed() < crate::render::close_duration());
         self.motions.retain(|_, m| !m.done());
+        let (locked, dock) = (self.is_locked(), self.settings.dock);
+        if self
+            .splash
+            .as_mut()
+            .is_some_and(|s| s.update(&self.space, locked, dock))
+        {
+            self.splash = None;
+        }
         if self.slide.as_ref().is_some_and(|s| s.done()) {
             self.slide = None;
         }
@@ -346,6 +357,7 @@ impl Odysseus {
             opening: &self.opening,
             closing: &self.closing,
             hide_top_layer: self.top_is_fullscreen(),
+            top_alpha: self.splash.as_ref().map_or(1.0, |s| s.top_alpha()),
             motions: &self.motions,
             slide: self.slide.as_ref(),
             snap_preview: self.snap_preview,
