@@ -259,6 +259,11 @@ local). Il voit le bureau par ses outils, dans les limites que vous fixez.
 
 - **Entrée** envoie, **↑** rappelle la dernière question, **Ctrl+L** commence une
   nouvelle conversation, **Échap** arrête la réponse puis ferme.
+- **La saisie s'édite** comme dans Notes : flèches (Ctrl : par mot), Début, Fin,
+  Maj pour sélectionner, clic pour placer le curseur, glisser pour sélectionner,
+  double-clic sur un mot, triple sur tout ; Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V
+  (sur une ligne), Ctrl+Z annule et Ctrl+Maj+Z rétablit. Un texte plus large que
+  la zone défile pour garder le curseur en vue.
 - **Reprendre une conversation** : les plus récentes sont proposées sous les
   suggestions ; l'icône d'horloge ou **Ctrl+H** les liste toutes, et ce que vous
   tapez y cherche (sans casse ni accents, dans les questions et les réponses).

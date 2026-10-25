@@ -19,4 +19,5 @@ smithay-client-toolkit.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 rusqlite = "0.37"
+notes = { path = "../notes" }
 libc = "0.2"

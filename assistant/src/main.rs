@@ -28,6 +28,7 @@ mod backend;
 mod context;
 mod mcp;
 
+use notes::editor::Editor;
 use std::{
     fs::File,
     io::{Read, Write},
@@ -232,6 +233,8 @@ enum Hit {
     Delete(i64),
     /// Des faits de la mémoire ont six mois sans nouvelles : ouvrir Réglages > Agent
     ReviewMemory,
+    /// La zone de saisie : placer le curseur, sélectionner
+    Input,
 }
 
 /// Largeur, hauteur du tampon et thème
@@ -258,7 +261,17 @@ struct App {
     drops: channel::Sender<Vec<PathBuf>>,
     agent: AgentConfig,
     items: Vec<Item>,
-    input: String,
+    /// La question en cours de frappe : curseur, sélection, annuler (le
+    /// modèle de Notes, sur une ligne)
+    input: Editor,
+    /// Géométrie de la zone de saisie au dernier dessin : abscisse du texte,
+    /// largeur visible, défilement horizontal (le curseur reste visible)
+    input_x: std::cell::Cell<f32>,
+    input_w: std::cell::Cell<f32>,
+    input_scroll: std::cell::Cell<f32>,
+    /// Sélection à la souris en cours ; clics rapprochés (double : mot, triple : tout)
+    input_drag: bool,
+    input_clicks: Option<(Instant, u8)>,
     files: Vec<PathBuf>,
     /// Le contexte rassemblé à l'ouverture, tant qu'il n'est pas envoyé ni retiré
     chips: Vec<Chip>,
@@ -463,7 +476,12 @@ fn main() {
         drops,
         agent: AgentConfig::load(),
         items: Vec::new(),
-        input: String::new(),
+        input: Editor::new(String::new()),
+        input_x: std::cell::Cell::new(0.0),
+        input_w: std::cell::Cell::new(1.0),
+        input_scroll: std::cell::Cell::new(0.0),
+        input_drag: false,
+        input_clicks: None,
         files,
         chips,
         window,
@@ -497,7 +515,7 @@ fn main() {
     app.refresh_recent();
     // Question passée en argument (lanceur) : posée aussitôt
     if !question.is_empty() {
-        app.input = question;
+        app.set_input(question);
         app.send();
     }
     while !app.exit && !TERM.load(std::sync::atomic::Ordering::Relaxed) {
@@ -599,11 +617,58 @@ fn when(t: i64) -> String {
 }
 
 impl App {
+    /// Remplace ce qui est tapé (curseur à la fin, historique d'annulation à neuf)
+    fn set_input(&mut self, text: String) {
+        self.input = Editor::new(text);
+        self.input_scroll.set(0.0);
+    }
+
+    /// Taille du texte de la saisie, en pixels logiques
+    const INPUT_PX: f32 = 14.0;
+
+    /// Position dans le texte tapé sous l'abscisse `x` (pixels logiques de la
+    /// fenêtre) : la frontière de caractère la plus proche
+    fn input_byte_at(&self, x: f32) -> usize {
+        let s = self.scale.max(1) as f32;
+        let target = x - self.input_x.get() + self.input_scroll.get();
+        let text = &self.input.text;
+        let mut best = (0usize, f32::MAX);
+        for (i, _) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
+            let w = self.regular.measure(&text[..i], Self::INPUT_PX * s) / s;
+            let d = (w - target).abs();
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        best.0
+    }
+
+    /// Clic dans la saisie : curseur, Maj étend, double-clic prend le mot,
+    /// triple tout ; puis glisser sélectionne
+    fn input_click(&mut self, x: f32) {
+        let pos = self.input_byte_at(x);
+        let now = Instant::now();
+        let count = match self.input_clicks {
+            Some((at, n)) if now.duration_since(at) < Duration::from_millis(400) => n + 1,
+            _ => 1,
+        };
+        self.input_clicks = Some((now, count));
+        match count {
+            2 => self.input.select_word(pos),
+            n if n >= 3 => self.input.select_all(),
+            _ => {
+                self.input.move_to(pos, self.modifiers.shift);
+                self.input_drag = true;
+            }
+        }
+        self.draw();
+    }
+
     fn send(&mut self) {
         if self.job.is_some() {
             return;
         }
-        let question = self.input.trim().to_string();
+        let question = self.input.text.trim().to_string();
         if question.is_empty() && self.files.is_empty() && self.chips.is_empty() {
             return;
         }
@@ -629,7 +694,7 @@ impl App {
             context: chips.iter().map(|c| c.kind.label().to_string()).collect(),
         });
         self.last_question = question.clone();
-        self.input.clear();
+        self.set_input(String::new());
         self.scroll = 0.0;
         // La question est gardée avant la réponse : fermé entre-temps, rien n'est perdu
         self.persist();
@@ -686,7 +751,7 @@ impl App {
     /// Applications et automatismes qui correspondent à ce qui est tapé,
     /// les meilleurs d'abord (score, indice dans `apps`)
     fn launch_matches(&self) -> Vec<(i32, usize)> {
-        let q = self.input.trim();
+        let q = self.input.text.trim();
         if q.chars().count() < MIN_QUERY
             || q.starts_with('?')
             || self.history.is_some()
@@ -725,7 +790,7 @@ impl App {
 
     /// Un mot seul qui désigne nettement une application : Entrée l'ouvre
     fn launch_on_enter(&self) -> Option<usize> {
-        let q = self.input.trim();
+        let q = self.input.text.trim();
         if q.contains(char::is_whitespace) {
             return None;
         }
@@ -738,7 +803,7 @@ impl App {
     /// Ce qui est tapé commence par une commande connue (dans le PATH) et ne
     /// désigne pas nettement une application : on propose de l'exécuter
     fn run_candidate(&self) -> Option<String> {
-        let q = self.input.trim();
+        let q = self.input.text.trim();
         let first = q.split_whitespace().next()?;
         if q.starts_with('?') || self.history.is_some() || self.job.is_some() {
             return None;
@@ -1092,7 +1157,7 @@ impl App {
         match self.hit_at(x, y) {
             Some(Hit::Suggestion(i)) => {
                 if let Some(q) = self.suggestions().get(i) {
-                    self.input = q.clone();
+                    self.set_input(q.clone());
                     self.send();
                 }
             }
@@ -1120,6 +1185,7 @@ impl App {
             Some(Hit::Back) => self.hide_history(),
             Some(Hit::Open(id)) => self.open_conversation(id),
             Some(Hit::Delete(id)) => self.delete_conversation(id),
+            Some(Hit::Input) => self.input_click(x),
             Some(Hit::ReviewMemory) => {
                 let settings = std::env::current_exe()
                     .ok()
@@ -1213,7 +1279,7 @@ impl App {
     }
 
     fn key(&mut self, event: KeyEvent) {
-        let ctrl = self.modifiers.ctrl;
+        let (ctrl, shift) = (self.modifiers.ctrl, self.modifiers.shift);
         if self.history.is_some() {
             self.history_key(event);
             return;
@@ -1243,19 +1309,37 @@ impl App {
                     .output()
                 {
                     let t = String::from_utf8_lossy(&out.stdout).replace(['\n', '\r'], " ");
-                    self.input.push_str(&t);
+                    if !t.is_empty() {
+                        self.input.insert(&t);
+                    }
                 }
             }
-            Keysym::BackSpace if ctrl => {
-                let trimmed = self.input.trim_end().len();
-                self.input.truncate(trimmed);
-                let cut = self.input.rfind(' ').map(|i| i + 1).unwrap_or(0);
-                self.input.truncate(cut);
+            Keysym::c if ctrl => {
+                if let Some(t) = self.input.selected_text() {
+                    let _ = wl_copy(t);
+                }
+                return;
             }
-            Keysym::BackSpace => {
-                self.input.pop();
+            Keysym::x if ctrl => {
+                if let Some(t) = self.input.selected_text() {
+                    let _ = wl_copy(t);
+                    self.input.backspace(false);
+                }
             }
-            Keysym::Up if self.input.is_empty() => self.input = self.last_question.clone(),
+            Keysym::a if ctrl => self.input.select_all(),
+            Keysym::z | Keysym::Z if ctrl && shift => self.input.redo(),
+            Keysym::y if ctrl => self.input.redo(),
+            Keysym::z if ctrl => self.input.undo(),
+            Keysym::Left => self.input.left(ctrl, shift),
+            Keysym::Right => self.input.right(ctrl, shift),
+            Keysym::Home => self.input.move_to(0, shift),
+            Keysym::End => {
+                let end = self.input.text.len();
+                self.input.move_to(end, shift);
+            }
+            Keysym::BackSpace => self.input.backspace(ctrl),
+            Keysym::Delete | Keysym::KP_Delete => self.input.delete(ctrl),
+            Keysym::Up if self.input.text.is_empty() => self.set_input(self.last_question.clone()),
             Keysym::Prior => self.scroll += 200.0,
             Keysym::Next => self.scroll = (self.scroll - 200.0).max(0.0),
             _ => {
@@ -1263,7 +1347,7 @@ impl App {
                     return;
                 }
                 match event.utf8.filter(|t| t.chars().all(|c| !c.is_control())) {
-                    Some(t) if !t.is_empty() => self.input.push_str(&t),
+                    Some(t) if !t.is_empty() => self.input.insert(&t),
                     _ => return,
                 }
             }
@@ -1810,22 +1894,20 @@ impl App {
             ui.text_centered(hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
             return;
         }
-        if self.input.is_empty() {
+        ui.hit((fx + 16.0, y, tw, fh), Hit::Input);
+        self.input_x.set(fx + 16.0);
+        self.input_w.set(tw);
+        if self.input.text.is_empty() {
+            self.input_scroll.set(0.0);
             let hint = if self.job.is_some() {
                 "Réponse en cours… Échap pour l'arrêter"
             } else {
                 "Demandez quelque chose à votre bureau…"
             };
             ui.text(fx + 16.0, y, fh, 14.0, hint, p.text_dim);
+            ui.rect(fx + 17.0, y + 13.0, 1.5, 20.0, p.accent);
         } else {
-            // Texte long : on montre la fin, là où l'on tape
-            let mut shown = self.input.clone();
-            while ui.measure(&shown, 14.0) > tw && !shown.is_empty() {
-                shown.remove(0);
-            }
-            ui.text(fx + 16.0, y, fh, 14.0, &shown, p.text);
-            let cx = fx + 16.0 + ui.measure(&shown, 14.0) + 1.0;
-            ui.rect(cx, y + 13.0, 1.5, 20.0, p.accent);
+            self.draw_input_text(ui, fx + 16.0, y, tw, fh);
         }
         let (bx, by) = (fx + fw - 26.0, y + fh / 2.0);
         if self.job.is_some() {
@@ -1851,6 +1933,57 @@ impl App {
             _ => "Entrée : envoyer · Échap : fermer · glissez un fichier pour le joindre".into(),
         };
         ui.text_centered(&hint, x0 + PW / 2.0, y + fh + 4.0, 22.0, 11.0, p.text_dim);
+    }
+
+    /// Le texte tapé, sa sélection et son curseur ; un texte plus large que
+    /// la zone défile pour garder le curseur en vue
+    fn draw_input_text(&self, ui: &mut Ui, x: f32, y: f32, w: f32, h: f32) {
+        let p = theme::palette();
+        let px = Self::INPUT_PX;
+        let text = &self.input.text;
+        let s = ui.s;
+        let at = |i: usize| self.regular.measure(&text[..i], px * s) / s;
+        let total = at(text.len());
+        let cursor_x = at(self.input.cursor);
+        let mut scroll = self.input_scroll.get().clamp(0.0, (total - w).max(0.0));
+        if cursor_x - scroll > w {
+            scroll = cursor_x - w;
+        } else if cursor_x < scroll {
+            scroll = cursor_x;
+        }
+        self.input_scroll.set(scroll);
+        if let Some((a, b)) = self.input.selection() {
+            let (sa, sb) = ((at(a) - scroll).max(0.0), (at(b) - scroll).min(w));
+            if sb > sa {
+                ui.rounded(x + sa, y + 11.0, sb - sa, 24.0, 4.0, p.accent.with_alpha(0.3));
+            }
+        }
+        // Les caractères entièrement visibles, décalés du défilement
+        let mut start = 0;
+        let mut end = text.len();
+        for (i, _) in text.char_indices() {
+            if at(i) < scroll {
+                start = i;
+            }
+        }
+        if at(start) < scroll {
+            start = text[start..]
+                .char_indices()
+                .nth(1)
+                .map_or(text.len(), |(i, _)| start + i);
+        }
+        for (i, _) in text.char_indices().rev() {
+            if at(i) > scroll + w {
+                end = i;
+            }
+        }
+        if at(end) > scroll + w {
+            end = text[..end].char_indices().last().map_or(0, |(i, _)| i);
+        }
+        if end > start {
+            ui.text(x + at(start) - scroll, y, h, px, &text[start..end], p.text);
+        }
+        ui.rect(x + cursor_x - scroll + 1.0, y + 13.0, 1.5, 20.0, p.accent);
     }
 
     /// Lignes de la conversation, prêtes à dessiner
@@ -2286,6 +2419,14 @@ impl PointerHandler for App {
                 PointerEventKind::Press {
                     button: BTN_LEFT, ..
                 } => self.click(x, y),
+                PointerEventKind::Release {
+                    button: BTN_LEFT, ..
+                } => self.input_drag = false,
+                PointerEventKind::Motion { .. } if self.input_drag => {
+                    let pos = self.input_byte_at(x);
+                    self.input.move_to(pos, true);
+                    self.draw();
+                }
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     let hover = self.hit_at(x, y);
                     if hover != self.hover {
