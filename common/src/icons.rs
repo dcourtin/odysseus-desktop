@@ -19,9 +19,9 @@ pub fn load(name: &str, size: u32) -> Option<Image> {
         lookup(name, size)?
     };
     if path.extension().is_some_and(|e| e == "svg" || e == "svgz") {
-        return load_raster(&rasterize_svg(&path, size)?);
+        return load_raster(&rasterize_svg(&path, size)?, size);
     }
-    load_raster(&path)
+    load_raster(&path, size)
 }
 
 /// Dossiers de thème, du plus prioritaire au moins
@@ -86,15 +86,23 @@ fn rasterize_svg(svg: &Path, size: u32) -> Option<PathBuf> {
     Some(out)
 }
 
-fn load_raster(path: &Path) -> Option<Image> {
+/// Image à la taille demandée : réduite en Lanczos si elle est plus grande,
+/// jamais agrandie (un agrandissement puis une réduction au dessin la rendait
+/// floue). Elle se dessine alors pixel pour pixel.
+fn load_raster(path: &Path, size: u32) -> Option<Image> {
     let img = image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
         .ok()?
         .decode()
-        .ok()?
-        .thumbnail(256, 256)
-        .to_rgba8();
+        .ok()?;
+    let size = size.clamp(8, 1024);
+    let img = if img.width() > size || img.height() > size {
+        img.resize(size, size, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    }
+    .to_rgba8();
     let (width, height) = img.dimensions();
     let mut data = img.into_raw();
     for px in data.as_chunks_mut::<4>().0 {

@@ -85,6 +85,8 @@ struct Place {
     /// Fenêtres de l'appli (identifiant, active) ; vide : pas ouverte
     windows: Vec<(u64, bool)>,
     icon: Option<Option<Image>>,
+    /// Même icône, à la taille des aperçus d'un dossier
+    mini: Option<Option<Image>>,
     /// Dossier : son nom et ses places remplies (une place vide s'il n'en a pas)
     folder: Option<(String, Vec<Place>)>,
 }
@@ -202,6 +204,7 @@ fn places(apps: &[App]) -> Vec<Place> {
             item,
             windows,
             icon: None,
+            mini: None,
             folder: None,
         }
     };
@@ -704,7 +707,9 @@ fn draw_place(
             return;
         }
         // Grille de deux colonnes au plus, centrée dans la pastille
-        let mini = 15.0 * s;
+        // Aperçus chargés à leur taille exacte : nets, sans réduction au dessin
+        let mini_px = (15.0 * s).round() as u32;
+        let mini = mini_px as f32;
         let gap = 3.0 * s;
         let cols = filled.len().min(2) as f32;
         let rows = filled.len().div_ceil(2) as f32;
@@ -718,10 +723,14 @@ fn draw_place(
                 continue;
             };
             match pl
-                .icon
-                .get_or_insert_with(|| common::icons::load(&item.icon, icon_px))
+                .mini
+                .get_or_insert_with(|| common::icons::load(&item.icon, mini_px))
             {
-                Some(img) => c.image(img, mx, my, mini, mini, 0.0),
+                // Une icône pas carrée garde ses proportions, centrée
+                Some(img) => {
+                    let (w, h) = (img.width as f32, img.height as f32);
+                    c.image(img, mx + (mini - w) / 2.0, my + (mini - h) / 2.0, w, h, 0.0)
+                }
                 None => c.fill_circle(
                     mx + mini / 2.0,
                     my + mini / 2.0,
@@ -741,7 +750,11 @@ fn draw_place(
         .icon
         .get_or_insert_with(|| common::icons::load(&item.icon, icon_px));
     match img {
-        Some(img) => c.image(img, ix - half, iy - half, 2.0 * half, 2.0 * half, 0.0),
+        // Taille exacte, centrée : nette (une icône pas carrée garde ses proportions)
+        Some(img) => {
+            let (w, h) = (img.width as f32, img.height as f32);
+            c.image(img, ix - w / 2.0, iy - h / 2.0, w, h, 0.0)
+        }
         None => {
             // Sans icône : l'initiale sur une pastille de couleur
             c.fill_circle(ix, iy, half, initial_color(&item.name));
@@ -785,8 +798,10 @@ impl CompositorHandler for Roue {
             self.scale = factor;
             for place in &mut self.places {
                 place.icon = None;
+                place.mini = None;
                 for inner in place.folder.iter_mut().flat_map(|f| f.1.iter_mut()) {
                     inner.icon = None;
+                    inner.mini = None;
                 }
             }
             self.draw();

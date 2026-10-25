@@ -233,6 +233,13 @@ impl Canvas<'_> {
         if img.width == 0 || img.height == 0 || w < 1.0 || h < 1.0 {
             return;
         }
+        // Image à sa taille exacte : calée sur la grille des pixels, sinon chaque
+        // pixel en mélangerait deux (icônes placées en cercle dans la roue)
+        let (x, y) = if (w - img.width as f32).abs() < 0.5 && (h - img.height as f32).abs() < 0.5 {
+            (x.round(), y.round())
+        } else {
+            (x, y)
+        };
         // Rayon d'au moins un demi-pixel : à 0, la couverture des pixels
         // intérieurs tomberait à 0,5 (image à moitié transparente)
         let r = radius.max(0.5).min(w / 2.0).min(h / 2.0);
