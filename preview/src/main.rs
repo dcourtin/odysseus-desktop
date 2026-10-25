@@ -584,7 +584,8 @@ impl Apercu {
         let target = copy.then(|| picture::copy_name(&pic.path));
         match pic.save(target.as_deref()) {
             Ok(path) => {
-                if copy {
+                // Copie, ou photo HEIC enregistrée en JPEG à côté : on passe au nouveau fichier
+                if copy || path != pic.path {
                     // La copie rejoint la liste du dossier
                     self.list = folder_images(&path);
                     self.index = self.list.iter().position(|p| *p == path).unwrap_or(0);

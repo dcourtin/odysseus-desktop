@@ -92,6 +92,7 @@ fn kind(path: &Path, is_dir: bool) -> String {
         "png" => "Image PNG",
         "jpg" | "jpeg" => "Image JPEG",
         "webp" => "Image WebP",
+        "heic" | "heif" => "Photo HEIC",
         "gif" => "Image GIF",
         "svg" => "Image SVG",
         "pdf" => "Document PDF",
@@ -150,7 +151,11 @@ fn full_date(time: Option<SystemTime>) -> String {
 
 /// Vignette d'au plus `max_w` × `max_h` pixels (prémultipliée, B G R A)
 pub fn thumbnail(path: &Path, max_w: u32, max_h: u32) -> Option<Image> {
-    let img = image::open(path).ok()?;
+    let img = if common::heic::is_heic(path) {
+        common::heic::decode(path).ok()?
+    } else {
+        image::open(path).ok()?
+    };
     let img = img.thumbnail(max_w, max_h).to_rgba8();
     let (width, height) = img.dimensions();
     let mut data = img.into_raw();

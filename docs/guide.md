@@ -241,6 +241,11 @@ taille réelle), R (pivoter), C puis Entrée (recadrer), I (infos de la photo),
 F (plein écran), Ctrl+S / Ctrl+Maj+S (enregistrer / enregistrer une copie),
 Suppr (corbeille).
 
+Les photos HEIC des iPhone s'ouvrent comme les autres (décodées par ffmpeg,
+déjà à l'endroit), et Fichiers en montre les vignettes. Une photo HEIC n'est
+jamais réécrite : pivotée ou recadrée, elle est enregistrée en JPEG à côté
+(« IMG_6113.jpg »).
+
 ## Notes
 
 Trois colonnes : les dossiers, les notes du dossier, la note.

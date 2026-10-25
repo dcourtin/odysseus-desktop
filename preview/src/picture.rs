@@ -34,25 +34,31 @@ pub fn is_image(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
         matches!(
             e.to_ascii_lowercase().as_str(),
-            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff"
+            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic" | "heif"
         )
     })
 }
 
 impl Picture {
     /// Décode l'image, en appliquant l'orientation EXIF (photo de téléphone).
+    /// Une photo HEIC passe par ffmpeg (common::heic), déjà tournée.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let reader = ImageReader::open(path)
-            .map_err(|e| e.to_string())?
-            .with_guessed_format()
-            .map_err(|e| e.to_string())?;
-        let format = reader.format();
-        let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
-        let orientation = decoder.orientation().ok();
-        let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
-        if let Some(o) = orientation {
-            img.apply_orientation(o);
-        }
+        let (img, format) = if common::heic::is_heic(path) {
+            (common::heic::decode(path)?, None)
+        } else {
+            let reader = ImageReader::open(path)
+                .map_err(|e| e.to_string())?
+                .with_guessed_format()
+                .map_err(|e| e.to_string())?;
+            let format = reader.format();
+            let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+            let orientation = decoder.orientation().ok();
+            let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+            if let Some(o) = orientation {
+                img.apply_orientation(o);
+            }
+            (img, format)
+        };
         let meta = std::fs::metadata(path).ok();
         let mut picture = Self {
             path: path.to_path_buf(),
@@ -151,8 +157,12 @@ impl Picture {
 
     /// Enregistre (à la place de l'original, ou sous `target`). Les métadonnées
     /// EXIF ne sont pas recopiées : l'orientation est déjà appliquée aux pixels.
+    /// Une photo HEIC ne se réécrit pas : un JPEG est enregistré à côté.
     pub fn save(&mut self, target: Option<&Path>) -> Result<PathBuf, String> {
-        let path = target.unwrap_or(&self.path).to_path_buf();
+        let mut path = target.unwrap_or(&self.path).to_path_buf();
+        if common::heic::is_heic(&path) {
+            path = jpeg_beside(&path);
+        }
         let format = ImageFormat::from_path(&path)
             .ok()
             .or(self.format)
@@ -190,6 +200,12 @@ impl Picture {
             }
         }
     }
+}
+
+/// « IMG_6113.HEIC » → « IMG_6113.jpg », ou une copie libre s'il existe déjà
+fn jpeg_beside(path: &Path) -> PathBuf {
+    let jpg = path.with_extension("jpg");
+    if jpg.exists() { copy_name(&jpg) } else { jpg }
 }
 
 /// « photo.jpg » → « photo copie.jpg » (ou « photo copie 2.jpg »…), libre.

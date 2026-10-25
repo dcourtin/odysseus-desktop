@@ -269,7 +269,7 @@ fn is_image_path(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
         matches!(
             e.to_ascii_lowercase().as_str(),
-            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff"
+            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic" | "heif"
         )
     })
 }

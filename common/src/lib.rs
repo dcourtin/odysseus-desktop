@@ -8,6 +8,7 @@ pub mod auto;
 pub mod chrome;
 pub mod data;
 pub mod draw;
+pub mod heic;
 pub mod icons;
 pub mod ipc;
 pub mod memory;
