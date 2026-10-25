@@ -391,6 +391,9 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if let Some(prompter) = self.prompter.as_mut() {
+            prompter.tick();
+        }
         let hovered = self.hovered_banner();
         self.store.tick(hovered);
         self.refresh();

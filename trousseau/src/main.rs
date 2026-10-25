@@ -1,12 +1,14 @@
 //! odysseus-trousseau : fenêtre de mot de passe du trousseau.
 //!
-//!     odysseus-trousseau --demander <ouvrir|creer|changer> <nom du trousseau>
+//!     odysseus-trousseau --demander <ouvrir|creer|changer> <nom du trousseau> [--erreur <message>]
 //!
 //! Lancée par odysseus-notify quand oo7-daemon a besoin d'un mot de passe
 //! (interface org.freedesktop.secrets.CliPrompter) : ouvrir le trousseau,
 //! le créer (mot de passe saisi deux fois) ou en changer le mot de passe.
 //! Le mot de passe est écrit sur la sortie standard, une socket dont oo7
-//! lit l'autre extrémité ; rien n'est écrit si l'utilisateur annule.
+//! lit l'autre extrémité ; rien n'est écrit si l'utilisateur annule, et le
+//! code de sortie est alors 1. `--erreur` affiche un message d'emblée
+//! (« Mot de passe incorrect » quand odysseus-notify redemande).
 
 use std::io::Write;
 
@@ -448,17 +450,24 @@ impl Prompt {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (role, keyring) = match args.as_slice() {
-        [flag, role, rest @ ..] if flag == "--demander" => (
-            match role.as_str() {
-                "creer" => Role::Create,
-                "changer" => Role::Change,
-                _ => Role::Open,
-            },
-            rest.join(" "),
-        ),
+    let (role, keyring, error) = match args.as_slice() {
+        [flag, role, rest @ ..] if flag == "--demander" => {
+            let (name, error) = match rest.iter().position(|a| a == "--erreur") {
+                Some(i) => (&rest[..i], Some(rest[i + 1..].join(" "))),
+                None => (rest, None),
+            };
+            (
+                match role.as_str() {
+                    "creer" => Role::Create,
+                    "changer" => Role::Change,
+                    _ => Role::Open,
+                },
+                name.join(" "),
+                error.filter(|e| !e.is_empty()),
+            )
+        }
         _ => {
-            eprintln!("usage : odysseus-trousseau --demander <ouvrir|creer|changer> <trousseau>");
+            eprintln!("usage : odysseus-trousseau --demander <ouvrir|creer|changer> <trousseau> [--erreur <message>]");
             std::process::exit(2);
         }
     };
@@ -512,7 +521,7 @@ fn main() {
         keyring,
         fields: [String::new(), String::new()],
         focus: 0,
-        error: None,
+        error,
         hover: None,
         width: 0,
         height: 0,
@@ -530,11 +539,15 @@ fn main() {
     }
     wipe(&mut prompt.fields[0]);
     wipe(&mut prompt.fields[1]);
-    if let Some(mut answer) = prompt.answer.take() {
-        let mut out = std::io::stdout().lock();
-        let _ = out.write_all(answer.as_bytes());
-        let _ = out.flush();
-        wipe(&mut answer);
+    match prompt.answer.take() {
+        Some(mut answer) => {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(answer.as_bytes());
+            let _ = out.flush();
+            wipe(&mut answer);
+        }
+        // Annulé : odysseus-notify le dit à oo7, qui répond un refus à l'application
+        None => std::process::exit(1),
     }
 }
 

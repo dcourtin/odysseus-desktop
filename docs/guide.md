@@ -375,8 +375,11 @@ sont chiffrés, et seuls les appareils du réseau local sont entendus.
 ## Trousseau
 
 Les applications y rangent leurs mots de passe et jetons, chiffrés. Il s'ouvre à la
-connexion ; sinon une fenêtre demande son mot de passe. Réglages > Trousseau montre
-les trousseaux et les noms des secrets (jamais leur valeur), et permet d'en supprimer.
+connexion ; sinon une fenêtre demande son mot de passe. Un mot de passe faux est
+signalé et redemandé ; Échap ou Annuler rend la main à l'application, qui reçoit
+un refus (elle peut alors proposer autre chose, ou renoncer au secret).
+Réglages > Trousseau montre les trousseaux et les noms des secrets (jamais leur
+valeur), et permet d'en supprimer.
 
 ## Moniteur système
 
