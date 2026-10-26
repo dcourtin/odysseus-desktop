@@ -98,6 +98,7 @@ dependencies = [
  "chrono",
  "common",
  "libc",
+ "notes",
  "rusqlite",
  "serde_json",
  "smithay-client-toolkit",
