@@ -9,6 +9,12 @@
 //! referme le dossier puis la roue, comme un clic au centre ou à côté. Une
 //! place vide ouvre Réglages > Roue.
 //!
+//! Animations, toutes pilotées par le temps et cadencées par le compositeur
+//! (rappels d'image) : le disque s'ouvre et les icônes sortent du centre l'une
+//! après l'autre ; au survol, le halo grandit et l'icône s'avance ; l'anneau
+//! d'un dossier se déploie, ses icônes glissant de la place du dossier à la
+//! leur ; un choix lance aussitôt, puis la roue se replie en fondu.
+//!
 //! Arguments : `--x X --y Y` (position du pointeur sur l'écran, donnée par le
 //! compositeur) ; sans eux, la roue s'ouvre là où le pointeur entre.
 //! Sous-commandes pour les applis : voir `cli`.
@@ -33,10 +39,7 @@ use smithay_client_toolkit::{
     delegate_registry, delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::{
-            EventLoop,
-            timer::{TimeoutAction, Timer},
-        },
+        calloop::EventLoop,
         calloop_wayland_source::WaylandSource,
         client::{
             Connection, QueueHandle,
@@ -73,7 +76,19 @@ const R_RING: f32 = 242.0;
 /// Écart minimal entre la roue et le bord de l'écran
 const EDGE: f32 = 16.0;
 /// Apparition : la roue grandit un peu en s'ouvrant
-const APPEAR: Duration = Duration::from_millis(130);
+const APPEAR: Duration = Duration::from_millis(180);
+/// Sortie des icônes à l'ouverture : chacune, et décalage de l'une à la suivante
+const POP: Duration = Duration::from_millis(150);
+const STAGGER: Duration = Duration::from_millis(10);
+/// Repli en fondu après un choix, ou à la fermeture
+const CLOSE: Duration = Duration::from_millis(140);
+/// Constantes de temps des suivis (survol, anneau), en secondes
+const HOVER_TAU: f32 = 0.05;
+const RING_TAU: f32 = 0.065;
+/// Fondu de l'étiquette quand elle change
+const LABEL_FADE: Duration = Duration::from_millis(90);
+/// L'icône survolée s'avance vers l'extérieur
+const LIFT: f32 = 5.0;
 const BTN_LEFT: u32 = 0x110;
 const BTN_MIDDLE: u32 = 0x112;
 
@@ -127,6 +142,22 @@ struct Roue {
     configured: bool,
     opened: Instant,
     exit: bool,
+    qh: QueueHandle<Roue>,
+    /// Rappel d'image demandé au compositeur, pas encore reçu
+    frame_pending: bool,
+    last_frame: Instant,
+    /// Survol des places de la roue, du dossier ouvert et du centre (0 → 1)
+    glow: [f32; SLOTS],
+    inner_glow: [f32; SLOTS],
+    center_glow: f32,
+    /// Déploiement de l'anneau (0 → 1) et dossier qu'il montre (gardé pendant
+    /// qu'il se replie)
+    ring_t: f32,
+    ring_folder: Option<usize>,
+    /// Étiquette affichée et depuis quand
+    label: Option<(String, Instant)>,
+    /// Repli en cours depuis…
+    closing: Option<Instant>,
 }
 
 fn pid_file() -> Option<PathBuf> {
@@ -287,19 +318,17 @@ fn main() {
         configured: false,
         opened: Instant::now(),
         exit: false,
+        qh: qh.clone(),
+        frame_pending: false,
+        last_frame: Instant::now(),
+        glow: [0.0; SLOTS],
+        inner_glow: [0.0; SLOTS],
+        center_glow: 0.0,
+        ring_t: 0.0,
+        ring_folder: None,
+        label: None,
+        closing: None,
     };
-    // Apparition : quelques images pendant APPEAR
-    let _ = event_loop.handle().insert_source(
-        Timer::from_duration(Duration::from_millis(16)),
-        |_, _, roue: &mut Roue| {
-            roue.draw();
-            if roue.opened.elapsed() < APPEAR {
-                TimeoutAction::ToDuration(Duration::from_millis(16))
-            } else {
-                TimeoutAction::Drop
-            }
-        },
-    );
 
     while !roue.exit {
         if let Err(e) = event_loop.dispatch(None, &mut roue) {
@@ -332,28 +361,11 @@ impl Roue {
         ))
     }
 
-    /// Centre d'une place
-    fn slot_pos(i: usize, (cx, cy): (f32, f32), k: f32) -> (f32, f32) {
-        let a = (-90.0 + i as f32 * 360.0 / SLOTS as f32).to_radians();
-        (cx + R_ITEMS * k * a.cos(), cy + R_ITEMS * k * a.sin())
-    }
-
     /// Angle (degrés depuis le haut) et nombre des places du dossier ouvert
     fn ring(&self) -> Option<(f32, usize)> {
         let i = self.open?;
         let n = self.places.get(i)?.folder.as_ref()?.1.len();
         Some((i as f32 * 360.0 / SLOTS as f32, n))
-    }
-
-    /// Centre de la place j du dossier ouvert : autour de l'angle du dossier
-    fn inner_pos(j: usize, (base, n): (f32, usize), (cx, cy): (f32, f32), k: f32) -> (f32, f32) {
-        let step = 360.0 / SLOTS as f32;
-        let deg = base + (j as f32 - (n as f32 - 1.0) / 2.0) * step;
-        let a = (deg - 90.0).to_radians();
-        (
-            cx + R_RING_ITEMS * k * a.cos(),
-            cy + R_RING_ITEMS * k * a.sin(),
-        )
     }
 
     fn target(&self, x: f32, y: f32) -> Target {
@@ -416,9 +428,17 @@ impl Roue {
             self.hover = Some(Target::Inner(0));
             return self.draw();
         }
-        self.exit = true;
         if let Some(place) = self.places.get(i) {
             Self::launch(place);
+        }
+        self.begin_close();
+    }
+
+    /// Repli en fondu, puis sortie ; l'éventuel lancement est déjà fait
+    fn begin_close(&mut self) {
+        if self.closing.is_none() {
+            self.closing = Some(Instant::now());
+            self.draw();
         }
     }
 
@@ -430,8 +450,8 @@ impl Roue {
             .and_then(|p| p.folder.as_ref())
             .and_then(|f| f.1.get(j));
         if let Some(place) = place {
-            self.exit = true;
             Self::launch(place);
+            self.begin_close();
         }
     }
 
@@ -478,6 +498,10 @@ impl Roue {
     }
 
     fn key(&mut self, event: KeyEvent) {
+        // En train de se replier : plus rien
+        if self.closing.is_some() {
+            return;
+        }
         // Chiffres de la rangée du haut par code physique (AZERTY compris)
         let code = event.raw_code;
         let digit = if (2..=9).contains(&code) {
@@ -523,10 +547,10 @@ impl Roue {
             _ => None,
         };
         match event.keysym {
-            Keysym::Escape => self.exit = true,
+            Keysym::Escape => self.begin_close(),
             Keysym::Return | Keysym::KP_Enter | Keysym::space => match current {
                 Some(i) => self.activate(i),
-                None => self.exit = true,
+                None => self.begin_close(),
             },
             Keysym::Right | Keysym::Down | Keysym::Tab => {
                 let i = current.map_or(0, |i| (i + 1) % SLOTS);
@@ -540,13 +564,54 @@ impl Roue {
         }
     }
 
+    /// Avance les suivis (survol, anneau) selon le temps écoulé ; vrai tant
+    /// qu'une animation est en cours
+    fn step(&mut self) -> bool {
+        let now = Instant::now();
+        let dt = (now - self.last_frame).as_secs_f32().min(0.05);
+        self.last_frame = now;
+        let mut moving = false;
+        let mut follow = |v: &mut f32, target: f32, tau: f32| {
+            *v += (target - *v) * (1.0 - (-dt / tau).exp());
+            if (*v - target).abs() < 0.004 {
+                *v = target;
+            } else {
+                moving = true;
+            }
+        };
+        for i in 0..SLOTS {
+            let on = self.hover == Some(Target::Slot(i)) || self.open == Some(i);
+            follow(&mut self.glow[i], on as u8 as f32, HOVER_TAU);
+            let on = self.hover == Some(Target::Inner(i));
+            follow(&mut self.inner_glow[i], on as u8 as f32, HOVER_TAU);
+        }
+        let on = self.hover == Some(Target::Center);
+        follow(&mut self.center_glow, on as u8 as f32, HOVER_TAU);
+        // Anneau : un autre dossier ne s'ouvre qu'une fois le précédent replié
+        if self.ring_folder != self.open && self.ring_t <= 0.0 {
+            self.ring_folder = self.open;
+            self.inner_glow = [0.0; SLOTS];
+        }
+        let target = (self.open.is_some() && self.ring_folder == self.open) as u8 as f32;
+        follow(&mut self.ring_t, target, RING_TAU);
+        if self.ring_t <= 0.0 && self.open.is_none() {
+            self.ring_folder = None;
+        }
+        let opening = self.opened.elapsed() < APPEAR.max(STAGGER * SLOTS as u32 + POP);
+        let label = self
+            .label
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed() < LABEL_FADE);
+        moving || opening || label || self.closing.is_some()
+    }
+
     fn draw(&mut self) {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
+        let animating = self.step();
         let s = self.scale.max(1) as f32;
         let center = self.center();
-        let ring = self.ring();
         let (w, h) = (self.width * s as u32, self.height * s as u32);
         let Ok((buffer, data)) =
             self.pool
@@ -561,17 +626,22 @@ impl Roue {
         };
         c.clear();
         let p = theme::palette();
-        let t = (self.opened.elapsed().as_secs_f32() / APPEAR.as_secs_f32()).min(1.0);
-        let ease = 1.0 - (1.0 - t).powi(3);
+        let elapsed = self.opened.elapsed();
+        let ease = ease_out(progress(elapsed, APPEAR));
+        // Repli : la roue se resserre un peu en s'effaçant
+        let close = self
+            .closing
+            .map_or(0.0, |t| ease_out(progress(t.elapsed(), CLOSE)));
         // Voile léger sur le bureau
         c.fill(Rgba::hex(0x000000, 0.10 * ease));
 
         if let Some((cx, cy)) = center {
-            let k = 0.88 + 0.12 * ease;
+            let k = (0.9 + 0.1 * ease) * (1.0 - 0.06 * close);
             let (x, y, r) = (cx * s, cy * s, R_DISC * k * s);
-            // Dossier ouvert : un anneau autour de la roue
-            if ring.is_some() {
-                let ro = R_RING * k * s;
+            // Dossier ouvert : un anneau qui se déploie autour de la roue
+            let rt = self.ring_t;
+            let ro = (R_DISC + (R_RING - R_DISC) * rt) * k * s;
+            if rt > 0.0 {
                 c.shadow(
                     x - ro,
                     y - ro + 10.0 * s,
@@ -579,27 +649,29 @@ impl Roue {
                     2.0 * ro,
                     ro,
                     36.0 * s,
-                    0.35,
+                    0.35 * rt,
                 );
-                c.fill_circle(x, y, ro, p.panel_border());
-                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.94));
-                c.fill_circle(x, y, r + 5.0 * s, p.ink(0.06));
-            } else {
-                c.shadow(x - r, y - r + 10.0 * s, 2.0 * r, 2.0 * r, r, 36.0 * s, 0.45);
+                c.fill_circle(x, y, ro, p.panel_border().with_alpha(0.10 * rt));
+                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.94 * rt));
+                c.fill_circle(x, y, r + 5.0 * s, p.ink(0.06 * rt));
             }
+            c.shadow(
+                x - r,
+                y - r + 10.0 * s,
+                2.0 * r,
+                2.0 * r,
+                r,
+                36.0 * s,
+                0.45 * (1.0 - rt) * ease,
+            );
             c.fill_circle(x, y, r, p.panel_border());
             c.fill_circle(x, y, r - s, p.panel.with_alpha(0.97));
             // Centre : fermer
-            let center_hover = self.hover == Some(Target::Center);
             c.fill_circle(
                 x,
                 y,
                 R_CENTER * k * s,
-                if center_hover {
-                    p.tile_hover()
-                } else {
-                    p.tile()
-                },
+                p.ink(0.07 + 0.05 * self.center_glow),
             );
             self.icons
                 .icon(&mut c, icon::CLOSE, x, y, 16.0 * s, p.text_dim);
@@ -607,27 +679,66 @@ impl Roue {
             let icon_px = (ICON * s).round() as u32;
             let fonts = (&self.icons, &self.bold);
             for i in 0..SLOTS {
-                let (ix, iy) = Self::slot_pos(i, (cx, cy), k);
-                let (ix, iy) = (ix * s, iy * s);
-                if self.hover == Some(Target::Slot(i)) || self.open == Some(i) {
-                    c.fill_circle(ix, iy, R_HOVER * s, p.accent.with_alpha(0.22));
+                // Sortie depuis le centre, l'une après l'autre, avec un léger rebond
+                let pop = progress(elapsed.saturating_sub(STAGGER * i as u32), POP);
+                let g = self.glow[i];
+                let radius = R_ITEMS * k * (0.45 + 0.55 * ease_out_back(pop)) + LIFT * g;
+                let a = (-90.0 + i as f32 * 360.0 / SLOTS as f32).to_radians();
+                let (ix, iy) = ((cx + radius * a.cos()) * s, (cy + radius * a.sin()) * s);
+                let alpha = (pop * 1.6).min(1.0);
+                if g > 0.0 {
+                    c.fill_circle(
+                        ix,
+                        iy,
+                        R_HOVER * (0.75 + 0.25 * g) * s,
+                        p.accent.with_alpha(0.22 * g),
+                    );
                 }
-                draw_place(&mut c, fonts, &mut self.places[i], ix, iy, s, icon_px);
+                draw_place(
+                    &mut c,
+                    fonts,
+                    &mut self.places[i],
+                    ix,
+                    iy,
+                    s,
+                    icon_px,
+                    alpha,
+                );
             }
-            if let (Some(ring), Some(open)) = (ring, self.open)
-                && let Some((_, inner)) = self.places[open].folder.as_mut()
+            if let Some(f) = self.ring_folder
+                && rt > 0.0
+                && let Some((_, inner)) = self.places[f].folder.as_mut()
             {
+                // Les icônes du dossier glissent de sa place à la leur, en éventail
+                let n = inner.len();
+                let base = f as f32 * 360.0 / SLOTS as f32;
+                let mid = (n as f32 - 1.0) / 2.0;
                 for (j, place) in inner.iter_mut().enumerate() {
-                    let (ix, iy) = Self::inner_pos(j, ring, (cx, cy), k);
-                    let (ix, iy) = (ix * s, iy * s);
-                    if self.hover == Some(Target::Inner(j)) {
-                        c.fill_circle(ix, iy, R_HOVER * s, p.accent.with_alpha(0.22));
+                    let spread = if mid > 0.0 {
+                        (j as f32 - mid).abs() / mid
+                    } else {
+                        0.0
+                    };
+                    let t = ((rt - 0.25 * spread) / 0.75).clamp(0.0, 1.0);
+                    let t = ease_out(t);
+                    let deg = base + (j as f32 - mid) * (360.0 / SLOTS as f32) * t;
+                    let g = self.inner_glow[j];
+                    let radius = (R_ITEMS + (R_RING_ITEMS - R_ITEMS) * t) * k + LIFT * g;
+                    let a = (deg - 90.0).to_radians();
+                    let (ix, iy) = ((cx + radius * a.cos()) * s, (cy + radius * a.sin()) * s);
+                    if g > 0.0 {
+                        c.fill_circle(
+                            ix,
+                            iy,
+                            R_HOVER * (0.75 + 0.25 * g) * s,
+                            p.accent.with_alpha(0.22 * g),
+                        );
                     }
-                    draw_place(&mut c, fonts, place, ix, iy, s, icon_px);
+                    draw_place(&mut c, fonts, place, ix, iy, s, icon_px, t);
                 }
             }
 
-            // Nom de la place survolée, sous la roue
+            // Nom de la place survolée, sous la roue (fondu quand il change)
             let describe = |place: &Place| match (&place.folder, place.item.as_ref()) {
                 (Some((name, _)), _) => format!("{name} · dossier"),
                 (None, Some(it)) if it.app.is_none() && !it.detail.is_empty() => {
@@ -636,7 +747,7 @@ impl Roue {
                 (None, Some(it)) => it.name.clone(),
                 (None, None) => "Choisir dans Réglages".to_string(),
             };
-            let label = match self.hover {
+            let text = match self.hover {
                 Some(Target::Slot(i)) => Some(describe(&self.places[i])),
                 Some(Target::Inner(j)) => self
                     .open
@@ -646,36 +757,73 @@ impl Roue {
                 Some(Target::Center) => Some("Fermer".to_string()),
                 _ => None,
             };
-            if let Some(label) = label {
+            if text.as_deref() != self.label.as_ref().map(|(l, _)| l.as_str()) {
+                self.label = text.map(|t| (t, Instant::now()));
+            }
+            if let Some((label, since)) = self.label.as_ref() {
+                let la = progress(since.elapsed(), LABEL_FADE);
                 let px = 13.5 * s;
-                let label = self.regular.truncate(&label, px, 360.0 * s);
+                let label = self.regular.truncate(label, px, 360.0 * s);
                 let lw = self.regular.measure(&label, px) + 28.0 * s;
-                let below = if ring.is_some() { R_RING * k * s } else { r };
-                let (lx, ly, lh) = (x - lw / 2.0, y + below + 12.0 * s, 32.0 * s);
-                c.fill_rounded(lx, ly, lw, lh, lh / 2.0, p.panel_border());
+                let (lx, ly, lh) = (x - lw / 2.0, y + ro.max(r) + (8.0 + 4.0 * la) * s, 32.0 * s);
+                c.fill_rounded(
+                    lx,
+                    ly,
+                    lw,
+                    lh,
+                    lh / 2.0,
+                    p.panel_border().with_alpha(0.10 * la),
+                );
                 c.fill_rounded(
                     lx + s,
                     ly + s,
                     lw - 2.0 * s,
                     lh - 2.0 * s,
                     lh / 2.0 - s,
-                    p.panel.with_alpha(0.97),
+                    p.panel.with_alpha(0.97 * la),
                 );
                 self.regular
-                    .draw_centered(&mut c, &label, x, ly, lh, px, p.text);
+                    .draw_centered(&mut c, &label, x, ly, lh, px, p.text.with_alpha(la));
             }
+        }
+        if close > 0.0 {
+            c.fade(1.0 - close);
         }
 
         let surface = self.layer.wl_surface();
         surface.set_buffer_scale(self.scale);
         surface.damage_buffer(0, 0, w as i32, h as i32);
+        // Animation en cours : la prochaine image au prochain rafraîchissement
+        if animating && !self.frame_pending {
+            surface.frame(&self.qh, surface.clone());
+            self.frame_pending = true;
+        }
         if buffer.attach_to(surface).is_ok() {
             self.layer.commit();
+        }
+        if self.closing.is_some_and(|t| t.elapsed() >= CLOSE) {
+            self.exit = true;
         }
     }
 }
 
-/// Icône d'une place, centrée en (ix, iy) (pixels de l'écran)
+/// Avancement 0 → 1 de `elapsed` sur `duration`
+fn progress(elapsed: Duration, duration: Duration) -> f32 {
+    (elapsed.as_secs_f32() / duration.as_secs_f32().max(1e-6)).min(1.0)
+}
+
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Dépasse un peu la cible avant d'y revenir (sortie des icônes)
+fn ease_out_back(t: f32) -> f32 {
+    let c = 1.4;
+    1.0 + (c + 1.0) * (t - 1.0).powi(3) + c * (t - 1.0).powi(2)
+}
+
+/// Icône d'une place, centrée en (ix, iy) (pixels de l'écran), à l'opacité `alpha`
+#[allow(clippy::too_many_arguments)]
 fn draw_place(
     c: &mut Canvas,
     (icons, bold): (&Text, &Text),
@@ -684,8 +832,13 @@ fn draw_place(
     iy: f32,
     s: f32,
     icon_px: u32,
+    alpha: f32,
 ) {
+    if alpha <= 0.0 {
+        return;
+    }
     let p = theme::palette();
+    let fa = |c: Rgba| c.with_alpha(c.a * alpha);
     let half = ICON / 2.0 * s;
     if let Some((_, inner)) = place.folder.as_mut() {
         // Dossier : une pastille avec ses premières icônes en petit
@@ -695,7 +848,7 @@ fn draw_place(
             2.0 * half,
             2.0 * half,
             12.0 * s,
-            p.accent.with_alpha(0.20),
+            fa(p.accent.with_alpha(0.20)),
         );
         let filled: Vec<&mut Place> = inner
             .iter_mut()
@@ -703,7 +856,7 @@ fn draw_place(
             .take(4)
             .collect();
         if filled.is_empty() {
-            icons.icon(c, icon::FOLDER, ix, iy, 20.0 * s, p.accent);
+            icons.icon(c, icon::FOLDER, ix, iy, 20.0 * s, fa(p.accent));
             return;
         }
         // Grille de deux colonnes au plus, centrée dans la pastille
@@ -729,21 +882,22 @@ fn draw_place(
                 // Une icône pas carrée garde ses proportions, centrée
                 Some(img) => {
                     let (w, h) = (img.width as f32, img.height as f32);
-                    c.image(img, mx + (mini - w) / 2.0, my + (mini - h) / 2.0, w, h, 0.0)
+                    let (x, y) = (mx + (mini - w) / 2.0, my + (mini - h) / 2.0);
+                    c.image_alpha(img, x, y, w, h, 0.0, alpha)
                 }
                 None => c.fill_circle(
                     mx + mini / 2.0,
                     my + mini / 2.0,
                     mini / 2.0,
-                    initial_color(&item.name),
+                    fa(initial_color(&item.name)),
                 ),
             }
         }
         return;
     }
     let Some(item) = place.item.as_ref() else {
-        c.fill_circle(ix, iy, 18.0 * s, p.ink(0.05));
-        icons.icon(c, icon::PLUS, ix, iy, 15.0 * s, p.ink(0.35));
+        c.fill_circle(ix, iy, 18.0 * s, fa(p.ink(0.05)));
+        icons.icon(c, icon::PLUS, ix, iy, 15.0 * s, fa(p.ink(0.35)));
         return;
     };
     let img = place
@@ -753,11 +907,11 @@ fn draw_place(
         // Taille exacte, centrée : nette (une icône pas carrée garde ses proportions)
         Some(img) => {
             let (w, h) = (img.width as f32, img.height as f32);
-            c.image(img, ix - w / 2.0, iy - h / 2.0, w, h, 0.0)
+            c.image_alpha(img, ix - w / 2.0, iy - h / 2.0, w, h, 0.0, alpha)
         }
         None => {
             // Sans icône : l'initiale sur une pastille de couleur
-            c.fill_circle(ix, iy, half, initial_color(&item.name));
+            c.fill_circle(ix, iy, half, fa(initial_color(&item.name)));
             let initial: String = item.name.chars().take(1).collect::<String>().to_uppercase();
             bold.draw_centered(
                 c,
@@ -766,17 +920,17 @@ fn draw_place(
                 iy - half,
                 2.0 * half,
                 18.0 * s,
-                Rgba::hex(0x1d1916, 1.0),
+                fa(Rgba::hex(0x1d1916, 1.0)),
             );
         }
     }
     // Action ou proposition : petit repère dans le coin
     if item.app.is_none() {
-        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, p.panel);
-        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, p.accent);
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, fa(p.panel));
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, fa(p.accent));
     }
     if !place.windows.is_empty() {
-        c.fill_circle(ix, iy + half + 7.0 * s, 2.5 * s, p.text_dim);
+        c.fill_circle(ix, iy + half + 7.0 * s, 2.5 * s, fa(p.text_dim));
     }
 }
 
@@ -815,7 +969,11 @@ impl CompositorHandler for Roue {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    /// Image suivante d'une animation
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.frame_pending = false;
+        self.draw();
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -849,6 +1007,11 @@ impl LayerShellHandler for Roue {
     ) {
         self.width = configure.new_size.0.max(1);
         self.height = configure.new_size.1.max(1);
+        // L'ouverture s'anime à partir de la première image, pas du lancement
+        if !self.configured {
+            self.opened = Instant::now();
+            self.last_frame = self.opened;
+        }
         self.configured = true;
         self.draw();
     }
@@ -961,7 +1124,7 @@ impl PointerHandler for Roue {
         events: &[PointerEvent],
     ) {
         for event in events {
-            if &event.surface != self.layer.wl_surface() {
+            if &event.surface != self.layer.wl_surface() || self.closing.is_some() {
                 continue;
             }
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
@@ -983,7 +1146,7 @@ impl PointerHandler for Roue {
                 } => match self.target(x, y) {
                     Target::Slot(i) => self.activate(i),
                     Target::Inner(j) => self.activate_inner(j),
-                    _ => self.exit = true,
+                    _ => self.begin_close(),
                 },
                 // Clic du milieu maintenu, glissé vers une place puis relâché
                 PointerEventKind::Release {

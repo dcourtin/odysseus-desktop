@@ -24,6 +24,14 @@ impl Canvas<'_> {
     }
 
     /// Tout transparent (surfaces aux formes non rectangulaires).
+    /// Tout le tampon à l'opacité `a` (pixels prémultipliés) : fondu de sortie
+    pub fn fade(&mut self, a: f32) {
+        let k = (a.clamp(0.0, 1.0) * 256.0) as u32;
+        for b in self.buf.iter_mut() {
+            *b = ((*b as u32 * k) >> 8) as u8;
+        }
+    }
+
     pub fn clear(&mut self) {
         self.buf.fill(0);
     }
@@ -230,7 +238,22 @@ impl Canvas<'_> {
     /// rectangle donné, chaque pixel étant la moyenne des pixels source qu'il couvre.
     #[allow(clippy::too_many_arguments)]
     pub fn image(&mut self, img: &Image, x: f32, y: f32, w: f32, h: f32, radius: f32) {
-        if img.width == 0 || img.height == 0 || w < 1.0 || h < 1.0 {
+        self.image_alpha(img, x, y, w, h, radius, 1.0);
+    }
+
+    /// Comme `image`, à l'opacité `alpha` (0 à 1) : fondus
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_alpha(
+        &mut self,
+        img: &Image,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        alpha: f32,
+    ) {
+        if img.width == 0 || img.height == 0 || w < 1.0 || h < 1.0 || alpha <= 0.0 {
             return;
         }
         // Image à sa taille exacte : calée sur la grille des pixels, sinon chaque
@@ -256,7 +279,8 @@ impl Canvas<'_> {
                 }
                 let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
                 let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
-                let coverage = (0.5 - ((dx * dx + dy * dy).sqrt() - r)).clamp(0.0, 1.0);
+                let coverage =
+                    (0.5 - ((dx * dx + dy * dy).sqrt() - r)).clamp(0.0, 1.0) * alpha.min(1.0);
                 if coverage <= 0.0 {
                     continue;
                 }
