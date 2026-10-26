@@ -17,7 +17,7 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 
 ## Aperçu
 
-![Bureau : Fichiers avec son panneau d'informations, notifications](docs/captures/bureau.png)
+![Bureau : Fichiers devant Réglages ; leurs barres latérales, la barre et le Dock laissent voir, flouté, ce qui est dessous](docs/captures/bureau.png)
 
 | Centre de contrôle | Centre de notifications |
 |---|---|
@@ -50,6 +50,10 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 | Notes : dossiers, recherche sans accents, texte mis en forme (titres, gras, listes, cases à cocher), corbeille de 30 jours |
 |---|
 | ![Notes](docs/captures/notes.png) |
+
+| Roue (Super+R ou clic du milieu sur le bureau) : vos applis en cercle, sur le dessous flouté | Transparence (Réglages > Apparence) : flou façon macOS, de l'opaque au très transparent |
+|---|---|
+| ![Roue](docs/captures/roue.png) | ![Transparence](docs/captures/transparence.png) |
 
 | Réglages : fond d'écran, et six autres pages |
 |---|
