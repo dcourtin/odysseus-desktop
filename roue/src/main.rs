@@ -89,6 +89,8 @@ const RING_TAU: f32 = 0.065;
 const LABEL_FADE: Duration = Duration::from_millis(90);
 /// L'icône survolée s'avance vers l'extérieur
 const LIFT: f32 = 5.0;
+/// Éclaircissement d'un niveau de la roue par rapport à celui qui l'entoure
+const LIGHTER: f32 = 0.10;
 const BTN_LEFT: u32 = 0x110;
 const BTN_MIDDLE: u32 = 0x112;
 
@@ -667,7 +669,10 @@ impl Roue {
             // ne font plus qu'un disque
             let border = p.panel_border();
             c.fill_circle(x, y, r, border.with_alpha(border.a * (1.0 - rt)));
-            c.fill_circle(x, y, r - s, p.panel.with_alpha(0.97));
+            // Chaque niveau intérieur 10 % plus clair que celui qui l'entoure :
+            // dossier ouvert, le disque de la roue se détache de l'anneau
+            let disc = p.panel.mix(Rgba::hex(0xffffff, 1.0), LIGHTER * rt);
+            c.fill_circle(x, y, r - s, disc.with_alpha(0.97));
             // Centre : fermer
             c.fill_circle(
                 x,
