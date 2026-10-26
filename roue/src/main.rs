@@ -587,15 +587,15 @@ impl Roue {
         }
         let on = self.hover == Some(Target::Center);
         follow(&mut self.center_glow, on as u8 as f32, HOVER_TAU);
-        // Anneau : un autre dossier ne s'ouvre qu'une fois le précédent replié
-        if self.ring_folder != self.open && self.ring_t <= 0.0 {
-            self.ring_folder = self.open;
-            self.inner_glow = [0.0; SLOTS];
-        }
+        // Anneau : un autre dossier ne se déploie qu'une fois le précédent replié
         let target = (self.open.is_some() && self.ring_folder == self.open) as u8 as f32;
         follow(&mut self.ring_t, target, RING_TAU);
-        if self.ring_t <= 0.0 && self.open.is_none() {
-            self.ring_folder = None;
+        if self.ring_t <= 0.0 && self.ring_folder != self.open {
+            self.ring_folder = self.open;
+            self.inner_glow = [0.0; SLOTS];
+            // Le suivant reste à déployer : l'animation continue (sinon il
+            // attendrait le prochain mouvement de la souris)
+            moving |= self.open.is_some();
         }
         let opening = self.opened.elapsed() < APPEAR.max(STAGGER * SLOTS as u32 + POP);
         let label = self
