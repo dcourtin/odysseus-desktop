@@ -55,7 +55,7 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|---|
 | ![Roue](docs/captures/roue.png) | ![Transparence](docs/captures/transparence.png) |
 
-| Réglages : fond d'écran, et six autres pages |
+| Réglages : fond d'écran, et quatorze autres pages |
 |---|
 | ![Réglages](docs/captures/reglages.png) |
 
