@@ -207,6 +207,8 @@ struct Notes {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     let store = match Store::open() {
         Ok(s) => s,
         Err(e) => {
@@ -1222,7 +1224,16 @@ impl Notes {
             width: w,
             height: h,
         };
-        c.fill(theme::palette().content);
+        // Sous la barre latérale, rien d'opaque : elle est translucide sur le flou
+        // du compositeur (theme::use_vibrancy) ; le contenu, lui, reste opaque
+        c.clear();
+        c.fill_rect(
+            SIDEBAR_W * s,
+            0.0,
+            w as f32 - SIDEBAR_W * s,
+            h as f32,
+            theme::palette().content,
+        );
         let mut hits = Hits::new();
 
         // La note d'abord : les bandeaux se dessinent par-dessus quand elle défile

@@ -7,7 +7,11 @@
 //! Par IPC : `output scale 1.25`, `output mode 2560x1440@60`.
 
 use std::os::fd::AsFd;
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     backend::{
@@ -33,6 +37,7 @@ use smithay::{
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, Mode, PostAction,
+            channel::{self, Channel},
             generic::Generic,
             timer::{TimeoutAction, Timer},
         },
@@ -100,6 +105,16 @@ pub struct UdevData {
     known: Option<std::collections::HashSet<String>>,
     /// Attente que les événements d'écran se calment
     settle: Option<smithay::reexports::calloop::RegistrationToken>,
+    /// Fond affiché et son image ; le précédent pendant le fondu enchaîné
+    wallpaper_path: Option<PathBuf>,
+    wallpaper_prev: Option<(Wallpaper, Instant)>,
+    /// Changement au hasard : dernier changement, image en cours de décodage,
+    /// canal par lequel le fil la rend
+    wallpaper_since: Instant,
+    wallpaper_loading: bool,
+    wallpaper_tx: channel::Sender<(PathBuf, Option<image::RgbaImage>)>,
+    /// Flou d'arrière-plan (barre, Dock, panneaux, barres latérales)
+    blurs: Option<crate::blur::Blurs>,
 }
 
 pub fn init_udev(
@@ -125,12 +140,54 @@ pub fn init_udev(
     let context = EGLContext::new(&display)?;
     let mut renderer = unsafe { GlesRenderer::new(context)? };
     let shaders = Shaders::compile(&mut renderer)?;
+    let blurs = crate::blur::Blurs::new(&mut renderer)
+        .map_err(|e| tracing::warn!("flou indisponible : {e}"))
+        .ok();
     {
         use smithay::backend::renderer::Renderer;
         data.state.renderer_context = Some(renderer.context_id());
     }
-    let wallpaper = crate::wallpaper::find(&data.state.settings)
-        .and_then(|path| Wallpaper::load(&mut renderer, &path).ok());
+    let wallpaper_path = crate::wallpaper::find(&data.state.settings);
+    let wallpaper = wallpaper_path
+        .as_deref()
+        .and_then(|path| Wallpaper::load(&mut renderer, path).ok());
+    // Fond suivant décodé dans un fil : envoyé au GPU ici, puis fondu enchaîné
+    let (wallpaper_tx, wallpaper_rx): (_, Channel<(PathBuf, Option<image::RgbaImage>)>) =
+        channel::channel();
+    event_loop
+        .handle()
+        .insert_source(wallpaper_rx, |event, _, data| {
+            let channel::Event::Msg((path, img)) = event else {
+                return;
+            };
+            let Some(udev) = data.udev.as_mut() else {
+                return;
+            };
+            udev.wallpaper_loading = false;
+            udev.wallpaper_since = Instant::now();
+            match img.map(|img| Wallpaper::from_rgba(&mut udev.renderer, img)) {
+                Some(Ok(new)) => {
+                    if let Some(old) = udev.wallpaper.replace(new) {
+                        udev.wallpaper_prev = Some((old, Instant::now()));
+                    }
+                    udev.wallpaper_path = Some(path);
+                }
+                Some(Err(e)) => tracing::warn!("fond {} : {e}", path.display()),
+                None => {}
+            }
+        })
+        .map_err(|e| e.error)?;
+    // Toutes les secondes : faut-il changer de fond ?
+    event_loop
+        .handle()
+        .insert_source(
+            Timer::from_duration(Duration::from_secs(1)),
+            |_, _, data| {
+                rotate_wallpaper(data);
+                TimeoutAction::ToDuration(Duration::from_secs(1))
+            },
+        )
+        .map_err(|e| e.error)?;
 
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -203,6 +260,12 @@ pub fn init_udev(
         orphans: Vec::new(),
         known: None,
         settle: None,
+        wallpaper_path,
+        wallpaper_prev: None,
+        wallpaper_since: Instant::now(),
+        wallpaper_loading: false,
+        wallpaper_tx,
+        blurs,
     });
     scan_outputs(data);
     if data.udev.as_ref().is_some_and(|u| u.surfaces.is_empty()) {
@@ -295,8 +358,13 @@ pub fn init_udev(
                 let wallpaper_changed = data.state.reload_settings();
                 if let Some(udev) = data.udev.as_mut() {
                     if wallpaper_changed {
-                        udev.wallpaper = crate::wallpaper::find(&data.state.settings)
-                            .and_then(|path| Wallpaper::load(&mut udev.renderer, &path).ok());
+                        udev.wallpaper_path = crate::wallpaper::find(&data.state.settings);
+                        udev.wallpaper = udev
+                            .wallpaper_path
+                            .as_deref()
+                            .and_then(|path| Wallpaper::load(&mut udev.renderer, path).ok());
+                        udev.wallpaper_prev = None;
+                        udev.wallpaper_since = Instant::now();
                     }
                     if theme_changed || wallpaper_changed {
                         let crtcs: Vec<_> = udev.surfaces.keys().copied().collect();
@@ -709,10 +777,52 @@ fn apply_output_settings(udev: &mut UdevData, state: &mut crate::Odysseus, crtc:
 }
 
 /// Rend une image pour un écran ; sans changement à l'écran, réessaie après ~1 image.
+/// Changement de fond au hasard (Réglages > Fond d'écran) : quand l'intervalle
+/// est passé, une autre image de l'utilisateur est décodée dans un fil. Rien
+/// pendant que l'écran est éteint, la session verrouillée ou sur un autre tty.
+fn rotate_wallpaper(data: &mut CalloopData) {
+    let every = data.state.settings.wallpaper_rotation;
+    let (screen_off, locked) = (data.state.screen_off, data.state.is_locked());
+    let Some(udev) = data.udev.as_mut() else {
+        return;
+    };
+    if every == 0 || udev.paused || screen_off || locked || udev.wallpaper_loading {
+        return;
+    }
+    if udev.wallpaper_since.elapsed() < Duration::from_secs(every as u64) {
+        return;
+    }
+    let pool = crate::wallpaper::pool();
+    let Some(path) = crate::wallpaper::pick(&pool, udev.wallpaper_path.as_deref()) else {
+        udev.wallpaper_since = Instant::now();
+        return;
+    };
+    udev.wallpaper_loading = true;
+    let tx = udev.wallpaper_tx.clone();
+    std::thread::spawn(move || {
+        let img = match crate::wallpaper::decode(&path) {
+            Ok(img) => Some(img),
+            Err(e) => {
+                tracing::warn!("fond {} : {e}", path.display());
+                None
+            }
+        };
+        let _ = tx.send((path, img));
+    });
+}
+
 fn render(data: &mut CalloopData, crtc: crtc::Handle) {
     let Some(udev) = data.udev.as_mut() else {
         return;
     };
+    // Fondu enchaîné terminé : l'ancien fond n'est plus dessiné
+    if udev
+        .wallpaper_prev
+        .as_ref()
+        .is_some_and(|(_, t)| t.elapsed() >= crate::wallpaper::FADE)
+    {
+        udev.wallpaper_prev = None;
+    }
     let state = &mut data.state;
     let Some(surface) = udev.surfaces.get_mut(&crtc) else {
         return;
@@ -840,7 +950,13 @@ fn render(data: &mut CalloopData, crtc: crtc::Handle) {
                 &udev.shaders,
                 mode.size,
                 udev.wallpaper.as_ref(),
+                udev.wallpaper_prev.as_ref().map(|(old, t)| {
+                    let x =
+                        (t.elapsed().as_secs_f32() / crate::wallpaper::FADE.as_secs_f32()).min(1.0);
+                    (old, x * x * (3.0 - 2.0 * x))
+                }),
                 &scene,
+                udev.blurs.as_mut().filter(|_| state.settings.blur),
             ))
         }
     }

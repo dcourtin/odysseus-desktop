@@ -318,6 +318,8 @@ fn state_file() -> Option<PathBuf> {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
     let start = std::env::args()
         .nth(1)
@@ -1298,7 +1300,16 @@ impl Files {
             width: w,
             height: h,
         };
-        c.fill(theme::palette().content);
+        // Sous la barre latérale, rien d'opaque : elle est translucide sur le flou
+        // du compositeur (theme::use_vibrancy) ; le contenu, lui, reste opaque
+        c.clear();
+        c.fill_rect(
+            SIDEBAR_W * s,
+            0.0,
+            w as f32 - SIDEBAR_W * s,
+            h as f32,
+            theme::palette().content,
+        );
         let mut hits = Vec::new();
         // Zone cliquable en pixels du tampon → coordonnées logiques
         let mut hit = |x: f32, y: f32, w: f32, h: f32, what: Hit| {

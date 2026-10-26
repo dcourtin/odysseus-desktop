@@ -132,6 +132,8 @@ struct Bar {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     let conn = Connection::connect_to_env().expect("pas de compositeur Wayland (WAYLAND_DISPLAY)");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
     let qh = event_queue.handle();
@@ -1003,7 +1005,7 @@ impl Bar {
         let (pw, ph) = (w as f32 - 2.0 * x0, h as f32 - 2.0 * y0);
         let r = 10.0 * s;
         c.shadow(x0, y0 + 4.0 * s, pw, ph, r, 18.0 * s, 0.45);
-        c.fill_rounded(x0, y0, pw, ph, r, p.panel.with_alpha(0.98));
+        c.fill_rounded(x0, y0, pw, ph, r, p.panel.with_alpha(p.panel.a * 0.98));
         c.stroke_rounded(x0, y0, pw, ph, r, s.max(1.0), p.panel_border());
         let px = theme::FONT_SIZE * s;
         let mut top = y0 + MENU_PAD * s;

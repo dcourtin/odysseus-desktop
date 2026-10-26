@@ -187,6 +187,8 @@ fn toggle_existing() -> bool {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     if toggle_existing() {
         return;
     }

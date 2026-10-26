@@ -267,6 +267,8 @@ fn create_layer(
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     // Désactivé dans Réglages > Dock : rien à afficher
     if !Settings::load().dock {
         return;
@@ -818,7 +820,7 @@ impl Dock {
                 pw * s,
                 ph * s,
                 18.0 * s,
-                p.panel.with_alpha(0.92),
+                p.panel.with_alpha(p.panel.a * 0.92),
             );
             c.stroke_rounded(
                 px * s,
@@ -940,7 +942,7 @@ impl Dock {
                     tw * s,
                     26.0 * s,
                     13.0 * s,
-                    p.panel.with_alpha(0.95),
+                    p.panel.with_alpha(p.panel.a * 0.95),
                 );
                 c.stroke_rounded(
                     x * s,
@@ -971,7 +973,7 @@ impl Dock {
                 mw * s,
                 mh * s,
                 10.0 * s,
-                p.panel.with_alpha(0.97),
+                p.panel.with_alpha(p.panel.a * 0.97),
             );
             c.stroke_rounded(
                 mx * s,

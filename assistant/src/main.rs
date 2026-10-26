@@ -348,6 +348,8 @@ fn close_existing() -> bool {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     // Arguments : pièces jointes, question, bulle en contexte
     let mut files = Vec::new();
     let mut words = Vec::new();
@@ -633,7 +635,10 @@ impl App {
         let target = x - self.input_x.get() + self.input_scroll.get();
         let text = &self.input.text;
         let mut best = (0usize, f32::MAX);
-        for (i, _) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
+        for (i, _) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), ' ')))
+        {
             let w = self.regular.measure(&text[..i], Self::INPUT_PX * s) / s;
             let d = (w - target).abs();
             if d < best.1 {
@@ -1419,7 +1424,14 @@ impl App {
             _ => {
                 c.clear();
                 c.shadow(x0 * s, (y0 + 4.0) * s, PW * s, PH * s, r, 22.0 * s, 0.45);
-                c.fill_rounded(x0 * s, y0 * s, PW * s, PH * s, r, p.panel.with_alpha(0.97));
+                c.fill_rounded(
+                    x0 * s,
+                    y0 * s,
+                    PW * s,
+                    PH * s,
+                    r,
+                    p.panel.with_alpha(p.panel.a * 0.97),
+                );
                 c.stroke_rounded(
                     x0 * s,
                     y0 * s,
@@ -1955,7 +1967,14 @@ impl App {
         if let Some((a, b)) = self.input.selection() {
             let (sa, sb) = ((at(a) - scroll).max(0.0), (at(b) - scroll).min(w));
             if sb > sa {
-                ui.rounded(x + sa, y + 11.0, sb - sa, 24.0, 4.0, p.accent.with_alpha(0.3));
+                ui.rounded(
+                    x + sa,
+                    y + 11.0,
+                    sb - sa,
+                    24.0,
+                    4.0,
+                    p.accent.with_alpha(0.3),
+                );
             }
         }
         // Les caractères entièrement visibles, décalés du défilement

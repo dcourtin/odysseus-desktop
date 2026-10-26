@@ -21,6 +21,9 @@ pub fn init_winit(
 
     let (mut backend, winit) = winit::init()?;
     let shaders = crate::render::Shaders::compile(backend.renderer())?;
+    let mut blurs = crate::blur::Blurs::new(backend.renderer())
+        .map_err(|e| tracing::warn!("flou indisponible : {e}"))
+        .ok();
     {
         use smithay::backend::renderer::Renderer;
         state.renderer_context = Some(backend.renderer().context_id());
@@ -128,7 +131,9 @@ pub fn init_winit(
                                     &shaders,
                                     size,
                                     wallpaper.as_ref(),
+                                    None,
                                     &state.scene(focused.as_ref()),
+                                    blurs.as_mut().filter(|_| state.settings.blur),
                                 ));
                                 elements
                             }

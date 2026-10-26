@@ -271,6 +271,8 @@ fn main() {
     if let Some(path) = pid_file() {
         let _ = std::fs::write(&path, std::process::id().to_string());
     }
+    // Anneau et étiquettes translucides, sur le dessous flouté par le compositeur
+    common::theme::use_vibrancy();
 
     let conn = Connection::connect_to_env().expect("pas de compositeur Wayland (WAYLAND_DISPLAY)");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registre Wayland");
@@ -654,7 +656,7 @@ impl Roue {
                     0.35 * rt,
                 );
                 c.fill_circle(x, y, ro, p.panel_border().with_alpha(0.10 * rt));
-                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.97 * rt));
+                c.fill_circle(x, y, ro - s, p.panel.with_alpha(p.panel.a * 0.97 * rt));
             }
             c.shadow(
                 x - r,
@@ -672,7 +674,7 @@ impl Roue {
             // Chaque niveau intérieur 10 % plus clair que celui qui l'entoure :
             // dossier ouvert, le disque de la roue se détache de l'anneau
             let disc = p.panel.mix(Rgba::hex(0xffffff, 1.0), LIGHTER * rt);
-            c.fill_circle(x, y, r - s, disc.with_alpha(0.97));
+            c.fill_circle(x, y, r - s, disc.with_alpha(p.panel.a * 0.97));
             // Centre : fermer
             c.fill_circle(
                 x,
@@ -787,7 +789,7 @@ impl Roue {
                     lw - 2.0 * s,
                     lh - 2.0 * s,
                     lh / 2.0 - s,
-                    p.panel.with_alpha(0.97 * la),
+                    p.panel.with_alpha(p.panel.a * 0.97 * la),
                 );
                 self.regular
                     .draw_centered(&mut c, &label, x, ly, lh, px, p.text.with_alpha(la));

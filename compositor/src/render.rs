@@ -24,6 +24,7 @@ use smithay::{
             GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, GlesTexture,
             Uniform, UniformName, UniformType,
             element::{PixelShaderElement, TextureShaderElement},
+            ffi,
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions, with_renderer_surface_state},
     },
@@ -91,6 +92,54 @@ void main() {
         color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
 #endif
     gl_FragColor = color;
+}
+"#;
+
+/// Flou d'arrière-plan sous une surface (voir `blur`) : la texture floutée,
+/// branchée sur l'unité 1, est lue à la position du pixel à l'écran, et placée
+/// sous les pixels assez couvrants de la surface (pas sous ses ombres ni ses
+/// marges transparentes).
+const BLUR_FUNCTION: &str = r#"
+uniform sampler2D blurred;
+uniform vec2 fb_size;
+
+vec4 under_blur(vec4 c) {
+    float m = smoothstep(0.25, 0.5, c.a);
+    vec3 b = texture2D(blurred, gl_FragCoord.xy / fb_size).rgb;
+    return vec4(c.rgb + b * (1.0 - c.a) * m, c.a + (1.0 - c.a) * m);
+}
+"#;
+
+const BLUR_FRAG: &str = r#"#version 100
+
+//_DEFINES_
+
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
+
+precision highp float;
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+uniform float alpha;
+varying vec2 v_coords;
+
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+
+//_BLUR_
+
+void main() {
+    vec4 color = texture2D(tex, v_coords);
+#if defined(NO_ALPHA)
+    color = vec4(color.rgb, 1.0);
+#endif
+    gl_FragColor = under_blur(color) * alpha;
 }
 "#;
 
@@ -162,20 +211,44 @@ void main() {
 /// Programmes compilés une fois au démarrage
 pub struct Shaders {
     rounded: GlesTexProgram,
+    /// Coins arrondis, avec le fond d'écran flouté sous les zones translucides
+    rounded_blur: GlesTexProgram,
+    /// Surface du bureau (barre, Dock, panneaux) sur le dessous flouté
+    blur: GlesTexProgram,
     shadow: GlesPixelProgram,
     preview: GlesPixelProgram,
 }
 
 impl Shaders {
     pub fn compile(renderer: &mut GlesRenderer) -> Result<Self, GlesError> {
-        let rounded = renderer.compile_custom_texture_shader(
-            ROUNDED_FRAG,
-            &[
-                UniformName::new("geo", UniformType::_4f),
-                UniformName::new("radius", UniformType::_1f),
-                UniformName::new("border_width", UniformType::_1f),
-                UniformName::new("border_color", UniformType::_4f),
-            ],
+        let rounded_uniforms = [
+            UniformName::new("geo", UniformType::_4f),
+            UniformName::new("radius", UniformType::_1f),
+            UniformName::new("border_width", UniformType::_1f),
+            UniformName::new("border_color", UniformType::_4f),
+        ];
+        let rounded = renderer.compile_custom_texture_shader(ROUNDED_FRAG, &rounded_uniforms)?;
+        let blur_uniforms = [
+            UniformName::new("blurred", UniformType::_1i),
+            UniformName::new("fb_size", UniformType::_2f),
+        ];
+        // Même shader arrondi, le flou appliqué avant l'arrondi des coins
+        let rounded_blur_src = ROUNDED_FRAG
+            .replace(
+                "uniform vec4 geo;",
+                &format!("{BLUR_FUNCTION}\nuniform vec4 geo;"),
+            )
+            .replace(
+                "    // Seuls les pixels dans le rectangle",
+                "    color = under_blur(color);\n    // Seuls les pixels dans le rectangle",
+            );
+        let rounded_blur = renderer.compile_custom_texture_shader(
+            &rounded_blur_src,
+            &[&rounded_uniforms[..], &blur_uniforms[..]].concat(),
+        )?;
+        let blur = renderer.compile_custom_texture_shader(
+            BLUR_FRAG.replace("//_BLUR_", BLUR_FUNCTION),
+            &blur_uniforms,
         )?;
         let shadow = renderer.compile_custom_pixel_shader(
             SHADOW_FRAG,
@@ -199,17 +272,31 @@ impl Shaders {
         )?;
         Ok(Self {
             rounded,
+            rounded_blur,
+            blur,
             shadow,
             preview,
         })
     }
 }
 
-/// Surface de client dessinée avec le shader à coins arrondis.
+/// Surface de client dessinée avec un shader maison : coins arrondis, et/ou
+/// flou d'arrière-plan.
 pub struct RoundedSurface {
     inner: WaylandSurfaceRenderElement<GlesRenderer>,
     program: GlesTexProgram,
     uniforms: Vec<Uniform<'static>>,
+    /// Dessous flouté et sa génération : quand elle change, toute la surface
+    /// est à redessiner
+    blur: Option<(GlesTexture, usize)>,
+}
+
+/// Commit d'une surface floutée : celui du client dans les bits bas, la
+/// génération du flou dans les bits hauts
+const BLUR_SHIFT: u32 = 40;
+
+fn commit_value(c: CommitCounter) -> usize {
+    c.distance(Some(CommitCounter::from(0))).unwrap_or(0)
 }
 
 impl Element for RoundedSurface {
@@ -217,7 +304,13 @@ impl Element for RoundedSurface {
         self.inner.id()
     }
     fn current_commit(&self) -> CommitCounter {
-        self.inner.current_commit()
+        match &self.blur {
+            Some((_, generation)) => CommitCounter::from(
+                (generation << BLUR_SHIFT)
+                    | (commit_value(self.inner.current_commit()) & ((1 << BLUR_SHIFT) - 1)),
+            ),
+            None => self.inner.current_commit(),
+        }
     }
     fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
         self.inner.location(scale)
@@ -236,7 +329,17 @@ impl Element for RoundedSurface {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        self.inner.damage_since(scale, commit)
+        let Some((_, generation)) = &self.blur else {
+            return self.inner.damage_since(scale, commit);
+        };
+        // Dessous flouté changé depuis : tout est à redessiner
+        match commit.map(commit_value) {
+            Some(c) if c >> BLUR_SHIFT == *generation => self.inner.damage_since(
+                scale,
+                Some(CommitCounter::from(c & ((1 << BLUR_SHIFT) - 1))),
+            ),
+            _ => DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)]),
+        }
     }
     /// Les coins sont transparents : aucune zone n'est garantie opaque.
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
@@ -259,6 +362,15 @@ impl RenderElement<GlesRenderer> for RoundedSurface {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        // Dessous flouté sur l'unité de texture 1, lue par le shader
+        if let Some((texture, _)) = &self.blur {
+            let id = texture.tex_id();
+            frame.with_context(|gl| unsafe {
+                gl.ActiveTexture(ffi::TEXTURE1);
+                gl.BindTexture(ffi::TEXTURE_2D, id);
+                gl.ActiveTexture(ffi::TEXTURE0);
+            })?;
+        }
         frame.override_default_tex_program(self.program.clone(), self.uniforms.clone());
         let result = RenderElement::<GlesRenderer>::draw(
             &self.inner,
@@ -269,6 +381,13 @@ impl RenderElement<GlesRenderer> for RoundedSurface {
             opaque_regions,
         );
         frame.clear_tex_program_override();
+        if self.blur.is_some() {
+            frame.with_context(|gl| unsafe {
+                gl.ActiveTexture(ffi::TEXTURE1);
+                gl.BindTexture(ffi::TEXTURE_2D, 0);
+                gl.ActiveTexture(ffi::TEXTURE0);
+            })?;
+        }
         result
     }
 }
@@ -572,11 +691,12 @@ pub fn single_window_elements(
         titled: std::collections::HashSet::new(),
         title_hover: None,
     };
-    window_elements(window, loc, 0.0, renderer, shaders, &frame, &scene)
+    window_elements(window, loc, 0.0, renderer, shaders, &frame, &scene, None)
 }
 
 /// Contenu (coins arrondis) et ombre d'une fenêtre, à sa position animée :
 /// trajet en cours (aimantation, agrandissement…), ouverture, glissement de bureau.
+#[allow(clippy::too_many_arguments)]
 fn window_elements(
     window: &Window,
     loc: Point<i32, Logical>,
@@ -585,6 +705,8 @@ fn window_elements(
     shaders: &Shaders,
     frame: &Frame,
     scene: &Scene,
+    // Ce qui est sous la fenêtre, flouté (fenêtres translucides d'odysseus)
+    blur: Option<&(GlesTexture, usize)>,
 ) -> Vec<OdysseusElement> {
     let mut out = Vec::new();
     // Fenêtre démappée (sans tampon) : ni contenu ni ombre
@@ -655,11 +777,20 @@ fn window_elements(
         Scale::from((frame.scale * sx, frame.scale * sy)),
         alpha,
     );
+    // Fenêtre d'odysseus : ses zones translucides sur ce qui est dessous, flouté
+    let (program, uniforms) = match blur {
+        Some(_) => (
+            shaders.rounded_blur.clone(),
+            [uniforms, frame.blur_uniforms()].concat(),
+        ),
+        None => (shaders.rounded.clone(), uniforms),
+    };
     out.extend(surfaces.into_iter().map(|inner| {
         OdysseusElement::Surface(RoundedSurface {
             inner,
-            program: shaders.rounded.clone(),
+            program: program.clone(),
             uniforms: uniforms.clone(),
+            blur: blur.cloned(),
         })
     }));
     // Ombre portée, plus marquée sur la fenêtre active
@@ -676,13 +807,17 @@ fn window_elements(
 }
 
 /// Surfaces d'une couche (barre, fond…), de la plus haute à la plus basse.
+#[allow(clippy::too_many_arguments)]
 fn layer_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
-    scale: f64,
+    shaders: &Shaders,
+    frame: &Frame,
     layer: Layer,
     alpha: f32,
+    blur: Option<&(GlesTexture, usize)>,
 ) -> Vec<OdysseusElement> {
+    let scale = frame.scale;
     let map = layer_map_for_output(output);
     let mut elements = Vec::new();
     for surface in map.layers_on(layer).rev() {
@@ -692,7 +827,17 @@ fn layer_elements(
         let loc = geo.loc.to_physical_precise_round(scale);
         let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             surface.render_elements(renderer, loc, Scale::from(scale), alpha);
-        elements.extend(surfaces.into_iter().map(OdysseusElement::Layer));
+        match blur.filter(|_| BLURRED_LAYERS.contains(&surface.namespace())) {
+            Some(b) => elements.extend(surfaces.into_iter().map(|inner| {
+                OdysseusElement::Surface(RoundedSurface {
+                    inner,
+                    program: shaders.blur.clone(),
+                    uniforms: frame.blur_uniforms(),
+                    blur: Some(b.clone()),
+                })
+            })),
+            None => elements.extend(surfaces.into_iter().map(OdysseusElement::Layer)),
+        }
     }
     elements
 }
@@ -770,6 +915,14 @@ struct Frame {
 }
 
 impl Frame {
+    /// Texture floutée sur l'unité 1, taille de l'image (pour gl_FragCoord)
+    fn blur_uniforms(&self) -> Vec<Uniform<'static>> {
+        vec![
+            Uniform::new("blurred", 1i32),
+            Uniform::new("fb_size", [self.fb_size.w as f32, self.fb_size.h as f32]),
+        ]
+    }
+
     fn rounded_uniforms(&self, geo: Rectangle<f64, Logical>) -> Vec<Uniform<'static>> {
         vec![
             Uniform::new(
@@ -889,7 +1042,11 @@ pub fn output_elements(
     shaders: &Shaders,
     fb_size: Size<i32, Physical>,
     wallpaper: Option<&crate::wallpaper::Wallpaper>,
+    // Fondu enchaîné en cours : le fond précédent, et l'opacité du nouveau
+    wallpaper_fade: Option<(&crate::wallpaper::Wallpaper, f32)>,
     scene: &Scene,
+    // Flou d'arrière-plan (Réglages > Apparence) ; None : désactivé
+    mut blurs: Option<&mut crate::blur::Blurs>,
 ) -> Vec<OdysseusElement> {
     let scale = output.current_scale().fractional_scale();
     let b = theme::palette().window_border();
@@ -906,18 +1063,100 @@ pub fn output_elements(
         .map(|g| g.size.w as f64)
         .unwrap_or(1920.0);
 
-    let mut elements = layer_elements(output, renderer, scale, Layer::Overlay, 1.0);
-    if !scene.hide_top_layer && scene.top_alpha > 0.0 {
-        elements.extend(layer_elements(
-            output,
+    let screen = space.output_geometry(output).map(|g| g.size);
+    // Pile de ce qui est sous la couche du haut, du haut vers le bas, montée
+    // depuis le fond : chaque fenêtre translucide floute ce qui est déjà dessous
+    let mut stack: Vec<OdysseusElement> = Vec::new();
+    if let Some(size) = screen {
+        stack.extend(wallpaper_elements(wallpaper, wallpaper_fade, size));
+    }
+    for layer in [Layer::Background, Layer::Bottom] {
+        let below = layer_elements(output, renderer, shaders, &frame, layer, 1.0, None);
+        stack.splice(0..0, below);
+    }
+    let mut shown = Vec::new();
+    // Changement de bureau : décalage des fenêtres arrivantes et quittées
+    let (out_off, in_off) = scene.slide.map(|s| s.offsets()).unwrap_or((0.0, 0.0));
+    if let Some(slide) = scene.slide {
+        for (window, loc) in &slide.outgoing {
+            stack_window(
+                &mut stack,
+                window,
+                *loc,
+                out_off * out_w,
+                renderer,
+                shaders,
+                &frame,
+                scene,
+                blurs.as_deref_mut(),
+                &mut shown,
+            );
+        }
+    }
+    let windows: Vec<(Window, Point<i32, Logical>)> = space
+        .elements()
+        .filter_map(|w| space.element_location(w).map(|l| (w.clone(), l)))
+        .collect();
+    for (i, (window, loc)) in windows.iter().enumerate() {
+        // L'aperçu d'aimantation se glisse juste sous la fenêtre déplacée (au-dessus)
+        if i + 1 == windows.len()
+            && let Some(preview) = scene.snap_preview
+        {
+            let (rect, t) = preview.current();
+            let accent = theme::palette().accent;
+            stack.insert(
+                0,
+                OdysseusElement::Shadow(PixelShaderElement::new(
+                    shaders.preview.clone(),
+                    rect.to_i32_round(),
+                    None,
+                    1.0,
+                    vec![
+                        Uniform::new("geo", gl_rect(rect, scale, frame.transform, fb_size)),
+                        Uniform::new("radius", frame.radius),
+                        Uniform::new("border_width", (1.5 * scale) as f32),
+                        Uniform::new(
+                            "fill",
+                            [
+                                accent.r * 0.22 * t,
+                                accent.g * 0.22 * t,
+                                accent.b * 0.22 * t,
+                                0.22 * t,
+                            ],
+                        ),
+                        Uniform::new(
+                            "border",
+                            [
+                                accent.r * 0.7 * t,
+                                accent.g * 0.7 * t,
+                                accent.b * 0.7 * t,
+                                0.7 * t,
+                            ],
+                        ),
+                    ],
+                    Kind::Unspecified,
+                )),
+            );
+        }
+        stack_window(
+            &mut stack,
+            window,
+            *loc,
+            in_off * out_w,
             renderer,
-            scale,
-            Layer::Top,
-            scene.top_alpha,
-        ));
+            shaders,
+            &frame,
+            scene,
+            blurs.as_deref_mut(),
+            &mut shown,
+        );
+    }
+    if let Some(b) = blurs.as_deref_mut() {
+        b.keep_windows(&shown);
     }
 
     // Fenêtres en cours de fermeture : fondu et rétrécissement de 100 % à 94 %
+    let mut elements: Vec<OdysseusElement> = Vec::new();
     for c in scene.closing.iter().rev() {
         let t = close_progress(&c.start);
         let zoom = 1.0 - 0.06 * t;
@@ -946,83 +1185,117 @@ pub fn output_elements(
         elements.push(frame.shadow(shaders, geo, alpha * theme::SHADOW_ALPHA));
     }
 
-    // Changement de bureau : décalage des fenêtres arrivantes et quittées
-    let (out_off, in_off) = scene.slide.map(|s| s.offsets()).unwrap_or((0.0, 0.0));
-    let windows: Vec<(Window, Point<i32, Logical>)> = space
-        .elements()
-        .filter_map(|w| space.element_location(w).map(|l| (w.clone(), l)))
-        .collect();
-    for (i, (window, loc)) in windows.iter().rev().enumerate() {
-        elements.extend(window_elements(
-            window,
-            *loc,
-            in_off * out_w,
+    elements.extend(stack);
+    // Couches du haut (barre, Dock, panneaux), sur le dessous flouté s'il y a lieu
+    let show_top = !scene.hide_top_layer && scene.top_alpha > 0.0;
+    let desk = match blurs {
+        Some(b) if wants_blur(output, show_top) => {
+            b.desk
+                .update(renderer, &elements, fb_size, scale, frame.transform)
+        }
+        _ => None,
+    };
+    let mut top = layer_elements(
+        output,
+        renderer,
+        shaders,
+        &frame,
+        Layer::Overlay,
+        1.0,
+        desk.as_ref(),
+    );
+    if show_top {
+        top.extend(layer_elements(
+            output,
             renderer,
             shaders,
             &frame,
-            scene,
+            Layer::Top,
+            scene.top_alpha,
+            desk.as_ref(),
         ));
-        // L'aperçu d'aimantation se glisse juste sous la fenêtre déplacée (au-dessus)
-        if i == 0
-            && let Some(preview) = scene.snap_preview
-        {
-            let (rect, t) = preview.current();
-            let accent = theme::palette().accent;
-            elements.push(OdysseusElement::Shadow(PixelShaderElement::new(
-                shaders.preview.clone(),
-                rect.to_i32_round(),
-                None,
-                1.0,
-                vec![
-                    Uniform::new("geo", gl_rect(rect, scale, frame.transform, fb_size)),
-                    Uniform::new("radius", frame.radius),
-                    Uniform::new("border_width", (1.5 * scale) as f32),
-                    Uniform::new(
-                        "fill",
-                        [
-                            accent.r * 0.22 * t,
-                            accent.g * 0.22 * t,
-                            accent.b * 0.22 * t,
-                            0.22 * t,
-                        ],
-                    ),
-                    Uniform::new(
-                        "border",
-                        [
-                            accent.r * 0.7 * t,
-                            accent.g * 0.7 * t,
-                            accent.b * 0.7 * t,
-                            0.7 * t,
-                        ],
-                    ),
-                ],
-                Kind::Unspecified,
-            )));
-        }
     }
-    if let Some(slide) = scene.slide {
-        for (window, loc) in slide.outgoing.iter().rev() {
-            elements.extend(window_elements(
-                window,
-                *loc,
-                out_off * out_w,
-                renderer,
-                shaders,
-                &frame,
-                scene,
-            ));
+    top.extend(elements);
+    top
+}
+
+/// Pose une fenêtre en haut de `stack` ; si elle est translucide, ce qui est
+/// déjà dessous est flouté pour elle (recalculé seulement s'il a changé)
+#[allow(clippy::too_many_arguments)]
+fn stack_window(
+    stack: &mut Vec<OdysseusElement>,
+    window: &Window,
+    loc: Point<i32, Logical>,
+    dx: f64,
+    renderer: &mut GlesRenderer,
+    shaders: &Shaders,
+    frame: &Frame,
+    scene: &Scene,
+    blurs: Option<&mut crate::blur::Blurs>,
+    shown: &mut Vec<ObjectId>,
+) {
+    let vibrant = VIBRANT_APPS.contains(&crate::agent::app_and_title(window).0.as_str());
+    let blur = match (blurs, window.toplevel()) {
+        (Some(b), Some(t)) if vibrant => {
+            let id = t.wl_surface().id();
+            shown.push(id.clone());
+            b.window(&id)
+                .update(renderer, stack, frame.fb_size, frame.scale, frame.transform)
         }
-    }
-    elements.extend(layer_elements(output, renderer, scale, Layer::Bottom, 1.0));
-    elements.extend(layer_elements(
-        output,
+        _ => None,
+    };
+    let elements = window_elements(
+        window,
+        loc,
+        dx,
         renderer,
-        scale,
-        Layer::Background,
-        1.0,
-    ));
-    if let (Some(wallpaper), Some(geo)) = (wallpaper, space.output_geometry(output)) {
-        elements.push(OdysseusElement::Wallpaper(wallpaper.element(geo.size)));
+        shaders,
+        frame,
+        scene,
+        blur.as_ref(),
+    );
+    stack.splice(0..0, elements);
+}
+
+/// Le fond d'écran (et le précédent pendant un fondu enchaîné), du haut vers le bas
+fn wallpaper_elements(
+    wallpaper: Option<&crate::wallpaper::Wallpaper>,
+    fade: Option<(&crate::wallpaper::Wallpaper, f32)>,
+    size: Size<i32, Logical>,
+) -> Vec<OdysseusElement> {
+    match (wallpaper, fade) {
+        (Some(new), Some((old, a))) => vec![
+            OdysseusElement::Wallpaper(new.element_alpha(size, a)),
+            OdysseusElement::Wallpaper(old.element(size)),
+        ],
+        (None, Some((old, a))) => {
+            vec![OdysseusElement::Wallpaper(old.element_alpha(size, 1.0 - a))]
+        }
+        (Some(w), None) => vec![OdysseusElement::Wallpaper(w.element(size))],
+        (None, None) => Vec::new(),
     }
-    elements
+}
+
+/// Surfaces du bureau posées sur le dessous flouté (couches du haut et superposées)
+const BLURRED_LAYERS: [&str; 9] = [
+    "odysseus-bar",
+    "odysseus-tray-menu",
+    "odysseus-dock",
+    "odysseus-notifications",
+    "odysseus-notification-center",
+    "odysseus-control",
+    "odysseus-launcher",
+    "odysseus-assistant",
+    "odysseus-roue",
+];
+
+/// Fenêtres dont les zones translucides (barre latérale) sont posées sur leur dessous flouté
+const VIBRANT_APPS: [&str; 3] = ["odysseus-files", "odysseus-reglages", "odysseus-notes"];
+
+/// Une surface à flouter est-elle affichée sur cette sortie ?
+fn wants_blur(output: &Output, show_top: bool) -> bool {
+    let map = layer_map_for_output(output);
+    map.layers().any(|l| {
+        BLURRED_LAYERS.contains(&l.namespace()) && (show_top || l.layer() == Layer::Overlay)
+    })
 }

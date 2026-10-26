@@ -2,6 +2,7 @@
 
 mod agent;
 mod anim;
+mod blur;
 mod capture;
 mod closing;
 mod cursor;

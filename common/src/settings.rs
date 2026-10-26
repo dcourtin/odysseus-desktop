@@ -31,6 +31,14 @@ pub struct Settings {
     /// répétitions par seconde
     pub repeat_delay: u32,
     pub repeat_rate: u32,
+    /// Flou d'arrière-plan sous la barre, le Dock, les panneaux et les barres
+    /// latérales (Réglages > Apparence) ; désactivé, tout redevient opaque
+    pub blur: bool,
+    /// Transparence de ces surfaces, de 0 (opaques) à 100 ; 50 par défaut
+    pub transparency: u32,
+    /// Fond d'écran changé au hasard parmi les images de l'utilisateur, toutes
+    /// les N secondes (0 : jamais)
+    pub wallpaper_rotation: u32,
     /// Dock affiché ; désactivé, il ne se lance plus (Réglages le relance)
     pub dock: bool,
     /// Dock : masquage (« intelligent » : quand une fenêtre passe dessous,
@@ -56,6 +64,9 @@ impl Default for Settings {
             keyboard: "auto".into(),
             repeat_delay: 300,
             repeat_rate: 25,
+            wallpaper_rotation: 0,
+            blur: true,
+            transparency: 50,
             dock: true,
             dock_hide: "intelligent".into(),
             dock_size: 48,
@@ -94,6 +105,9 @@ impl Settings {
                 "nuit_fin" => s.night_to = Some(value.to_string()),
                 "nuit_temperature" => s.night_temp = num(),
                 "fond" => s.wallpaper = Some(value.to_string()),
+                "flou" => s.blur = value != "non",
+                "transparence" => s.transparency = num().unwrap_or(50).min(100),
+                "fond_rotation" => s.wallpaper_rotation = num().unwrap_or(0).min(86_400),
                 "clavier" if !value.is_empty() => s.keyboard = value.to_string(),
                 "repetition_delai" => s.repeat_delay = num().unwrap_or(300).clamp(150, 1500),
                 "repetition_vitesse" => s.repeat_rate = num().unwrap_or(25).clamp(5, 60),
@@ -137,13 +151,19 @@ impl Settings {
         if let Some(v) = &self.wallpaper {
             line("fond", v.clone());
         }
+        line("fond_rotation", self.wallpaper_rotation.to_string());
+        line("flou", if self.blur { "oui" } else { "non" }.into());
+        line("transparence", self.transparency.to_string());
         line("clavier", self.keyboard.clone());
         line("repetition_delai", self.repeat_delay.to_string());
         line("repetition_vitesse", self.repeat_rate.to_string());
         line("dock", if self.dock { "oui" } else { "non" }.into());
         line("dock_masquage", self.dock_hide.clone());
         line("dock_taille", self.dock_size.to_string());
-        line("reception", if self.reception { "oui" } else { "non" }.into());
+        line(
+            "reception",
+            if self.reception { "oui" } else { "non" }.into(),
+        );
         out
     }
 
@@ -201,6 +221,9 @@ mod tests {
             night_to: Some("06:30".into()),
             night_temp: Some(3000),
             wallpaper: Some("uni".into()),
+            wallpaper_rotation: 30,
+            blur: false,
+            transparency: 80,
             keyboard: "fr:mac".into(),
             repeat_delay: 450,
             repeat_rate: 30,

@@ -143,6 +143,8 @@ fn center_marker(open: bool) {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     center_marker(false);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.is_empty() {

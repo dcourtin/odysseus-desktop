@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Mutex, Once,
-        atomic::{AtomicPtr, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering},
     },
 };
 
@@ -47,6 +47,7 @@ impl Rgba {
 
 /// Palette d'un thème. Les applications la lisent par [`palette()`] à chaque
 /// dessin : un changement de thème s'applique au dessin suivant.
+#[derive(Clone, Copy)]
 pub struct Palette {
     /// Nom dans le fichier de réglage, et nom affiché
     pub id: &'static str,
@@ -283,12 +284,61 @@ static ACTIVE: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
 static ACTIVE_CUSTOM: Mutex<Option<Custom>> = Mutex::new(None);
 static LOADED: Once = Once::new();
 
+/// L'appli est posée sur le flou du compositeur (barre, Dock, panneaux,
+/// Fichiers, Réglages, Notes) : voir [`use_vibrancy`]
+static WANTS_VIBRANCY: AtomicBool = AtomicBool::new(false);
+/// Sa palette translucide en vigueur (nulle : flou désactivé ou pas dans odysseus)
+static VIBRANT: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
+/// Transparence de la palette translucide en place (Réglages > Apparence)
+static VIBRANT_LEVEL: AtomicU32 = AtomicU32::new(50);
+
+/// À appeler au début d'une appli posée sur le flou d'odysseus : sa palette
+/// devient translucide (barre du haut, panneaux, barres latérales), tant que le
+/// flou est activé (Réglages > Apparence) et qu'elle tourne dans odysseus.
+pub fn use_vibrancy() {
+    WANTS_VIBRANCY.store(true, Ordering::Release);
+    if LOADED.is_completed() {
+        reload();
+    }
+}
+
+/// Le flou du compositeur est-il là pour cette appli ? Si oui, avec quelle
+/// transparence (0 à 100)
+fn vibrancy() -> Option<u32> {
+    if !WANTS_VIBRANCY.load(Ordering::Acquire)
+        || std::env::var("XDG_CURRENT_DESKTOP").as_deref() != Ok("odysseus")
+    {
+        return None;
+    }
+    let s = crate::settings::Settings::load();
+    s.blur.then_some(s.transparency)
+}
+
+/// Palette translucide : on voit le flou à travers barre, panneaux et barres
+/// latérales. `level` 50 donne les opacités de référence ; 0, des surfaces
+/// opaques ; 100, deux fois plus transparentes (jamais moins de 25 % d'opacité).
+fn translucent(p: &Palette, level: u32) -> Palette {
+    let mut v = *p;
+    let dark = p.ink == 0xffffff;
+    let k = level.min(100) as f32 / 50.0;
+    let alpha = |a: f32| (1.0 - (1.0 - a) * k).max(0.25);
+    v.surface = p.surface.with_alpha(alpha(if dark { 0.62 } else { 0.66 }));
+    v.panel = p.panel.with_alpha(alpha(if dark { 0.70 } else { 0.74 }));
+    v.sidebar = p.sidebar.with_alpha(alpha(if dark { 0.60 } else { 0.66 }));
+    v
+}
+
 /// Palette du thème choisi (lu dans `~/.config/odysseus/theme` au premier appel,
 /// relu par [`reload()`])
 pub fn palette() -> &'static Palette {
     LOADED.call_once(|| {
         reload();
     });
+    let v = VIBRANT.load(Ordering::Acquire);
+    if !v.is_null() {
+        // Copie translucide laissée en mémoire, jamais libérée
+        return unsafe { &*v };
+    }
     let p = ACTIVE.load(Ordering::Acquire);
     if p.is_null() {
         return &THEMES[0];
@@ -305,8 +355,32 @@ pub fn config_path() -> Option<PathBuf> {
     Some(base.join("odysseus/theme"))
 }
 
-/// Relit le thème choisi (et le thème personnalisé) ; vrai s'il a changé.
+/// Relit le thème choisi (et le thème personnalisé) ; vrai s'il a changé,
+/// translucidité comprise (flou activé ou coupé dans les Réglages).
 pub fn reload() -> bool {
+    let changed = reload_theme();
+    let base = ACTIVE.load(Ordering::Acquire);
+    let base: &Palette = if base.is_null() {
+        &THEMES[0]
+    } else {
+        unsafe { &*base }
+    };
+    let was =
+        (!VIBRANT.load(Ordering::Acquire).is_null()).then(|| VIBRANT_LEVEL.load(Ordering::Acquire));
+    let now = vibrancy();
+    match now {
+        Some(level) if changed || was != now => {
+            let leaked: &'static Palette = Box::leak(Box::new(translucent(base, level)));
+            VIBRANT_LEVEL.store(level, Ordering::Release);
+            VIBRANT.store(leaked as *const Palette as *mut Palette, Ordering::Release);
+        }
+        Some(_) => {}
+        None => VIBRANT.store(std::ptr::null_mut(), Ordering::Release),
+    }
+    changed || was != now
+}
+
+fn reload_theme() -> bool {
     let id = config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();

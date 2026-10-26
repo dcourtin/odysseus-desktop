@@ -137,6 +137,8 @@ fn panel_height(rows: usize) -> f32 {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     if toggle_existing() {
         return;
     }
@@ -377,7 +379,9 @@ impl Launcher {
             pw - 2.0 * s,
             ph - 2.0 * s,
             (RADIUS - 1.0) * s,
-            theme::palette().panel.with_alpha(0.97),
+            theme::palette()
+                .panel
+                .with_alpha(theme::palette().panel.a * 0.97),
         );
 
         // Champ de recherche : loupe, texte (ou indication), curseur
@@ -397,7 +401,9 @@ impl Launcher {
             11.0 * s,
             11.0 * s,
             5.5 * s,
-            theme::palette().panel.with_alpha(0.97),
+            theme::palette()
+                .panel
+                .with_alpha(theme::palette().panel.a * 0.97),
         );
         for k in 0..4 {
             let d = k as f32 * 1.5 * s;

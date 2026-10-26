@@ -8,9 +8,9 @@
 
 mod agents;
 mod automatismes;
+mod compte;
 mod fonds;
 mod maj;
-mod compte;
 mod roue;
 mod system;
 mod trousseau;
@@ -83,6 +83,8 @@ const CHROME_Y: f32 = 24.0;
 const SIDE_TOP: f32 = 30.0;
 const CONTENT_MAX: f32 = 660.0;
 const ROW_H: f32 = 52.0;
+/// Débord de la zone cliquable d'un curseur, de chaque côté
+const SLIDER_PAD: f32 = 10.0;
 const BTN_LEFT: u32 = 0x110;
 /// Délai pour garder une nouvelle définition, sinon retour à l'ancienne
 const CONFIRM: Duration = Duration::from_secs(15);
@@ -178,6 +180,14 @@ const DOCK_HIDE: [(&str, &str); 3] = [
     ("jamais", "Jamais"),
 ];
 const DOCK_SIZE: [(u32, &str); 3] = [(40, "Petit"), (48, "Moyen"), (56, "Grand")];
+/// Changement de fond au hasard : intervalle en secondes (0 : jamais)
+const WALLPAPER_ROTATION: [(u32, &str); 5] = [
+    (0, "Jamais"),
+    (30, "30 s"),
+    (300, "5 min"),
+    (1800, "30 min"),
+    (3600, "1 h"),
+];
 const SUSPEND: [(u32, &str); 4] = [(0, "Jamais"), (30, "30 min"), (60, "1 h"), (120, "2 h")];
 /// Dispositions proposées : réglage, nom
 const KEYBOARDS: [(&str, &str); 8] = [
@@ -308,6 +318,8 @@ enum Hit {
     CustomBg(u32),
     Fond(usize),
     FondUni,
+    /// Changement de fond au hasard, toutes les N secondes (0 : jamais)
+    FondRotation(u32),
     /// Croix sur une de vos images : la mettre à la corbeille
     FondDelete(usize),
     Scale(usize),
@@ -323,6 +335,10 @@ enum Hit {
     Locale(usize),
     ScreenOff(u32),
     LockToggle,
+    /// Flou d'arrière-plan activé ou non (Apparence)
+    BlurToggle,
+    /// Transparence des surfaces floutées (curseur, qu'on peut faire glisser)
+    BlurLevel,
     ReceptionToggle,
     /// Réglages > Roue : choisir une place, y mettre un élément du catalogue,
     /// la vider, la déplacer, reprendre les favoris du Dock ; en faire un
@@ -437,6 +453,18 @@ struct App {
     hover: Option<Hit>,
     scroll: f32,
     content_h: f32,
+    /// Barre de défilement : survolée, et saisie (décalage du pointeur dans le curseur)
+    scrollbar_hover: bool,
+    scrollbar_drag: Option<f32>,
+    /// Curseur saisi (sa zone), suivi tant que le bouton est tenu
+    slider_drag: Option<Rect>,
+    /// Défilement progressif (molette, clavier) : position visée
+    scroll_target: Option<f32>,
+    /// Redessins regroupés : au plus un par rafraîchissement de l'écran
+    qh: QueueHandle<App>,
+    frame_pending: bool,
+    dirty: bool,
+    last_frame: Instant,
     confirm: Option<Confirm>,
     toast: Option<(String, Instant)>,
     typed: String,
@@ -508,6 +536,8 @@ fn already_running() -> bool {
 }
 
 fn main() {
+    // Posée sur le flou du compositeur : palette translucide si le flou est actif
+    common::theme::use_vibrancy();
     if already_running() {
         return;
     }
@@ -627,6 +657,14 @@ fn main() {
         hover: None,
         scroll: 0.0,
         content_h: 0.0,
+        scrollbar_hover: false,
+        scrollbar_drag: None,
+        slider_drag: None,
+        scroll_target: None,
+        qh: qh.clone(),
+        frame_pending: false,
+        dirty: false,
+        last_frame: Instant::now(),
         confirm: None,
         toast: None,
         typed: String::new(),
@@ -1140,7 +1178,7 @@ impl App {
     /// Ouvre une page (et relit ce qu'elle affiche)
     fn open_page(&mut self, p: Page) {
         self.page = p;
-        self.scroll = 0.0;
+        self.set_scroll(0.0);
         if p == Page::Agent {
             self.agent_status = agents::status();
         }
@@ -1163,6 +1201,86 @@ impl App {
             self.screen = system::screen();
             self.about = about(&self.screen);
             self.night = system::night_mode();
+        }
+    }
+
+    /// Barre de défilement, quand la page dépasse la fenêtre : abscisse du
+    /// milieu, rail (haut, hauteur), curseur (haut, hauteur)
+    fn scrollbar_geometry(&self, content_h: f32) -> Option<(f32, f32, f32, f32, f32)> {
+        let height = self.height as f32;
+        let max = content_h - height;
+        if max <= 1.0 {
+            return None;
+        }
+        let bottom = if self.wizard.is_some() { FOOTER_H } else { 0.0 };
+        let track_y = HEADER_H + 6.0;
+        let track_h = height - track_y - bottom - 6.0;
+        if track_h < 40.0 {
+            return None;
+        }
+        // Curseur proportionnel à la partie visible, 36 points au moins
+        let thumb_h = (track_h * height / content_h).clamp(36.0, track_h);
+        let thumb_y = track_y + (track_h - thumb_h) * (self.scroll / max).clamp(0.0, 1.0);
+        Some((self.width as f32 - 9.0, track_y, track_h, thumb_y, thumb_h))
+    }
+
+    /// Le pointeur est-il sur la barre (bande de 16 points au bord droit) ?
+    fn on_scrollbar(&self, x: f32, y: f32) -> bool {
+        self.scrollbar_geometry(self.content_h)
+            .is_some_and(|(bx, ty, th, _, _)| (x - bx).abs() <= 8.0 && y >= ty && y <= ty + th)
+    }
+
+    /// Défilement immédiat (changement de page, barre saisie)
+    fn set_scroll(&mut self, y: f32) {
+        self.scroll = y;
+        self.scroll_target = None;
+    }
+
+    /// Défilement progressif : la page rejoint la position visée en quelques images
+    fn scroll_by(&mut self, delta: f32) {
+        let max = (self.content_h - self.height as f32).max(0.0);
+        let base = self.scroll_target.unwrap_or(self.scroll);
+        self.scroll_target = Some((base + delta).clamp(0.0, max));
+    }
+
+    /// Image suivante (rappel du compositeur) : défilement progressif, puis
+    /// redessin s'il a été demandé entre-temps
+    fn next_frame(&mut self) {
+        self.frame_pending = false;
+        let dt = self.last_frame.elapsed().as_secs_f32().min(0.05);
+        self.last_frame = Instant::now();
+        if let Some(target) = self.scroll_target {
+            let max = (self.content_h - self.height as f32).max(0.0);
+            let target = target.clamp(0.0, max);
+            self.scroll += (target - self.scroll) * (1.0 - (-dt / 0.06).exp());
+            if (target - self.scroll).abs() < 0.5 {
+                self.set_scroll(target);
+            }
+            self.dirty = true;
+        }
+        if std::mem::take(&mut self.dirty) {
+            self.render();
+        }
+    }
+
+    /// Place le haut du curseur en `thumb_top` (points) et défile en conséquence
+    fn scroll_to_thumb(&mut self, thumb_top: f32) {
+        if let Some((_, ty, th, _, thumb_h)) = self.scrollbar_geometry(self.content_h) {
+            let max = (self.content_h - self.height as f32).max(0.0);
+            let k = ((thumb_top - ty) / (th - thumb_h).max(1.0)).clamp(0.0, 1.0);
+            self.set_scroll(k * max);
+            self.draw();
+        }
+    }
+
+    /// Transparence d'après la place du pointeur sur le curseur, par pas de 5 ;
+    /// enregistrée (et suivie par les applis) seulement si elle change
+    fn set_blur_level(&mut self, x: f32, rect: Rect) {
+        let frac = ((x - rect.0 - SLIDER_PAD) / (rect.2 - 2.0 * SLIDER_PAD)).clamp(0.0, 1.0);
+        let level = (frac * 20.0).round() as u32 * 5;
+        if level != self.settings.transparency {
+            self.settings.transparency = level;
+            self.save();
         }
     }
 
@@ -1190,7 +1308,7 @@ impl App {
             Hit::Page(p) => self.open_page(p),
             Hit::WizardStart => {
                 self.wizard = Some(0);
-                self.scroll = 0.0;
+                self.set_scroll(0.0);
             }
             Hit::WizardPrev | Hit::WizardNext => {
                 let step = self.wizard.unwrap_or(0);
@@ -1205,7 +1323,7 @@ impl App {
                     self.exit = std::env::args().any(|a| a == "--accueil");
                 } else {
                     self.wizard = Some(next);
-                    self.scroll = 0.0;
+                    self.set_scroll(0.0);
                     if let Some(page) = WIZARD[next] {
                         self.open_page(page);
                     }
@@ -1247,6 +1365,10 @@ impl App {
                 }
             }
             Hit::FondUni => self.set_wallpaper(Some("uni".into())),
+            Hit::FondRotation(every) => {
+                self.settings.wallpaper_rotation = every;
+                self.save();
+            }
             Hit::FondDelete(i) => self.delete_fond(i),
             Hit::Scale(i) => {
                 let scale = SCALES[i];
@@ -1337,6 +1459,14 @@ impl App {
             Hit::ScreenOff(min) => {
                 self.settings.screen_off_min = min;
                 self.save();
+            }
+            Hit::BlurToggle => {
+                self.settings.blur = !self.settings.blur;
+                self.save();
+            }
+            Hit::BlurLevel => {
+                self.slider_drag = Some(rect);
+                self.set_blur_level(x, rect);
             }
             Hit::LockToggle => {
                 self.settings.lock_on_idle = !self.settings.lock_on_idle;
@@ -1577,8 +1707,7 @@ impl App {
                     Keysym::Home => -1.0e6,
                     _ => 1.0e6,
                 };
-                let max = (self.content_h - self.height as f32).max(0.0);
-                self.scroll = (self.scroll + delta).clamp(0.0, max);
+                self.scroll_by(delta);
             }
             _ if self.page == Page::Clavier => {
                 // Zone d'essai du clavier
@@ -1602,7 +1731,19 @@ impl App {
 
     // --- Dessin ---------------------------------------------------------------
 
+    /// Redessin demandé : tout de suite, ou à la prochaine image si une est déjà
+    /// en route (des centaines de mouvements de souris par seconde ne font pas
+    /// des centaines de dessins : la fenêtre ne prend plus de retard)
     fn draw(&mut self) {
+        // Pas de rappel depuis 250 ms (fenêtre réduite, autre bureau) : on dessine
+        if self.frame_pending && self.last_frame.elapsed() < Duration::from_millis(250) {
+            self.dirty = true;
+        } else {
+            self.render();
+        }
+    }
+
+    fn render(&mut self) {
         if !self.configured {
             return;
         }
@@ -1623,7 +1764,15 @@ impl App {
             height: h,
         };
         let p = theme::palette();
-        c.fill(p.content);
+        // Sous la barre latérale, rien d'opaque : elle est translucide sur le flou
+        // du compositeur (theme::use_vibrancy) ; le contenu, lui, reste opaque
+        let side_px = if self.wizard.is_some() {
+            0.0
+        } else {
+            SIDEBAR_W * s
+        };
+        c.clear();
+        c.fill_rect(side_px, 0.0, w as f32 - side_px, h as f32, p.content);
         let mut ui = Ui {
             c: &mut c,
             s,
@@ -1672,6 +1821,22 @@ impl App {
             }
             None => self.sidebar(&mut ui),
         }
+        // Barre de défilement, sous les messages passagers
+        if let Some((bx, track_y, track_h, thumb_y, thumb_h)) = self.scrollbar_geometry(content_h) {
+            let active = self.scrollbar_hover || self.scrollbar_drag.is_some();
+            let bw = if active { 8.0 } else { 6.0 };
+            if active {
+                ui.rounded(bx - bw / 2.0, track_y, bw, track_h, bw / 2.0, p.ink(0.05));
+            }
+            let ink = if self.scrollbar_drag.is_some() {
+                0.45
+            } else if active {
+                0.35
+            } else {
+                0.2
+            };
+            ui.rounded(bx - bw / 2.0, thumb_y, bw, thumb_h, bw / 2.0, p.ink(ink));
+        }
         self.overlays(&mut ui, cx, cw);
 
         self.hits = ui.hits;
@@ -1680,6 +1845,10 @@ impl App {
         surface.set_buffer_scale(self.scale);
         surface.damage_buffer(0, 0, w as i32, h as i32);
         if buffer.attach_to(surface).is_ok() {
+            // La prochaine image au prochain rafraîchissement de l'écran
+            surface.frame(&self.qh, surface.clone());
+            self.frame_pending = true;
+            self.last_frame = Instant::now();
             self.window.commit();
         }
         self.pool = Some(pool);
@@ -1730,7 +1899,10 @@ impl App {
                 ui.centered(&initials, 40.0, 34.0 + t, 20.0, 14.0, true, p.on_accent);
             }
         }
-        ui.hit((14.0, 18.0 + t, SIDEBAR_W - 28.0, 52.0), Hit::Page(Page::Compte));
+        ui.hit(
+            (14.0, 18.0 + t, SIDEBAR_W - 28.0, 52.0),
+            Hit::Page(Page::Compte),
+        );
         ui.bold_text(full, 70.0, 24.0 + t, 22.0, 14.0, p.text);
         ui.text(
             &format!("{login} · session odysseus"),
@@ -1930,8 +2102,49 @@ impl App {
                 lower_first(named(custom_backgrounds(c.dark), c.background))
             )
         });
-        y = ui.note(x, y, w, &text);
-        y
+        y = ui.note(x, y, w, &text) + 24.0;
+
+        // Flou d'arrière-plan (« Réduire la transparence » de macOS, à l'envers)
+        let p = theme::palette();
+        y = ui.section(x, y, "Transparence");
+        let rows = if self.settings.blur { 2.0 } else { 1.0 };
+        ui.card(x, y, w, rows * ROW_H);
+        ui.text(
+            "Flou sous la barre, le Dock et les barres latérales",
+            x + 18.0,
+            y,
+            ROW_H,
+            13.5,
+            p.text,
+        );
+        ui.switch(
+            x + w - 18.0 - 40.0,
+            y + 14.0,
+            self.settings.blur,
+            Hit::BlurToggle,
+        );
+        y += ROW_H;
+        if self.settings.blur {
+            ui.rect(x + 16.0, y, w - 32.0, 1.0, p.ink(0.06));
+            ui.text("Niveau", x + 18.0, y, ROW_H, 13.5, p.text);
+            let (tx, tw) = (x + 120.0, w - 120.0 - 90.0);
+            let level = self.settings.transparency;
+            ui.slider(tx, y + 20.0, tw, level as f32 / 100.0, Hit::BlurLevel);
+            let label = match level {
+                0 => "opaque".to_string(),
+                50 => "50 % (défaut)".to_string(),
+                l => format!("{l} %"),
+            };
+            ui.text(&label, x + w - 78.0, y, ROW_H, 12.5, p.text_dim);
+            y += ROW_H;
+        }
+        y += 8.0;
+        ui.note(
+            x,
+            y,
+            w,
+            "Le dessous transparaît, flouté, à travers la barre, le Dock, la roue, les panneaux et les barres latérales de Fichiers, Réglages et Notes (on y devine la fenêtre posée dessous). Le curseur règle la transparence, d'opaque à très transparent ; désactivé, tout redevient opaque.",
+        )
     }
 
     fn page_fond(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
@@ -2068,7 +2281,33 @@ impl App {
             false,
             p.text_dim,
         );
-        y + dh + 16.0
+        y += dh + 28.0;
+
+        // Changement au hasard parmi vos images
+        y = ui.section(x, y, "Changer au hasard");
+        let sel = WALLPAPER_ROTATION
+            .iter()
+            .position(|(s, _)| *s == self.settings.wallpaper_rotation);
+        ui.segmented(
+            x,
+            y,
+            w,
+            &WALLPAPER_ROTATION.iter().map(|r| r.1).collect::<Vec<_>>(),
+            sel,
+            |i| Hit::FondRotation(WALLPAPER_ROTATION[i].0),
+        );
+        y += 52.0;
+        let n = self.fonds.len().saturating_sub(builtin);
+        let note = match n {
+            0 => "Ajoutez d'abord des images dans « Vos images » : le hasard pioche parmi elles."
+                .to_string(),
+            1 => "Une seule image dans « Vos images » : ajoutez-en d'autres pour qu'elle change."
+                .to_string(),
+            n => format!(
+                "Le fond change au hasard parmi vos {n} images, en fondu enchaîné. Rien ne change pendant que l'écran est éteint ou verrouillé."
+            ),
+        };
+        ui.note(x, y, w, &note)
     }
 
     fn page_ecran(&self, ui: &mut Ui, x: f32, y: f32, w: f32) -> f32 {
@@ -3541,6 +3780,22 @@ impl Ui<'_, '_> {
         self.centered(value, x + 54.0, y, 32.0, 13.5, true, p.text);
     }
 
+    /// Curseur à la couleur d'accent : rempli jusqu'à `frac` ; la zone cliquable
+    /// déborde de `SLIDER_PAD` de chaque côté (voir `set_blur_level`)
+    fn slider(&mut self, x: f32, y: f32, w: f32, frac: f32, hit: Hit) {
+        let p = theme::palette();
+        let h = 6.0;
+        self.rounded(x, y, w, h, h / 2.0, p.ink(0.12));
+        self.rounded(x, y, (w * frac).max(h), h, h / 2.0, p.accent);
+        let kx = x + w * frac;
+        self.circle(kx, y + h / 2.0, 11.0, Rgba::hex(0x000000, 0.2));
+        self.circle(kx, y + h / 2.0, 10.0, Rgba::hex(0xffffff, 1.0));
+        self.hit(
+            (x - SLIDER_PAD, y - 16.0, w + 2.0 * SLIDER_PAD, h + 32.0),
+            hit,
+        );
+    }
+
     /// Curseur de teinte : dégradé de l'orangé au blanc
     fn warm_slider(&mut self, x: f32, y: f32, w: f32, frac: f32, hit: Hit) {
         let s = self.s;
@@ -3658,7 +3913,9 @@ impl CompositorHandler for App {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.next_frame();
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -3829,12 +4086,52 @@ impl PointerHandler for App {
         for event in events {
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
             match event.kind {
+                // Barre de défilement : saisir le curseur, ou cliquer sur le rail pour y sauter
+                PointerEventKind::Press {
+                    button: BTN_LEFT, ..
+                } if self.on_scrollbar(x, y) => {
+                    if let Some((_, _, _, thumb_y, thumb_h)) =
+                        self.scrollbar_geometry(self.content_h)
+                    {
+                        let grab = if y >= thumb_y && y <= thumb_y + thumb_h {
+                            y - thumb_y
+                        } else {
+                            thumb_h / 2.0
+                        };
+                        self.scrollbar_drag = Some(grab);
+                        self.scroll_to_thumb(y - grab);
+                    }
+                }
                 PointerEventKind::Press {
                     button: BTN_LEFT,
                     serial,
                     ..
                 } => self.click(x, y, serial),
+                PointerEventKind::Release {
+                    button: BTN_LEFT, ..
+                } if self.scrollbar_drag.is_some() => {
+                    self.scrollbar_drag = None;
+                    self.scrollbar_hover = self.on_scrollbar(x, y);
+                    self.draw();
+                }
+                PointerEventKind::Release {
+                    button: BTN_LEFT, ..
+                } if self.slider_drag.is_some() => self.slider_drag = None,
+                PointerEventKind::Motion { .. } if self.slider_drag.is_some() => {
+                    if let Some(rect) = self.slider_drag {
+                        self.set_blur_level(x, rect);
+                    }
+                }
+                PointerEventKind::Motion { .. } if self.scrollbar_drag.is_some() => {
+                    let grab = self.scrollbar_drag.unwrap_or(0.0);
+                    self.scroll_to_thumb(y - grab);
+                }
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    let on_bar = self.on_scrollbar(x, y);
+                    if on_bar != self.scrollbar_hover {
+                        self.scrollbar_hover = on_bar;
+                        self.draw();
+                    }
                     let hover = self.hit_at(x, y).map(|(_, h)| h);
                     if self.chrome.motion(x, y, CHROME_Y) {
                         self.draw();
@@ -3845,14 +4142,14 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Leave { .. } => {
+                    let bar = std::mem::take(&mut self.scrollbar_hover);
                     let chrome = self.chrome.leave();
-                    if self.hover.take().is_some() || chrome {
+                    if self.hover.take().is_some() || chrome || bar {
                         self.draw();
                     }
                 }
                 PointerEventKind::Axis { vertical, .. } if vertical.absolute != 0.0 => {
-                    let max = (self.content_h - self.height as f32).max(0.0);
-                    self.scroll = (self.scroll + vertical.absolute as f32 * 1.5).clamp(0.0, max);
+                    self.scroll_by(vertical.absolute as f32 * 1.5);
                     self.draw();
                 }
                 _ => {}
