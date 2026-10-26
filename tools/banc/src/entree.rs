@@ -11,6 +11,10 @@
 //!     banc-entree touche ctrl+h Return BackSpace…
 //!     banc-entree pointeur X Y        déplace le curseur
 //!     banc-entree clic [X Y] [droit]  clique (du bouton gauche sinon)
+//!     banc-entree glisser X1 Y1 X2 Y2 [PAS]
+//!                                     appuie, glisse par PAS petits pas
+//!                                     rapprochés (60 par défaut), relâche
+//!     banc-entree molette N           tourne la molette de N crans (N < 0 : vers le haut)
 //!     banc-entree ecran LxH           la taille de l'écran a changé
 //!     banc-entree fin                 arrête le serveur
 //!
@@ -36,7 +40,10 @@ use std::{
 
 use wayland_client::{
     Connection, Dispatch, QueueHandle, delegate_noop,
-    protocol::{wl_pointer::ButtonState, wl_registry, wl_seat},
+    protocol::{
+        wl_pointer::{Axis, AxisSource, ButtonState},
+        wl_registry, wl_seat,
+    },
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1 as kb_manager, zwp_virtual_keyboard_v1 as kb,
@@ -242,6 +249,46 @@ impl Server {
         let _ = self.conn.flush();
     }
 
+    /// Appui en (x1, y1), glissé jusqu'à (x2, y2) par `steps` pas espacés de
+    /// 2 ms (une vraie souris envoie des centaines de mouvements par seconde),
+    /// puis relâché
+    fn drag(&self, (x1, y1): (u32, u32), (x2, y2): (u32, u32), steps: u32) {
+        self.motion(x1, y1);
+        std::thread::sleep(CLICK_PAUSE);
+        self.pointer
+            .button(self.time(), BTN_LEFT, ButtonState::Pressed);
+        self.pointer.frame();
+        let _ = self.conn.flush();
+        let steps = steps.max(1);
+        for i in 1..=steps {
+            let lerp = |a: u32, b: u32| {
+                (a as f64 + (b as f64 - a as f64) * i as f64 / steps as f64).round() as u32
+            };
+            self.motion(lerp(x1, x2), lerp(y1, y2));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::thread::sleep(CLICK_PAUSE);
+        self.pointer
+            .button(self.time(), BTN_LEFT, ButtonState::Released);
+        self.pointer.frame();
+        let _ = self.conn.flush();
+        std::thread::sleep(CLICK_PAUSE);
+    }
+
+    /// N crans de molette (15 unités chacun, comme une molette ordinaire)
+    fn wheel(&self, notches: i32) {
+        for _ in 0..notches.unsigned_abs() {
+            let sign = notches.signum();
+            self.pointer.axis_source(AxisSource::Wheel);
+            self.pointer
+                .axis_discrete(self.time(), Axis::VerticalScroll, 15.0 * sign as f64, sign);
+            self.pointer.frame();
+            let _ = self.conn.flush();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        std::thread::sleep(CLICK_PAUSE);
+    }
+
     fn click(&self, button: u32) {
         self.pointer
             .button(self.time(), button, ButtonState::Pressed);
@@ -290,6 +337,20 @@ impl Server {
                     std::thread::sleep(CLICK_PAUSE);
                 }
                 self.click(button);
+            }
+            "glisser" => {
+                let n: Vec<u32> = arg
+                    .split_whitespace()
+                    .map(|w| w.parse().map_err(|_| format!("nombre attendu : {w}")))
+                    .collect::<Result<_, _>>()?;
+                let [x1, y1, x2, y2] = n[..n.len().min(4)] else {
+                    return Err("glisser X1 Y1 X2 Y2 [PAS]".into());
+                };
+                self.drag((x1, y1), (x2, y2), n.get(4).copied().unwrap_or(60));
+            }
+            "molette" => {
+                let n: i32 = arg.trim().parse().map_err(|_| "molette N".to_string())?;
+                self.wheel(n);
             }
             "ecran" => self.screen = screen_size(&arg)?,
             "fin" => return Ok(false),
@@ -455,7 +516,7 @@ fn send(cmd: &str, arg: &str) -> Result<(), String> {
 fn usage() -> ! {
     eprintln!("usage : banc-entree --serveur [--ecran LxH] [--disposition fr]");
     eprintln!(
-        "        banc-entree texte TEXTE | touche TOUCHE… | pointeur X Y | clic [X Y] [droit] | fin"
+        "        banc-entree texte TEXTE | touche TOUCHE… | pointeur X Y | clic [X Y] [droit]\n        banc-entree glisser X1 Y1 X2 Y2 [PAS] | molette N | ecran LxH | fin"
     );
     std::process::exit(2);
 }
@@ -479,9 +540,10 @@ fn main() {
             }
             serve(screen, &layout)
         }
-        Some(cmd @ ("texte" | "touche" | "pointeur" | "clic" | "ecran" | "fin")) => {
-            send(cmd, &args[1..].join(" "))
-        }
+        Some(
+            cmd @ ("texte" | "touche" | "pointeur" | "clic" | "glisser" | "molette" | "ecran"
+            | "fin"),
+        ) => send(cmd, &args[1..].join(" ")),
         _ => usage(),
     };
     if let Err(e) = result {
