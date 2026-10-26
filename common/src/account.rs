@@ -171,7 +171,7 @@ pub fn recent_photos(max: usize) -> Vec<PathBuf> {
         .filter(|p| is_photo(p) && p.is_file())
         .filter_map(|p| Some((p.metadata().ok()?.modified().ok()?, p)))
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
     found.into_iter().take(max).map(|(_, p)| p).collect()
 }
 
