@@ -652,8 +652,7 @@ impl Roue {
                     0.35 * rt,
                 );
                 c.fill_circle(x, y, ro, p.panel_border().with_alpha(0.10 * rt));
-                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.94 * rt));
-                c.fill_circle(x, y, r + 5.0 * s, p.ink(0.06 * rt));
+                c.fill_circle(x, y, ro - s, p.panel.with_alpha(0.97 * rt));
             }
             c.shadow(
                 x - r,
@@ -664,7 +663,10 @@ impl Roue {
                 36.0 * s,
                 0.45 * (1.0 - rt) * ease,
             );
-            c.fill_circle(x, y, r, p.panel_border());
+            // Liseré du disque, effacé quand l'anneau se déploie : roue et anneau
+            // ne font plus qu'un disque
+            let border = p.panel_border();
+            c.fill_circle(x, y, r, border.with_alpha(border.a * (1.0 - rt)));
             c.fill_circle(x, y, r - s, p.panel.with_alpha(0.97));
             // Centre : fermer
             c.fill_circle(
