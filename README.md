@@ -51,7 +51,7 @@ Bureau Wayland personnel en Rust : rapide, sobre.
 |---|
 | ![Notes](docs/captures/notes.png) |
 
-| Roue (Super+R ou clic du milieu sur le bureau) : vos applis en cercle, sur le dessous flouté | Transparence (Réglages > Apparence) : flou façon macOS, de l'opaque au très transparent |
+| Roue (Super+R ou clic du milieu sur le bureau) : vos applis en cercle ; ici l'anneau du statut (notifications, mises à jour, panneaux, icônes des applis) | Transparence (Réglages > Apparence) : flou façon macOS, de l'opaque au très transparent |
 |---|---|
 | ![Roue](docs/captures/roue.png) | ![Transparence](docs/captures/transparence.png) |
 
