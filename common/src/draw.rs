@@ -81,13 +81,8 @@ impl Canvas<'_> {
         if x0 >= x1 {
             return;
         }
-        let inv = 255 - src[3] as u32;
         let row = y as usize * self.width as usize * 4;
-        for px in self.buf[row + x0 * 4..row + x1 * 4].as_chunks_mut::<4>().0 {
-            for (dst, s) in px.iter_mut().zip(src) {
-                *dst = (s as u32 + (*dst as u32 * inv + 127) / 255) as u8;
-            }
-        }
+        blend_run(&mut self.buf[row + x0 * 4..row + x1 * 4], src);
     }
 
     /// Rectangle droit (rapide : une couleur précalculée par ligne, bornes coupées).
@@ -100,14 +95,9 @@ impl Canvas<'_> {
             return;
         }
         let src = premultiply(c, 1.0);
-        let inv = 255 - src[3] as u32;
         let stride = self.width as usize * 4;
         for row in self.buf[y0 as usize * stride..y1 as usize * stride].chunks_exact_mut(stride) {
-            for px in row[x0 as usize * 4..x1 as usize * 4].as_chunks_mut::<4>().0 {
-                for (dst, s) in px.iter_mut().zip(src) {
-                    *dst = (s as u32 + (*dst as u32 * inv + 127) / 255) as u8;
-                }
-            }
+            blend_run(&mut row[x0 as usize * 4..x1 as usize * 4], src);
         }
     }
 
@@ -123,14 +113,54 @@ impl Canvas<'_> {
             b: 0.0,
             a: alpha,
         };
+        if alpha <= 0.0 {
+            return;
+        }
+        let full = premultiply(black, 1.0);
+        // Noir : seule l'opacité compte. Part du dessous gardée, sur 255,
+        // selon l'avancée dans le dégradé (opacité en k^2,5)
+        let keep: [u16; 256] = std::array::from_fn(|i| {
+            let k = i as f32 / 255.0;
+            255 - premultiply(black, k * k * k.sqrt())[3] as u16
+        });
+        let (left, right) = ((x - blur).floor() as i32, (x + w + blur).ceil() as i32);
+        let reach = r + blur;
         for py in (y - blur).floor() as i32..(y + h + blur).ceil() as i32 {
-            for px in (x - blur).floor() as i32..(x + w + blur).ceil() as i32 {
-                let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
-                let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
-                let dist = (dx * dx + dy * dy).sqrt() - r;
-                let k = (1.0 - (dist / blur).clamp(0.0, 1.0)).powf(2.5);
-                self.blend(px, py, black, k);
+            let dy = ((py as f32 + 0.5 - cy).abs() - hy).max(0.0);
+            if dy >= reach {
+                continue;
             }
+            // Seule la bande du dégradé est calculée pixel par pixel : dehors
+            // rien, dedans (sous la forme) un remplissage d'un bloc
+            let outer = hx + (reach * reach - dy * dy).sqrt();
+            let (l, rr) = (
+                ((cx - outer - 0.5).floor() as i32).max(left),
+                ((cx + outer - 0.5).ceil() as i32 + 1).min(right),
+            );
+            let (mut a, mut b) = (rr, rr);
+            if dy < r {
+                let half = hx + (r * r - dy * dy).sqrt();
+                a = ((cx - half - 0.5).ceil() as i32).max(l);
+                b = ((cx + half - 0.5).floor() as i32 + 1).clamp(a, rr);
+            }
+            if py < 0 || py as u32 >= self.height {
+                continue;
+            }
+            let row = py as usize * self.width as usize * 4;
+            for px in
+                (l.max(0)..a.min(self.width as i32)).chain(b.max(0)..rr.min(self.width as i32))
+            {
+                let dx = ((px as f32 + 0.5 - cx).abs() - hx).max(0.0);
+                let dist = (dx * dx + dy * dy).sqrt() - r;
+                let t = (1.0 - (dist / blur).clamp(0.0, 1.0)) * 255.0;
+                let keep = keep[t as usize];
+                let i = row + px as usize * 4;
+                for d in &mut self.buf[i..i + 4] {
+                    let x = *d as u16 * keep + 128;
+                    *d = ((x + (x >> 8)) >> 8) as u8;
+                }
+            }
+            self.fill_span(py, a, b, full);
         }
     }
 
@@ -310,13 +340,19 @@ impl Canvas<'_> {
 
     /// Recouvre tout le canevas d'une couleur translucide (voile sur un fond).
     pub fn tint(&mut self, c: Rgba) {
-        let src = premultiply(c, 1.0);
-        let inv = 1.0 - src[3] as f32 / 255.0;
-        for px in self.buf.as_chunks_mut::<4>().0 {
-            for (dst, s) in px.iter_mut().zip(src) {
-                *dst = (s as f32 + *dst as f32 * inv).round() as u8;
-            }
+        blend_run(self.buf, premultiply(c, 1.0));
+    }
+
+    /// Couleur prémultipliée `src`, à la couverture `cov` (0–255), posée sur le
+    /// pixel (x, y) : les glyphes, en entiers
+    pub fn blend_u8(&mut self, x: i32, y: i32, src: [u8; 4], cov: u8) {
+        if cov == 0 || x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height {
+            return;
         }
+        let i = ((y as u32 * self.width + x as u32) * 4) as usize;
+        let p = self.buf[i..i + 4].as_chunks_mut::<4>().0;
+        let src = mul8(u32::from_le_bytes(src), cov as u32);
+        p[0] = over(u32::from_le_bytes(p[0]), src).to_le_bytes();
     }
 
     /// Mélange « source par-dessus » d'un pixel avec une couverture 0.0–1.0.
@@ -325,11 +361,41 @@ impl Canvas<'_> {
             return;
         }
         let i = ((y as u32 * self.width + x as u32) * 4) as usize;
-        let src = premultiply(c, coverage);
-        let inv = 1.0 - src[3] as f32 / 255.0;
-        for (dst, s) in self.buf[i..i + 4].iter_mut().zip(src) {
-            *dst = (s as f32 + *dst as f32 * inv).round() as u8;
+        let src = u32::from_le_bytes(premultiply(c, coverage));
+        let p = self.buf[i..i + 4].as_chunks_mut::<4>().0;
+        p[0] = over(u32::from_le_bytes(p[0]), src).to_le_bytes();
+    }
+}
+
+/// Chaque octet de `v` (un pixel B, G, R, A) multiplié par `k` / 255, arrondi :
+/// deux canaux à la fois dans un entier 32 bits, sans division
+fn mul8(v: u32, k: u32) -> u32 {
+    let rb = (v & 0x00ff00ff) * k + 0x00800080;
+    let rb = ((rb + ((rb >> 8) & 0x00ff00ff)) >> 8) & 0x00ff00ff;
+    let ag = ((v >> 8) & 0x00ff00ff) * k + 0x00800080;
+    let ag = (ag + ((ag >> 8) & 0x00ff00ff)) & 0xff00ff00;
+    rb | ag
+}
+
+/// `src` par-dessus `dst` (pixels prémultipliés)
+fn over(dst: u32, src: u32) -> u32 {
+    mul8(dst, 255 - (src >> 24)).wrapping_add(src)
+}
+
+/// `src` (prémultipliée) posée sur chaque pixel de `run`, quatre fois plus vite
+/// que canal par canal : les grandes surfaces (fond des fenêtres, disques de
+/// la roue), en 4K
+fn blend_run(run: &mut [u8], src: [u8; 4]) {
+    // Opaque : une simple copie
+    if src[3] == 255 {
+        for p in run.as_chunks_mut::<4>().0 {
+            *p = src;
         }
+        return;
+    }
+    let s = u32::from_le_bytes(src);
+    for p in run.as_chunks_mut::<4>().0 {
+        *p = over(u32::from_le_bytes(*p), s).to_le_bytes();
     }
 }
 
@@ -477,10 +543,11 @@ impl Text {
         let (m, coverage) = (&g.0, &g.1);
         let left = (cx - m.width as f32 / 2.0).round() as i32;
         let top = (cy - m.height as f32 / 2.0).round() as i32;
+        let src = premultiply(color, 1.0);
         for row in 0..m.height {
             for col in 0..m.width {
-                let a = coverage[row * m.width + col] as f32 / 255.0;
-                canvas.blend(left + col as i32, top + row as i32, color, a);
+                let a = coverage[row * m.width + col];
+                canvas.blend_u8(left + col as i32, top + row as i32, src, a);
             }
         }
     }
@@ -533,6 +600,7 @@ impl Text {
         color: Rgba,
     ) {
         let mut pen = x;
+        let src = premultiply(color, 1.0);
         for ch in s.chars() {
             let g = self.glyph(ch, px);
             let (m, coverage) = (&g.0, &g.1);
@@ -540,8 +608,8 @@ impl Text {
             let top = (baseline - m.height as f32 - m.ymin as f32) as i32;
             for row in 0..m.height {
                 for col in 0..m.width {
-                    let a = coverage[row * m.width + col] as f32 / 255.0;
-                    canvas.blend(left + col as i32, top + row as i32, color, a);
+                    let a = coverage[row * m.width + col];
+                    canvas.blend_u8(left + col as i32, top + row as i32, src, a);
                 }
             }
             pen += m.advance_width;
