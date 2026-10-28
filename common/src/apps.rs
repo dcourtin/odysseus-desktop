@@ -82,8 +82,13 @@ pub fn parse(content: &str) -> Option<App> {
     let mut in_entry = false;
     // Actions annoncées (Actions=) et sections [Desktop Action …] : (clé, nom, nom traduit, exec, icône)
     let mut listed: Vec<String> = Vec::new();
-    let mut sections: Vec<(String, Option<String>, Option<String>, Option<String>, String)> =
-        Vec::new();
+    let mut sections: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = Vec::new();
     for line in content.lines() {
         let line = line.trim();
         if line.starts_with('[') {
@@ -254,15 +259,27 @@ pub fn for_window(app_id: &str, apps: &[App]) -> Option<usize> {
         .position(|a| a.id.to_lowercase() == key)
         .or_else(|| apps.iter().position(|a| a.wm_class.to_lowercase() == key))
         .or_else(|| apps.iter().position(|a| last(&a.id) == key))
+        .or_else(|| apps.iter().position(|a| command(a) == key))
+        // Suffixe ajouté par l'appli : « firefox-default » (Firefox et son
+        // profil) est Firefox
         .or_else(|| {
+            let (base, _) = key.rsplit_once('-')?;
             apps.iter().position(|a| {
-                a.exec
-                    .split_whitespace()
-                    .next()
-                    .and_then(|c| c.rsplit('/').next())
-                    .is_some_and(|c| c.to_lowercase() == key)
+                [a.id.to_lowercase(), a.wm_class.to_lowercase(), command(a)]
+                    .iter()
+                    .any(|c| !c.is_empty() && base == c)
             })
         })
+}
+
+/// Commande d'une appli, sans chemin ni arguments, en minuscules
+fn command(a: &App) -> String {
+    a.exec
+        .split_whitespace()
+        .next()
+        .and_then(|c| c.rsplit('/').next())
+        .unwrap_or_default()
+        .to_lowercase()
 }
 
 /// Score de correspondance (plus haut = meilleur), None si aucune.
@@ -307,4 +324,25 @@ pub fn score(query: &str, app: &App) -> Option<i32> {
         }
     }
     Some(100 - gaps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_suffix() {
+        let mut ff = parse(
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nStartupWMClass=firefox\n",
+        )
+        .unwrap();
+        ff.id = "firefox".into();
+        let mut term = parse("[Desktop Entry]\nType=Application\nName=Foot\nExec=foot\n").unwrap();
+        term.id = "foot".into();
+        let apps = [term, ff];
+        assert_eq!(for_window("firefox", &apps), Some(1));
+        assert_eq!(for_window("firefox-default", &apps), Some(1));
+        assert_eq!(for_window("foot", &apps), Some(0));
+        assert_eq!(for_window("gnome-terminal", &apps), None);
+    }
 }
