@@ -42,16 +42,18 @@ couleur de fond : elles changent avec le thème choisi dans Réglages > Apparenc
 De gauche à droite : les bureaux (clic, ou molette pour passer de l'un à l'autre),
 puis à droite :
 
-- **les icônes des applications** qui en ont une (clic : leur action, souvent
-  montrer ou cacher la fenêtre ; clic droit : leur menu) ;
 - **le témoin Partage**, quand l'écran est partagé : un clic arrête le partage ;
-- **l'Assistant** ;
-- **le moniteur système**, une jauge dont la couleur suit la charge ;
-- **le centre de contrôle** ;
-- **les mises à jour** : une flèche dans un cercle, quand il y en a à décider
-  (rouge : une faille de sécurité) ; un clic ouvre Réglages > Mises à jour ;
-- **la cloche** des notifications (un point : des notifications non vues) ;
+- **un point**, quand quelque chose demande votre attention (notifications non
+  vues, mises à jour à décider, une appli qui vous appelle ; rouge : une faille
+  de sécurité) : un clic ouvre la roue sur le statut ;
 - **la date et l'heure** (un clic ouvre le centre de notifications et le calendrier).
+
+Les notifications, les mises à jour, l'Assistant, le moniteur, le centre de
+contrôle et les icônes des applications sont dans la place **Statut** de la
+roue (voir plus bas). Réglages > Roue > « Icônes aussi dans la barre » les y
+remet : les icônes des applications (clic : leur action ; clic droit : leur
+menu), l'Assistant, le moniteur (une jauge dont la couleur suit la charge), le
+centre de contrôle, la flèche des mises à jour et la cloche.
 
 Pousser la souris dans le coin en haut à droite ouvre aussi le centre de notifications.
 
@@ -77,22 +79,41 @@ applis ouvertes qui n'en font pas partie, et la corbeille.
 ## La roue
 
 Huit raccourcis en cercle, qui s'ouvrent là où se trouve la souris : plus besoin
-d'aller jusqu'au Dock.
+d'aller jusqu'au Dock. Chacun porte son nom sous son icône.
 
 - **L'ouvrir** : Super+R, un clic du milieu sur le bureau, ou Super + clic du
   milieu n'importe où (au-dessus d'une fenêtre, le clic ne lui parvient pas).
 - **Choisir** : un clic sur une place, ou au clavier les chiffres 1 à 8
   (la place 1 est en haut, puis dans le sens des aiguilles d'une montre),
   les flèches et Entrée. Échap, un clic au centre ou à côté la ferme.
+- **La faire tourner** : la molette tourne la roue d'une place par cran (vers
+  le bas, dans le sens des aiguilles d'une montre), dossier ouvert compris ;
+  ce qui arrive sous la souris est choisi. Le temps de l'ouverture seulement :
+  la roue suivante repart de sa position d'origine, et les chiffres gardent
+  leurs places.
+- **Les anneaux** : passer la souris sur une place qui contient d'autres
+  choses ouvre un anneau autour de la roue, en éventail depuis elle ; et
+  ainsi de suite, jusqu'à trois niveaux. On glisse jusqu'à ce qu'on veut et on
+  clique (ou on relâche le clic du milieu). Au clavier, les chiffres et les
+  flèches vont à l'anneau le plus extérieur ; Échap referme un anneau, puis la
+  roue.
 - **Les dossiers** : une place peut tenir un dossier (par exemple « Artcraft »
-  avec Photocraft et Vectorcraft). Son icône montre en petit ce qu'il contient.
-  Passer la souris dessus ouvre un second anneau autour de la roue, avec ses
-  places : on glisse jusqu'à l'appli et on clique (ou on relâche le clic du
-  milieu). Au clavier, son chiffre l'ouvre, puis les chiffres et les flèches
-  choisissent dans le dossier ; Échap referme le dossier, puis la roue.
-- **Une appli déjà ouverte** (un point sous son icône) revient au premier plan ;
-  si sa fenêtre est déjà devant, c'est la suivante.
-- **Ce qu'on y met** (Réglages > Roue) : des applications, des actions
+  avec Photocraft et Vectorcraft). Son icône montre en petit ce qu'il contient ;
+  son anneau, ses places.
+- **Une appli déjà ouverte** (un point sous son icône) : un clic la ramène au
+  premier plan (si sa fenêtre est déjà devant, c'est la suivante) ; son anneau
+  liste ses fenêtres par leur titre, puis « Nouvelle fenêtre ». Dans un
+  dossier, c'est le troisième anneau : Odysseus, puis Fichiers, puis la
+  fenêtre voulue.
+- **Le statut** : une place à part, liserée d'accent, qui montre en petit les
+  notifications, les mises à jour et les panneaux. Son badge est le plus
+  urgent (rouge : sécurité ; un nombre : des notifications). Son anneau :
+  Notifications (le centre de notifications), Mises à jour (Réglages), Contrôle
+  (le centre de contrôle), Moniteur, Assistant, puis les icônes des
+  applications ; ce qui porte un badge passe devant. Une icône d'application :
+  un clic, son action ; son anneau, son menu. Le statut a toujours une place :
+  Réglages > Roue le déplace, on ne le retire pas (en bas par défaut).
+- **Ce qu'on y met** (Réglages > Roue) : le statut, des applications, des actions
   d'applications (comme « Nouvelle note » de Notes) et des entrées proposées par
   les applis. Les deux dernières portent un petit point d'accent. Une place vide
   ouvre Réglages > Roue. Sans réglage, la roue reprend les favoris du Dock.

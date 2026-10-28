@@ -3,49 +3,65 @@
 //!
 //! Huit places en cercle, choisies dans Réglages > Roue : applications (un
 //! point signale celles qui sont ouvertes ; on ramène alors leur fenêtre),
-//! actions d'applications, entrées proposées par les applis, dossiers. Un
-//! dossier ouvre un second anneau autour de la roue, à son survol ou à son
-//! choix. Clic sur une place, ou chiffres 1 à 8, flèches et Entrée ; Échap
-//! referme le dossier puis la roue, comme un clic au centre ou à côté. Une
-//! place vide ouvre Réglages > Roue.
+//! actions d'applications, entrées proposées par les applis, dossiers, et le
+//! statut (notifications, mises à jour, panneaux, icônes des applis).
+//!
+//! Des anneaux, jusqu'à trois : survoler une place qui a des enfants déploie
+//! l'anneau suivant autour de la roue, en éventail depuis elle. Un dossier y
+//! montre ses places, une appli ouverte ses fenêtres, le statut ses entrées,
+//! une icône d'appli son menu (voir `node`). Clic sur une place, ou chiffres
+//! 1 à 8, flèches et Entrée (dans l'anneau le plus extérieur ouvert) ; Échap
+//! referme un anneau, puis la roue, comme un clic au centre ou à côté. La
+//! molette fait tourner la roue. Une place vide ouvre Réglages > Roue.
 //!
 //! Animations, toutes pilotées par le temps et cadencées par le compositeur
 //! (rappels d'image) : le disque s'ouvre et les icônes sortent du centre l'une
-//! après l'autre ; au survol, le halo grandit et l'icône s'avance ; l'anneau
-//! d'un dossier se déploie, ses icônes glissant de la place du dossier à la
-//! leur ; un choix lance aussitôt, puis la roue se replie en fondu.
+//! après l'autre ; au survol, le halo grandit et l'icône s'avance ; un anneau
+//! se déploie, ses icônes glissant de la place qui l'ouvre à la leur ; un
+//! choix lance aussitôt, puis la roue se replie en fondu.
 //!
 //! Arguments : `--x X --y Y` (position du pointeur sur l'écran, donnée par le
 //! compositeur) ; sans eux, la roue s'ouvre là où le pointeur entre.
+//! `--statut` : ouverte sur l'anneau du statut (point d'attention de la barre).
 //! Sous-commandes pour les applis : voir `cli`.
 
 mod cli;
+mod node;
 
 use std::{
     os::unix::process::CommandExt,
     path::PathBuf,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
 use common::{
-    apps::{self, App},
+    apps,
     draw::{Canvas, Image, Text},
-    roue::{self, Item, SLOTS, Slot},
+    roue::SLOTS,
+    sni,
     theme::{self, Rgba, icon},
 };
+use node::{Act, Look, Node};
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm,
+    delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::EventLoop,
+        calloop::{
+            EventLoop,
+            channel::{self, Event},
+        },
         calloop_wayland_source::WaylandSource,
         client::{
-            Connection, QueueHandle,
+            Connection, QueueHandle, delegate_noop,
             globals::registry_queue_init,
-            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+            protocol::{
+                wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_subsurface, wl_surface,
+            },
         },
+        protocols::wp::viewporter::client::{wp_viewport, wp_viewporter},
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -62,18 +78,23 @@ use smithay_client_toolkit::{
         },
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
+    subcompositor::SubcompositorState,
 };
 
 // Géométrie, en pixels logiques
-const R_DISC: f32 = 148.0;
-const R_ITEMS: f32 = 100.0;
 const R_HOVER: f32 = 34.0;
 const ICON: f32 = 40.0;
 const R_CENTER: f32 = 36.0;
-/// Second anneau (dossier ouvert) : rayon des icônes et bord extérieur
-const R_RING_ITEMS: f32 = 196.0;
-const R_RING: f32 = 242.0;
-/// Écart minimal entre la roue et le bord de l'écran
+/// Par niveau (la roue, puis les anneaux) : rayon des icônes et bord extérieur
+const ITEMS: [f32; LEVELS] = [100.0, 196.0, 290.0];
+const OUTER: [f32; LEVELS] = [148.0, 242.0, 336.0];
+/// Écart voulu entre deux places d'un anneau (degrés), et nombre au plus
+const STEP: [f32; LEVELS] = [45.0, 45.0, 30.0];
+const MAX_PLACES: [usize; LEVELS] = [SLOTS, 12, 18];
+/// Niveaux : la roue et deux anneaux
+const LEVELS: usize = 3;
+/// Écart minimal entre la roue et le bord de l'écran (le premier anneau y
+/// tient toujours ; le second peut déborder)
 const EDGE: f32 = 16.0;
 /// Apparition : la roue grandit un peu en s'ouvrant
 const APPEAR: Duration = Duration::from_millis(180);
@@ -85,36 +106,42 @@ const CLOSE: Duration = Duration::from_millis(140);
 /// Constantes de temps des suivis (survol, anneau), en secondes
 const HOVER_TAU: f32 = 0.05;
 const RING_TAU: f32 = 0.065;
-/// Fondu de l'étiquette quand elle change
-const LABEL_FADE: Duration = Duration::from_millis(90);
+/// Noms sous les icônes : taille, et largeur au plus (l'écart entre deux places)
+const NAME_PX: f32 = 10.5;
+const NAME_W: [f32; LEVELS] = [74.0, 116.0, 116.0];
+/// Rotation de la roue à la molette
+const SPIN_TAU: f32 = 0.07;
+/// Défilement continu (pavé tactile) : pixels par cran de rotation
+const SCROLL_STEP: f64 = 30.0;
 /// L'icône survolée s'avance vers l'extérieur
 const LIFT: f32 = 5.0;
+/// Demi-côté de la sous-surface de la roue : le dernier anneau y tient
+const HALF: f32 = OUTER[LEVELS - 1] + 8.0;
 /// Éclaircissement d'un niveau de la roue par rapport à celui qui l'entoure
 const LIGHTER: f32 = 0.10;
+/// Après un clic sur une icône d'appli, le temps que le fil D-Bus le transmette
+const TRAY_GRACE: Duration = Duration::from_millis(700);
 const BTN_LEFT: u32 = 0x110;
 const BTN_MIDDLE: u32 = 0x112;
 
 const ICON_COLORS: [u32; 6] = [0x8aadf4, 0xc6a0f6, 0xa6e3a1, 0xf9e2af, 0xf5a3b8, 0x8bd5ca];
-
-/// Une place de la roue
-struct Place {
-    item: Option<Item>,
-    /// Fenêtres de l'appli (identifiant, active) ; vide : pas ouverte
-    windows: Vec<(u64, bool)>,
-    icon: Option<Option<Image>>,
-    /// Même icône, à la taille des aperçus d'un dossier
-    mini: Option<Option<Image>>,
-    /// Dossier : son nom et ses places remplies (une place vide s'il n'en a pas)
-    folder: Option<(String, Vec<Place>)>,
-}
+const RED: u32 = 0xe5484d;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Target {
     Center,
-    Slot(usize),
-    /// Place du dossier ouvert
-    Inner(usize),
+    /// Niveau (0 : la roue) et place dans son anneau
+    Item(usize, usize),
     Outside,
+}
+
+/// Un anneau autour de la roue : la place qui l'a ouvert (chemin depuis la
+/// roue, gardé pendant qu'il se replie), son déploiement et le survol de ses places
+#[derive(Default)]
+struct Ring {
+    shown: Option<Vec<usize>>,
+    t: f32,
+    glow: Vec<f32>,
 }
 
 struct Roue {
@@ -123,18 +150,27 @@ struct Roue {
     seat_state: SeatState,
     shm: Shm,
     pool: SlotPool,
+    /// Plein écran (clics à côté, voile) ; le voile y est un seul pixel étiré
+    /// par le viewport, la roue une sous-surface à sa taille : en 4K, tout
+    /// redessiner à chaque image ne tiendrait pas le rythme
     layer: LayerSurface,
+    wheel: wl_surface::WlSurface,
+    wheel_sub: wl_subsurface::WlSubsurface,
+    viewport: Option<wp_viewport::WpViewport>,
+    /// Opacité du voile posé (et taille de l'écran) : on ne le repose qu'au changement
+    veil: Option<(f32, u32, u32)>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
     regular: Text,
     bold: Text,
     icons: Text,
-    places: Vec<Place>,
+    /// Les huit places, et ce que leurs anneaux déploient
+    nodes: Vec<Node>,
+    /// Places dont l'anneau est ouvert, de la roue vers l'extérieur
+    path: Vec<usize>,
     /// Centre voulu (position du pointeur), avant mise à l'écart des bords
     anchor: Option<(f32, f32)>,
     hover: Option<Target>,
-    /// Dossier ouvert (place de la roue)
-    open: Option<usize>,
     /// Le pointeur a quitté le centre depuis l'ouverture (geste « appuyer,
     /// glisser, relâcher » du clic du milieu)
     travelled: bool,
@@ -148,18 +184,27 @@ struct Roue {
     /// Rappel d'image demandé au compositeur, pas encore reçu
     frame_pending: bool,
     last_frame: Instant,
-    /// Survol des places de la roue, du dossier ouvert et du centre (0 → 1)
+    /// Survol des places de la roue et du centre (0 → 1)
     glow: [f32; SLOTS],
-    inner_glow: [f32; SLOTS],
     center_glow: f32,
-    /// Déploiement de l'anneau (0 → 1) et dossier qu'il montre (gardé pendant
-    /// qu'il se replie)
-    ring_t: f32,
-    ring_folder: Option<usize>,
-    /// Étiquette affichée et depuis quand
-    label: Option<(String, Instant)>,
+    /// Les anneaux, du premier au dernier
+    rings: [Ring; LEVELS - 1],
     /// Repli en cours depuis…
     closing: Option<Instant>,
+    /// Rotation de la roue (degrés, sens des aiguilles d'une montre) : affichée,
+    /// et visée par la molette (un cran, une place)
+    spin: f32,
+    spin_target: f32,
+    /// Défilement continu pas encore converti en crans
+    scroll: f64,
+    /// Dernière position du pointeur
+    pointer_at: Option<(f32, f32)>,
+    /// Icônes des applis : clics et demandes de menu au fil D-Bus
+    tray: mpsc::Sender<sni::Command>,
+    /// Ce qui attend que la roue soit partie : les panneaux (Notifications,
+    /// Contrôle, Moniteur…) se ferment quand ils perdent le clavier, et la roue
+    /// le garde jusqu'à la fin de son fondu ; un menu d'icône d'appli aussi
+    after: Option<Act>,
 }
 
 fn pid_file() -> Option<PathBuf> {
@@ -199,64 +244,49 @@ fn arg_f32(args: &[String], flag: &str) -> Option<f32> {
         .and_then(|v| v.parse().ok())
 }
 
-/// Fenêtres ouvertes, d'après le compositeur : (identifiant, app_id, active)
-fn windows() -> Vec<(u64, String, bool)> {
-    let Ok(json) = common::ipc::request(common::ipc::GET_WINDOWS, "") else {
-        return Vec::new();
-    };
-    let Ok(serde_json::Value::Array(list)) = serde_json::from_str(&json) else {
-        return Vec::new();
-    };
-    list.iter()
-        .map(|w| {
-            (
-                w["id"].as_u64().unwrap_or(0),
-                w["app_id"].as_str().unwrap_or_default().to_string(),
-                w["focused"].as_bool().unwrap_or(false),
-            )
-        })
-        .collect()
+/// La place au bout d'un chemin (indices depuis la roue)
+fn node_at<'a>(nodes: &'a [Node], path: &[usize]) -> Option<&'a Node> {
+    let (first, rest) = path.split_first()?;
+    rest.iter()
+        .try_fold(nodes.get(*first)?, |n, &j| n.children.get(j))
 }
 
-fn places(apps: &[App]) -> Vec<Place> {
-    let catalog = roue::catalog(apps);
-    let wins = windows();
-    let place = |slot: Option<&Slot>| {
-        let item = slot.and_then(|s| catalog.iter().find(|it| &it.slot == s).cloned());
-        let windows = item
-            .as_ref()
-            .and_then(|it| it.app)
-            .map(|ai| {
-                wins.iter()
-                    .filter(|(_, app_id, _)| apps::for_window(app_id, apps) == Some(ai))
-                    .map(|(id, _, focused)| (*id, *focused))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Place {
-            item,
-            windows,
-            icon: None,
-            mini: None,
-            folder: None,
+fn node_at_mut<'a>(nodes: &'a mut [Node], path: &[usize]) -> Option<&'a mut Node> {
+    let (first, rest) = path.split_first()?;
+    rest.iter()
+        .try_fold(nodes.get_mut(*first)?, |n, &j| n.children.get_mut(j))
+}
+
+/// Les places de l'anneau ouvert par le chemin `path` (la roue s'il est vide)
+fn children<'a>(nodes: &'a [Node], path: &[usize]) -> &'a [Node] {
+    if path.is_empty() {
+        return nodes;
+    }
+    node_at(nodes, path).map_or(&[], |n| &n.children)
+}
+
+/// Éventail de l'anneau ouvert par `path` : angle de la place qui l'ouvre
+/// (degrés depuis le haut, sans la rotation), écart entre places, nombre
+fn fan(nodes: &[Node], path: &[usize]) -> (f32, f32, usize) {
+    let level = path.len();
+    let n = children(nodes, path)
+        .len()
+        .min(MAX_PLACES[level.min(LEVELS - 1)]);
+    let step = STEP[level.min(LEVELS - 1)].min(360.0 / n.max(1) as f32);
+    let base = match path.split_last() {
+        None => 0.0,
+        Some((&j, [])) => j as f32 * 360.0 / SLOTS as f32,
+        Some((&j, parent)) => {
+            let (b, st, m) = fan(nodes, parent);
+            b + (j as f32 - (m as f32 - 1.0) / 2.0) * st
         }
     };
-    roue::load(apps)
-        .iter()
-        .map(|slot| match slot.as_ref().and_then(Slot::folder) {
-            Some(f) => {
-                let mut inner: Vec<Place> = f.filled().map(|s| place(Some(s))).collect();
-                if inner.is_empty() {
-                    inner.push(place(None));
-                }
-                Place {
-                    folder: Some((f.name.clone(), inner)),
-                    ..place(None)
-                }
-            }
-            None => place(slot.as_ref()),
-        })
-        .collect()
+    (base, step, n)
+}
+
+/// Une place a-t-elle un anneau à elle (au niveau `level`) ?
+fn opens(node: &Node, level: usize) -> bool {
+    level + 1 < LEVELS && !node.children.is_empty()
 }
 
 fn main() {
@@ -290,6 +320,17 @@ fn main() {
     layer.set_exclusive_zone(-1);
     layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
     layer.commit();
+    let subcompositor = SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh)
+        .expect("wl_subcompositor indisponible");
+    let (wheel_sub, wheel) = subcompositor.create_subsurface(layer.wl_surface().clone(), &qh);
+    // Les clics traversent la roue jusqu'à la couche, qui fait les calculs
+    if let Ok(empty) = Region::new(&compositor) {
+        wheel.set_input_region(Some(empty.wl_region()));
+    }
+    let viewport = globals
+        .bind::<wp_viewporter::WpViewporter, _, _>(&qh, 1..=1, ())
+        .ok()
+        .map(|v| v.get_viewport(layer.wl_surface(), &qh, ()));
 
     let mut event_loop: EventLoop<'static, Roue> =
         EventLoop::try_new().expect("boucle d'événements");
@@ -297,8 +338,37 @@ fn main() {
         .insert(event_loop.handle())
         .expect("source Wayland");
 
+    // Icônes des applis (place Statut) : lues dans un fil, elles arrivent
+    // quand elles sont prêtes ; la roue ne tient jamais le registre
+    let (tray_tx, tray_rx) = channel::channel::<sni::Update>();
+    let tray = sni::spawn(
+        Box::new(move |u| {
+            let _ = tray_tx.send(u);
+        }),
+        false,
+    );
+    event_loop
+        .handle()
+        .insert_source(tray_rx, |event, _, roue| match event {
+            Event::Msg(sni::Update::Items(items)) => roue.tray_items(items),
+            Event::Msg(sni::Update::Menu { key, entries }) => roue.tray_menu(&key, entries),
+            Event::Closed => {}
+        })
+        .expect("source des icônes des applis");
+
     let apps = apps::load();
     let anchor = arg_f32(&args, "--x").zip(arg_f32(&args, "--y"));
+    let nodes = node::build(&apps);
+    // Ouverte depuis le point d'attention de la barre : sur l'anneau du statut
+    let path = if args.iter().any(|a| a == "--statut") {
+        nodes
+            .iter()
+            .position(|n| matches!(n.look, Look::Status))
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut roue = Roue {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -306,15 +376,19 @@ fn main() {
         pool: SlotPool::new(1024 * 1024 * 8, &shm).expect("pool shm"),
         shm,
         layer,
+        wheel,
+        wheel_sub,
+        viewport,
+        veil: None,
         keyboard: None,
         pointer: None,
         regular: Text::load(theme::FONT_REGULAR).expect("police"),
         bold: Text::load(theme::FONT_BOLD).expect("police"),
         icons: Text::load(theme::FONT_ICONS).expect("police d'icônes"),
-        places: places(&apps),
+        nodes,
+        path,
         anchor,
         hover: None,
-        open: None,
         travelled: false,
         width: 0,
         height: 0,
@@ -326,12 +400,15 @@ fn main() {
         frame_pending: false,
         last_frame: Instant::now(),
         glow: [0.0; SLOTS],
-        inner_glow: [0.0; SLOTS],
         center_glow: 0.0,
-        ring_t: 0.0,
-        ring_folder: None,
-        label: None,
+        rings: Default::default(),
         closing: None,
+        spin: 0.0,
+        spin_target: 0.0,
+        scroll: 0.0,
+        pointer_at: None,
+        tray,
+        after: None,
     };
 
     while !roue.exit {
@@ -343,33 +420,47 @@ fn main() {
     if let Some(path) = pid_file() {
         let _ = std::fs::remove_file(path);
     }
+    // Ce qui attendait que la roue soit partie (connexion fermée : elle
+    // n'a plus le clavier) ; un clic sur une icône d'appli part par le fil
+    // D-Bus, qui a le temps de le transmettre
+    let Some(act) = roue.after.take() else {
+        return;
+    };
+    let tray = roue.tray.clone();
+    drop(roue);
+    drop(event_loop);
+    match act {
+        Act::Settings => Roue::sibling("odysseus-reglages", &["roue"]),
+        Act::Sibling(name, args) => Roue::sibling(name, args),
+        Act::Tray(key, x, y) => {
+            let _ = tray.send(sni::Command::Activate { key, x, y });
+            std::thread::sleep(TRAY_GRACE);
+        }
+        Act::TrayMenu(key, id) => {
+            let _ = tray.send(sni::Command::MenuEvent { key, id });
+            std::thread::sleep(TRAY_GRACE);
+        }
+        _ => {}
+    }
 }
 
 impl Roue {
-    /// Centre de la roue, écarté des bords de l'écran
+    /// Centre de la roue, écarté des bords de l'écran (le premier anneau y tient)
     fn center(&self) -> Option<(f32, f32)> {
         let (x, y) = self.anchor?;
         let (w, h) = (self.width as f32, self.height as f32);
-        // Place pour le second anneau s'il y a un dossier
-        let outer = if self.places.iter().any(|p| p.folder.is_some()) {
-            R_RING
-        } else {
-            R_DISC
-        };
-        let m = outer + EDGE;
-        // Place pour le nom sous la roue
-        let below = 48.0;
+        let any_ring = self.nodes.iter().any(|n| opens(n, 0));
+        let m = if any_ring { OUTER[1] } else { OUTER[0] } + EDGE;
         Some((
             x.clamp(m.min(w / 2.0), (w - m).max(w / 2.0)),
-            y.clamp(m.min(h / 2.0), (h - m - below).max(h / 2.0)),
+            y.clamp(m.min(h / 2.0), (h - m).max(h / 2.0)),
         ))
     }
 
-    /// Angle (degrés depuis le haut) et nombre des places du dossier ouvert
-    fn ring(&self) -> Option<(f32, usize)> {
-        let i = self.open?;
-        let n = self.places.get(i)?.folder.as_ref()?.1.len();
-        Some((i as f32 * 360.0 / SLOTS as f32, n))
+    fn node(&self, level: usize, j: usize) -> Option<&Node> {
+        let mut p = self.path[..level.min(self.path.len())].to_vec();
+        p.push(j);
+        node_at(&self.nodes, &p)
     }
 
     fn target(&self, x: f32, y: f32) -> Target {
@@ -381,24 +472,28 @@ impl Roue {
         if d <= R_CENTER {
             return Target::Center;
         }
-        // Angle depuis le haut, sens des aiguilles d'une montre
-        let a = (dy.atan2(dx).to_degrees() + 90.0).rem_euclid(360.0);
-        let step = 360.0 / SLOTS as f32;
-        if d > R_DISC {
-            // Dans le second anneau : la place du dossier la plus proche
-            let Some((base, n)) = self.ring().filter(|_| d <= R_RING) else {
-                return Target::Outside;
-            };
+        // Angle depuis le haut, sens des aiguilles d'une montre, sans la rotation
+        let a = (dy.atan2(dx).to_degrees() + 90.0 - self.spin_target).rem_euclid(360.0);
+        if d <= OUTER[0] {
+            let step = 360.0 / SLOTS as f32;
+            return Target::Item(0, ((a + step / 2.0) / step) as usize % SLOTS);
+        }
+        // Dans un anneau ouvert : la place de son éventail la plus proche
+        let open = self.path.len().min(LEVELS - 1);
+        for (level, &outer) in OUTER.iter().enumerate().take(open + 1).skip(1) {
+            if d > outer {
+                continue;
+            }
+            let (base, step, n) = fan(&self.nodes, &self.path[..level]);
             let first = base - (n as f32 - 1.0) / 2.0 * step;
-            let off = (a - first + step / 2.0).rem_euclid(360.0);
-            let j = (off / step) as usize;
+            let j = ((a - first + step / 2.0).rem_euclid(360.0) / step) as usize;
             return if j < n {
-                Target::Inner(j)
+                Target::Item(level, j)
             } else {
                 Target::Outside
             };
         }
-        Target::Slot(((a + step / 2.0) / step) as usize % SLOTS)
+        Target::Outside
     }
 
     fn spawn(command: &str) {
@@ -425,15 +520,46 @@ impl Roue {
         }
     }
 
-    /// Choix d'une place de la roue : un dossier s'ouvre, le reste se lance
-    fn activate(&mut self, i: usize) {
-        if self.places.get(i).is_some_and(|p| p.folder.is_some()) {
-            self.open = Some(i);
-            self.hover = Some(Target::Inner(0));
-            return self.draw();
-        }
-        if let Some(place) = self.places.get(i) {
-            Self::launch(place);
+    /// Choix d'une place : un dossier (ou le statut) ouvre son anneau, le reste
+    /// agit, puis la roue se replie
+    fn activate(&mut self, level: usize, j: usize) {
+        let Some(node) = self.node(level, j) else {
+            return;
+        };
+        let (act, has_ring) = (node.act.clone(), opens(node, level));
+        match act {
+            Act::Open if has_ring => {
+                self.path.truncate(level);
+                self.path.push(j);
+                self.hover = Some(Target::Item(level + 1, 0));
+                return self.draw();
+            }
+            Act::Open | Act::Nothing => return,
+            Act::Run(command) => Self::spawn(&command),
+            Act::App { command, windows } => {
+                if windows.is_empty() {
+                    Self::spawn(&command);
+                } else {
+                    // Ramener sa fenêtre : la suivante, si elle est déjà devant
+                    let next = windows
+                        .iter()
+                        .position(|w| w.1)
+                        .map(|f| (f + 1) % windows.len())
+                        .unwrap_or(0);
+                    let (id, focused) = windows[next];
+                    if !focused {
+                        let _ = common::ipc::command(&format!("focus {id}"));
+                    }
+                }
+            }
+            Act::Focus(id) => {
+                let _ = common::ipc::command(&format!("focus {id}"));
+            }
+            Act::Settings | Act::Sibling(..) | Act::TrayMenu(..) => self.after = Some(act),
+            Act::Tray(key, ..) => {
+                let (x, y) = self.pointer_at.unwrap_or_default();
+                self.after = Some(Act::Tray(key, x as i32, y as i32));
+            }
         }
         self.begin_close();
     }
@@ -446,58 +572,92 @@ impl Roue {
         }
     }
 
-    /// Choix d'une place du dossier ouvert
-    fn activate_inner(&mut self, j: usize) {
-        let place = self
-            .open
-            .and_then(|i| self.places.get(i))
-            .and_then(|p| p.folder.as_ref())
-            .and_then(|f| f.1.get(j));
-        if let Some(place) = place {
-            Self::launch(place);
-            self.begin_close();
+    /// Survol (souris ou clavier) : une place qui a un anneau l'ouvre (à la
+    /// souris ; au clavier, seuls les dossiers et le statut), une autre referme
+    /// les anneaux au-delà de la sienne
+    fn set_hover(&mut self, t: Option<Target>, mouse: bool) {
+        let mut path = self.path.clone();
+        if let Some(Target::Item(level, j)) = t
+            && let Some(node) = self.node(level, j)
+        {
+            path.truncate(level);
+            let wanted = mouse || matches!(node.act, Act::Open);
+            if opens(node, level) && wanted {
+                path.push(j);
+            }
+            // Icône d'appli : son menu se lit maintenant, l'anneau s'ouvrira à son arrivée
+            if let Some(key) = node.menu_key.clone().filter(|_| node.children.is_empty()) {
+                let _ = self.tray.send(sni::Command::Menu(key));
+            }
+        }
+        if t != self.hover || path != self.path {
+            self.hover = t;
+            self.path = path;
+            self.draw();
         }
     }
 
-    fn launch(place: &Place) {
-        let Some(item) = place.item.as_ref() else {
-            // Place vide : la remplir dans Réglages
-            return Self::sibling("odysseus-reglages", &["roue"]);
-        };
-        // Appli ouverte : ramener sa fenêtre (la suivante, si elle est déjà active)
-        if !place.windows.is_empty() {
-            let next = place
-                .windows
-                .iter()
-                .position(|w| w.1)
-                .map(|f| (f + 1) % place.windows.len())
-                .unwrap_or(0);
-            let (id, focused) = place.windows[next];
-            if !focused {
-                let _ = common::ipc::command(&format!("focus {id}"));
-            }
+    /// Molette : la roue tourne d'une place par cran ; ce qui arrive sous le
+    /// pointeur est survolé tout de suite (un anneau s'y ouvre)
+    fn spin_by(&mut self, steps: i32) {
+        if steps == 0 {
             return;
         }
-        Self::spawn(&item.command);
+        self.spin_target += steps as f32 * 360.0 / SLOTS as f32;
+        let hover = self
+            .pointer_at
+            .map(|(x, y)| self.target(x, y))
+            .filter(|t| *t != Target::Outside);
+        self.set_hover(hover, true);
+        self.draw();
     }
 
-    fn set_hover(&mut self, t: Option<Target>) {
-        // Survoler un dossier l'ouvre, survoler une autre place le referme
-        let open = match t {
-            Some(Target::Slot(i)) => self.places[i].folder.is_some().then_some(i),
-            _ => self.open,
-        };
-        if t != self.hover || open != self.open {
-            self.hover = t;
-            self.open = open;
+    /// Referme l'anneau le plus extérieur ; la place qui l'ouvrait reste survolée
+    fn close_ring(&mut self) {
+        if let Some(j) = self.path.pop() {
+            self.hover = Some(Target::Item(self.path.len(), j));
             self.draw();
         }
     }
 
-    fn close_folder(&mut self) {
-        if let Some(i) = self.open.take() {
-            self.hover = Some(Target::Slot(i));
+    /// Icônes des applis lues (ou changées) : dans l'anneau du statut
+    fn tray_items(&mut self, items: Vec<sni::Item>) {
+        if let Some(status) = self
+            .nodes
+            .iter_mut()
+            .find(|n| matches!(n.look, Look::Status))
+        {
+            node::set_tray(status, items);
+            // Un anneau ouvert au-delà de ce qui existe encore se referme
+            while !self.path.is_empty() && node_at(&self.nodes, &self.path).is_none() {
+                self.path.pop();
+            }
             self.draw();
+        }
+    }
+
+    /// Menu d'une icône d'appli arrivé : il devient son anneau, ouvert si elle
+    /// est toujours survolée
+    fn tray_menu(&mut self, key: &str, entries: Vec<sni::MenuEntry>) {
+        let Some(status) = self
+            .nodes
+            .iter_mut()
+            .find(|n| matches!(n.look, Look::Status))
+        else {
+            return;
+        };
+        let Some(item) = status
+            .children
+            .iter_mut()
+            .find(|c| c.menu_key.as_deref() == Some(key))
+        else {
+            return;
+        };
+        item.children = node::menu(key, entries);
+        if let Some(Target::Item(level, j)) = self.hover
+            && self.node(level, j).and_then(|n| n.menu_key.as_deref()) == Some(key)
+        {
+            self.set_hover(self.hover, true);
         }
     }
 
@@ -516,59 +676,37 @@ impl Roue {
                 .contains(&k)
                 .then(|| (k - Keysym::KP_1.raw()) as usize)
         };
-        // Dossier ouvert : les touches vont à ses places
-        if let Some((_, n)) = self.ring() {
-            let current = match self.hover {
-                Some(Target::Inner(j)) => Some(j),
-                _ => None,
-            };
-            if let Some(j) = digit {
-                return self.activate_inner(j);
-            }
-            match event.keysym {
-                Keysym::Escape | Keysym::BackSpace => self.close_folder(),
-                Keysym::Return | Keysym::KP_Enter | Keysym::space => match current {
-                    Some(j) => self.activate_inner(j),
-                    None => self.close_folder(),
-                },
-                Keysym::Right | Keysym::Down | Keysym::Tab => {
-                    let j = current.map_or(0, |j| (j + 1) % n);
-                    self.set_hover(Some(Target::Inner(j)));
-                }
-                Keysym::Left | Keysym::Up | Keysym::ISO_Left_Tab => {
-                    let j = current.map_or(n - 1, |j| (j + n - 1) % n);
-                    self.set_hover(Some(Target::Inner(j)));
-                }
-                _ => {}
-            }
-            return;
-        }
-        if let Some(i) = digit {
-            return self.activate(i);
+        // Les touches vont à l'anneau le plus extérieur ouvert
+        let level = self.path.len();
+        let n = fan(&self.nodes, &self.path).2;
+        if let Some(j) = digit.filter(|&j| j < n) {
+            return self.activate(level, j);
         }
         let current = match self.hover {
-            Some(Target::Slot(i)) => Some(i),
+            Some(Target::Item(l, j)) if l == level => Some(j),
             _ => None,
         };
         match event.keysym {
+            Keysym::Escape | Keysym::BackSpace if level > 0 => self.close_ring(),
             Keysym::Escape => self.begin_close(),
             Keysym::Return | Keysym::KP_Enter | Keysym::space => match current {
-                Some(i) => self.activate(i),
+                Some(j) => self.activate(level, j),
+                None if level > 0 => self.close_ring(),
                 None => self.begin_close(),
             },
-            Keysym::Right | Keysym::Down | Keysym::Tab => {
-                let i = current.map_or(0, |i| (i + 1) % SLOTS);
-                self.set_hover(Some(Target::Slot(i)));
+            Keysym::Right | Keysym::Down | Keysym::Tab if n > 0 => {
+                let j = current.map_or(0, |j| (j + 1) % n);
+                self.set_hover(Some(Target::Item(level, j)), false);
             }
-            Keysym::Left | Keysym::Up | Keysym::ISO_Left_Tab => {
-                let i = current.map_or(SLOTS - 1, |i| (i + SLOTS - 1) % SLOTS);
-                self.set_hover(Some(Target::Slot(i)));
+            Keysym::Left | Keysym::Up | Keysym::ISO_Left_Tab if n > 0 => {
+                let j = current.map_or(n - 1, |j| (j + n - 1) % n);
+                self.set_hover(Some(Target::Item(level, j)), false);
             }
             _ => {}
         }
     }
 
-    /// Avance les suivis (survol, anneau) selon le temps écoulé ; vrai tant
+    /// Avance les suivis (survol, anneaux) selon le temps écoulé ; vrai tant
     /// qu'une animation est en cours
     fn step(&mut self) -> bool {
         let now = Instant::now();
@@ -584,29 +722,81 @@ impl Roue {
             }
         };
         for i in 0..SLOTS {
-            let on = self.hover == Some(Target::Slot(i)) || self.open == Some(i);
+            let on = self.hover == Some(Target::Item(0, i)) || self.path.first() == Some(&i);
             follow(&mut self.glow[i], on as u8 as f32, HOVER_TAU);
-            let on = self.hover == Some(Target::Inner(i));
-            follow(&mut self.inner_glow[i], on as u8 as f32, HOVER_TAU);
         }
         let on = self.hover == Some(Target::Center);
         follow(&mut self.center_glow, on as u8 as f32, HOVER_TAU);
-        // Anneau : un autre dossier ne se déploie qu'une fois le précédent replié
-        let target = (self.open.is_some() && self.ring_folder == self.open) as u8 as f32;
-        follow(&mut self.ring_t, target, RING_TAU);
-        if self.ring_t <= 0.0 && self.ring_folder != self.open {
-            self.ring_folder = self.open;
-            self.inner_glow = [0.0; SLOTS];
-            // Le suivant reste à déployer : l'animation continue (sinon il
-            // attendrait le prochain mouvement de la souris)
-            moving |= self.open.is_some();
+        // Rotation : suivie en fractions de tour, pour l'arrêt du suivi
+        let mut turn = self.spin / 360.0;
+        follow(&mut turn, self.spin_target / 360.0, SPIN_TAU);
+        self.spin = turn * 360.0;
+        // Anneaux : un autre ne se déploie qu'une fois le précédent replié, et
+        // un anneau seulement quand celui d'en dessous est là
+        let mut below_ready = true;
+        let mut swapped = false;
+        for (k, ring) in self.rings.iter_mut().enumerate() {
+            let level = k + 1;
+            let wanted = (self.path.len() >= level).then(|| self.path[..level].to_vec());
+            let here = ring.shown.is_some() && ring.shown == wanted && below_ready;
+            follow(&mut ring.t, here as u8 as f32, RING_TAU);
+            if ring.t <= 0.0 && ring.shown != wanted && below_ready {
+                ring.shown = wanted.clone();
+                ring.glow.clear();
+                // Le suivant reste à déployer : l'animation continue (sinon il
+                // attendrait le prochain mouvement de la souris)
+                swapped |= ring.shown.is_some();
+            }
+            let n = ring.shown.as_ref().map_or(0, |p| fan(&self.nodes, p).2);
+            ring.glow.resize(n, 0.0);
+            for (j, g) in ring.glow.iter_mut().enumerate() {
+                let on = ring.shown.as_deref() == Some(&self.path[..level.min(self.path.len())])
+                    && (self.hover == Some(Target::Item(level, j))
+                        || self.path.get(level) == Some(&j));
+                follow(g, on as u8 as f32, HOVER_TAU);
+            }
+            below_ready = ring.t > 0.5 && ring.shown == wanted;
         }
         let opening = self.opened.elapsed() < APPEAR.max(STAGGER * SLOTS as u32 + POP);
-        let label = self
-            .label
-            .as_ref()
-            .is_some_and(|(_, t)| t.elapsed() < LABEL_FADE);
-        moving || opening || label || self.closing.is_some()
+        moving || swapped || opening || self.closing.is_some()
+    }
+
+    /// Pose le voile s'il a changé : un pixel étiré à tout l'écran, ou à
+    /// défaut de viewport un tampon plein écran
+    fn set_veil(&mut self, alpha: f32) {
+        let state = (alpha, self.width, self.height);
+        if self.veil == Some(state) {
+            return;
+        }
+        let s = self.scale.max(1) as u32;
+        let (w, h) = match self.viewport {
+            Some(_) => (1, 1),
+            None => (self.width * s, self.height * s),
+        };
+        let Ok((buffer, data)) =
+            self.pool
+                .create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
+        else {
+            return;
+        };
+        Canvas {
+            buf: data,
+            width: w,
+            height: h,
+        }
+        .fill(Rgba::hex(0x000000, alpha));
+        let surface = self.layer.wl_surface();
+        match &self.viewport {
+            Some(v) => {
+                surface.set_buffer_scale(1);
+                v.set_destination(self.width as i32, self.height as i32);
+            }
+            None => surface.set_buffer_scale(s as i32),
+        }
+        surface.damage_buffer(0, 0, w as i32, h as i32);
+        if buffer.attach_to(surface).is_ok() {
+            self.veil = Some(state);
+        }
     }
 
     fn draw(&mut self) {
@@ -615,20 +805,6 @@ impl Roue {
         }
         let animating = self.step();
         let s = self.scale.max(1) as f32;
-        let center = self.center();
-        let (w, h) = (self.width * s as u32, self.height * s as u32);
-        let Ok((buffer, data)) =
-            self.pool
-                .create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
-        else {
-            return;
-        };
-        let mut c = Canvas {
-            buf: data,
-            width: w,
-            height: h,
-        };
-        c.clear();
         let p = theme::palette();
         let elapsed = self.opened.elapsed();
         let ease = ease_out(progress(elapsed, APPEAR));
@@ -637,44 +813,57 @@ impl Roue {
             .closing
             .map_or(0.0, |t| ease_out(progress(t.elapsed(), CLOSE)));
         // Voile léger sur le bureau
-        c.fill(Rgba::hex(0x000000, 0.10 * ease));
+        self.set_veil(0.10 * ease * (1.0 - close));
 
-        if let Some((cx, cy)) = center {
+        // La roue, dans sa sous-surface, en coordonnées locales
+        let wheel = self.center().map(|(cx, cy)| {
+            let (ox, oy) = ((cx - HALF).round(), (cy - HALF).round());
+            self.wheel_sub.set_position(ox as i32, oy as i32);
+            (cx - ox, cy - oy)
+        });
+        let side = (2.0 * HALF * s).ceil() as u32;
+        let Ok((buffer, data)) = self.pool.create_buffer(
+            side as i32,
+            side as i32,
+            side as i32 * 4,
+            wl_shm::Format::Argb8888,
+        ) else {
+            return;
+        };
+        let mut c = Canvas {
+            buf: data,
+            width: side,
+            height: side,
+        };
+        c.clear();
+
+        if let Some((cx, cy)) = wheel {
             let k = (0.9 + 0.1 * ease) * (1.0 - 0.06 * close);
-            let (x, y, r) = (cx * s, cy * s, R_DISC * k * s);
-            // Dossier ouvert : un anneau qui se déploie autour de la roue
-            let rt = self.ring_t;
-            let ro = (R_DISC + (R_RING - R_DISC) * rt) * k * s;
-            if rt > 0.0 {
-                c.shadow(
-                    x - ro,
-                    y - ro + 10.0 * s,
-                    2.0 * ro,
-                    2.0 * ro,
-                    ro,
-                    36.0 * s,
-                    0.35 * rt,
-                );
-                c.fill_circle(x, y, ro, p.panel_border().with_alpha(0.10 * rt));
-                c.fill_circle(x, y, ro - s, p.panel.with_alpha(p.panel.a * 0.97 * rt));
+            let (x, y) = (cx * s, cy * s);
+            let ts: Vec<f32> = self.rings.iter().map(|r| r.t).collect();
+            // Les anneaux, du plus extérieur au disque : chacun se déploie
+            // depuis le bord du niveau d'en dessous ; chaque niveau intérieur
+            // est un peu plus clair que celui qui l'entoure, et le liseré d'un
+            // niveau s'efface quand le suivant s'ouvre (ils ne font plus qu'un)
+            for level in (0..LEVELS).rev() {
+                let t = if level == 0 { 1.0 } else { ts[level - 1] };
+                if t <= 0.0 {
+                    continue;
+                }
+                let outside: f32 = ts[level.min(LEVELS - 1)..].iter().sum();
+                let next = ts.get(level).copied().unwrap_or(0.0);
+                let r = if level == 0 {
+                    OUTER[0]
+                } else {
+                    OUTER[level - 1] + (OUTER[level] - OUTER[level - 1]) * t
+                } * k
+                    * s;
+                let border = p.panel_border();
+                let ba = if level == 0 { border.a } else { 0.10 * t };
+                c.fill_circle(x, y, r, border.with_alpha(ba * (1.0 - next)));
+                let fill = p.panel.mix(Rgba::hex(0xffffff, 1.0), LIGHTER * outside);
+                c.fill_circle(x, y, r - s, fill.with_alpha(p.panel.a * 0.97 * t));
             }
-            c.shadow(
-                x - r,
-                y - r + 10.0 * s,
-                2.0 * r,
-                2.0 * r,
-                r,
-                36.0 * s,
-                0.45 * (1.0 - rt) * ease,
-            );
-            // Liseré du disque, effacé quand l'anneau se déploie : roue et anneau
-            // ne font plus qu'un disque
-            let border = p.panel_border();
-            c.fill_circle(x, y, r, border.with_alpha(border.a * (1.0 - rt)));
-            // Chaque niveau intérieur 10 % plus clair que celui qui l'entoure :
-            // dossier ouvert, le disque de la roue se détache de l'anneau
-            let disc = p.panel.mix(Rgba::hex(0xffffff, 1.0), LIGHTER * rt);
-            c.fill_circle(x, y, r - s, disc.with_alpha(p.panel.a * 0.97));
             // Centre : fermer
             c.fill_circle(
                 x,
@@ -686,130 +875,79 @@ impl Roue {
                 .icon(&mut c, icon::CLOSE, x, y, 16.0 * s, p.text_dim);
 
             let icon_px = (ICON * s).round() as u32;
-            let fonts = (&self.icons, &self.bold);
-            for i in 0..SLOTS {
+            let fonts = Fonts {
+                icons: &self.icons,
+                bold: &self.bold,
+                regular: &self.regular,
+            };
+            for i in 0..SLOTS.min(self.nodes.len()) {
                 // Sortie depuis le centre, l'une après l'autre, avec un léger rebond
                 let pop = progress(elapsed.saturating_sub(STAGGER * i as u32), POP);
                 let g = self.glow[i];
-                let radius = R_ITEMS * k * (0.45 + 0.55 * ease_out_back(pop)) + LIFT * g;
-                let a = (-90.0 + i as f32 * 360.0 / SLOTS as f32).to_radians();
+                let radius = ITEMS[0] * k * (0.45 + 0.55 * ease_out_back(pop)) + LIFT * g;
+                let a = (-90.0 + i as f32 * 360.0 / SLOTS as f32 + self.spin).to_radians();
                 let (ix, iy) = ((cx + radius * a.cos()) * s, (cy + radius * a.sin()) * s);
                 let alpha = (pop * 1.6).min(1.0);
-                if g > 0.0 {
-                    c.fill_circle(
-                        ix,
-                        iy,
-                        R_HOVER * (0.75 + 0.25 * g) * s,
-                        p.accent.with_alpha(0.22 * g),
-                    );
-                }
-                draw_place(
+                halo(&mut c, ix, iy, g, s);
+                draw_node(
                     &mut c,
-                    fonts,
-                    &mut self.places[i],
+                    &fonts,
+                    &mut self.nodes[i],
                     ix,
                     iy,
                     s,
                     icon_px,
                     alpha,
+                    0,
                 );
             }
-            if let Some(f) = self.ring_folder
-                && rt > 0.0
-                && let Some((_, inner)) = self.places[f].folder.as_mut()
-            {
-                // Les icônes du dossier glissent de sa place à la leur, en éventail
-                let n = inner.len();
-                let base = f as f32 * 360.0 / SLOTS as f32;
+            // Les places des anneaux glissent de la place qui les ouvre à la
+            // leur, en éventail
+            for (k_ring, ring) in self.rings.iter().enumerate() {
+                let level = k_ring + 1;
+                let Some(shown) = ring.shown.clone().filter(|_| ring.t > 0.0) else {
+                    continue;
+                };
+                let (base, step, n) = fan(&self.nodes, &shown);
                 let mid = (n as f32 - 1.0) / 2.0;
-                for (j, place) in inner.iter_mut().enumerate() {
+                let Some(parent) = node_at_mut(&mut self.nodes, &shown) else {
+                    continue;
+                };
+                for (j, child) in parent.children.iter_mut().take(n).enumerate() {
                     let spread = if mid > 0.0 {
                         (j as f32 - mid).abs() / mid
                     } else {
                         0.0
                     };
-                    let t = ((rt - 0.25 * spread) / 0.75).clamp(0.0, 1.0);
-                    let t = ease_out(t);
-                    let deg = base + (j as f32 - mid) * (360.0 / SLOTS as f32) * t;
-                    let g = self.inner_glow[j];
-                    let radius = (R_ITEMS + (R_RING_ITEMS - R_ITEMS) * t) * k + LIFT * g;
+                    let t = ease_out(((ring.t - 0.25 * spread) / 0.75).clamp(0.0, 1.0));
+                    let deg = base + self.spin + (j as f32 - mid) * step * t;
+                    let g = ring.glow.get(j).copied().unwrap_or(0.0);
+                    let radius =
+                        (ITEMS[level - 1] + (ITEMS[level] - ITEMS[level - 1]) * t) * k + LIFT * g;
                     let a = (deg - 90.0).to_radians();
                     let (ix, iy) = ((cx + radius * a.cos()) * s, (cy + radius * a.sin()) * s);
-                    if g > 0.0 {
-                        c.fill_circle(
-                            ix,
-                            iy,
-                            R_HOVER * (0.75 + 0.25 * g) * s,
-                            p.accent.with_alpha(0.22 * g),
-                        );
-                    }
-                    draw_place(&mut c, fonts, place, ix, iy, s, icon_px, t);
+                    halo(&mut c, ix, iy, g, s);
+                    draw_node(&mut c, &fonts, child, ix, iy, s, icon_px, t, level);
                 }
-            }
-
-            // Nom de la place survolée, sous la roue (fondu quand il change)
-            let describe = |place: &Place| match (&place.folder, place.item.as_ref()) {
-                (Some((name, _)), _) => format!("{name} · dossier"),
-                (None, Some(it)) if it.app.is_none() && !it.detail.is_empty() => {
-                    format!("{} · {}", it.name, it.detail)
-                }
-                (None, Some(it)) => it.name.clone(),
-                (None, None) => "Choisir dans Réglages".to_string(),
-            };
-            let text = match self.hover {
-                Some(Target::Slot(i)) => Some(describe(&self.places[i])),
-                Some(Target::Inner(j)) => self
-                    .open
-                    .and_then(|i| self.places[i].folder.as_ref())
-                    .and_then(|f| f.1.get(j))
-                    .map(describe),
-                Some(Target::Center) => Some("Fermer".to_string()),
-                _ => None,
-            };
-            if text.as_deref() != self.label.as_ref().map(|(l, _)| l.as_str()) {
-                self.label = text.map(|t| (t, Instant::now()));
-            }
-            if let Some((label, since)) = self.label.as_ref() {
-                let la = progress(since.elapsed(), LABEL_FADE);
-                let px = 13.5 * s;
-                let label = self.regular.truncate(label, px, 360.0 * s);
-                let lw = self.regular.measure(&label, px) + 28.0 * s;
-                let (lx, ly, lh) = (x - lw / 2.0, y + ro.max(r) + (8.0 + 4.0 * la) * s, 32.0 * s);
-                c.fill_rounded(
-                    lx,
-                    ly,
-                    lw,
-                    lh,
-                    lh / 2.0,
-                    p.panel_border().with_alpha(0.10 * la),
-                );
-                c.fill_rounded(
-                    lx + s,
-                    ly + s,
-                    lw - 2.0 * s,
-                    lh - 2.0 * s,
-                    lh / 2.0 - s,
-                    p.panel.with_alpha(p.panel.a * 0.97 * la),
-                );
-                self.regular
-                    .draw_centered(&mut c, &label, x, ly, lh, px, p.text.with_alpha(la));
             }
         }
         if close > 0.0 {
             c.fade(1.0 - close);
         }
 
-        let surface = self.layer.wl_surface();
-        surface.set_buffer_scale(self.scale);
-        surface.damage_buffer(0, 0, w as i32, h as i32);
+        if wheel.is_some() && buffer.attach_to(&self.wheel).is_ok() {
+            self.wheel.set_buffer_scale(self.scale);
+            self.wheel.damage_buffer(0, 0, side as i32, side as i32);
+            self.wheel.commit();
+        }
         // Animation en cours : la prochaine image au prochain rafraîchissement
+        let surface = self.layer.wl_surface();
         if animating && !self.frame_pending {
             surface.frame(&self.qh, surface.clone());
             self.frame_pending = true;
         }
-        if buffer.attach_to(surface).is_ok() {
-            self.layer.commit();
-        }
+        // Applique aussi la roue (sous-surface synchronisée)
+        self.layer.commit();
         if self.closing.is_some_and(|t| t.elapsed() >= CLOSE) {
             self.exit = true;
         }
@@ -831,17 +969,38 @@ fn ease_out_back(t: f32) -> f32 {
     1.0 + (c + 1.0) * (t - 1.0).powi(3) + c * (t - 1.0).powi(2)
 }
 
-/// Icône d'une place, centrée en (ix, iy) (pixels de l'écran), à l'opacité `alpha`
+struct Fonts<'a> {
+    icons: &'a Text,
+    bold: &'a Text,
+    regular: &'a Text,
+}
+
+/// Halo d'accent sous la place survolée (ou dont l'anneau est ouvert)
+fn halo(c: &mut Canvas, ix: f32, iy: f32, g: f32, s: f32) {
+    if g > 0.0 {
+        let p = theme::palette();
+        c.fill_circle(
+            ix,
+            iy,
+            R_HOVER * (0.75 + 0.25 * g) * s,
+            p.accent.with_alpha(0.22 * g),
+        );
+    }
+}
+
+/// Une place, centrée en (ix, iy) (pixels du tampon), à l'opacité `alpha` :
+/// son icône, son badge, le point d'une appli ouverte, et son nom dessous
 #[allow(clippy::too_many_arguments)]
-fn draw_place(
+fn draw_node(
     c: &mut Canvas,
-    (icons, bold): (&Text, &Text),
-    place: &mut Place,
+    fonts: &Fonts,
+    node: &mut Node,
     ix: f32,
     iy: f32,
     s: f32,
     icon_px: u32,
     alpha: f32,
+    level: usize,
 ) {
     if alpha <= 0.0 {
         return;
@@ -849,97 +1008,274 @@ fn draw_place(
     let p = theme::palette();
     let fa = |c: Rgba| c.with_alpha(c.a * alpha);
     let half = ICON / 2.0 * s;
-    if let Some((_, inner)) = place.folder.as_mut() {
-        // Dossier : une pastille avec ses premières icônes en petit
-        c.fill_rounded(
-            ix - half,
-            iy - half,
-            2.0 * half,
-            2.0 * half,
-            12.0 * s,
-            fa(p.accent.with_alpha(0.20)),
-        );
-        let filled: Vec<&mut Place> = inner
-            .iter_mut()
-            .filter(|pl| pl.item.is_some())
-            .take(4)
-            .collect();
-        if filled.is_empty() {
-            icons.icon(c, icon::FOLDER, ix, iy, 20.0 * s, fa(p.accent));
+    let dim = if node.enabled { 1.0 } else { 0.4 };
+    match &node.look {
+        Look::Empty => {
+            c.fill_circle(ix, iy, 18.0 * s, fa(p.ink(0.05)));
+            fonts
+                .icons
+                .icon(c, icon::PLUS, ix, iy, 15.0 * s, fa(p.ink(0.35)));
             return;
         }
-        // Grille de deux colonnes au plus, centrée dans la pastille
-        // Aperçus chargés à leur taille exacte : nets, sans réduction au dessin
-        let mini_px = (15.0 * s).round() as u32;
-        let mini = mini_px as f32;
-        let gap = 3.0 * s;
-        let cols = filled.len().min(2) as f32;
-        let rows = filled.len().div_ceil(2) as f32;
-        let x0 = ix - (cols * mini + (cols - 1.0) * gap) / 2.0;
-        let y0 = iy - (rows * mini + (rows - 1.0) * gap) / 2.0;
-        for (n, pl) in filled.into_iter().enumerate() {
-            let (col, row) = ((n % 2) as f32, (n / 2) as f32);
-            let mx = x0 + col * (mini + gap);
-            let my = y0 + row * (mini + gap);
-            let Some(item) = pl.item.as_ref() else {
-                continue;
+        Look::Label => {
+            // Ligne de menu : son nom dans une pastille (une case cochée devant)
+            let px = 11.5 * s;
+            let check = if node.toggle == Some(true) {
+                "✓ "
+            } else {
+                ""
             };
-            match pl
-                .mini
-                .get_or_insert_with(|| common::icons::load(&item.icon, mini_px))
-            {
-                // Une icône pas carrée garde ses proportions, centrée
-                Some(img) => {
-                    let (w, h) = (img.width as f32, img.height as f32);
-                    let (x, y) = (mx + (mini - w) / 2.0, my + (mini - h) / 2.0);
-                    c.image_alpha(img, x, y, w, h, 0.0, alpha)
-                }
-                None => c.fill_circle(
-                    mx + mini / 2.0,
-                    my + mini / 2.0,
-                    mini / 2.0,
-                    fa(initial_color(&item.name)),
+            let text = format!("{check}{}", node.name);
+            let text = fonts.regular.truncate(&text, px, NAME_W[level] * s);
+            let w = fonts.regular.measure(&text, px) + 20.0 * s;
+            let h = 28.0 * s;
+            c.fill_rounded(ix - w / 2.0, iy - h / 2.0, w, h, h / 2.0, fa(p.ink(0.08)));
+            fonts.regular.draw_centered(
+                c,
+                &text,
+                ix,
+                iy - h / 2.0,
+                h,
+                px,
+                fa(p.text.with_alpha(p.text.a * dim)),
+            );
+            return;
+        }
+        Look::Glyph(g) => {
+            c.fill_rounded(
+                ix - half,
+                iy - half,
+                2.0 * half,
+                2.0 * half,
+                12.0 * s,
+                fa(p.ink(0.08)),
+            );
+            fonts.icons.icon(c, *g, ix, iy, 20.0 * s, fa(p.text));
+        }
+        Look::Folder | Look::Status => {
+            let status = matches!(node.look, Look::Status);
+            if status {
+                // Le statut : liseré et teinte d'accent, glyphes de ses entrées
+                c.fill_rounded(
+                    ix - half - 1.5 * s,
+                    iy - half - 1.5 * s,
+                    2.0 * half + 3.0 * s,
+                    2.0 * half + 3.0 * s,
+                    13.5 * s,
+                    fa(p.accent.with_alpha(0.55)),
+                );
+                c.fill_rounded(
+                    ix - half,
+                    iy - half,
+                    2.0 * half,
+                    2.0 * half,
+                    12.0 * s,
+                    fa(p.panel.mix(p.accent, 0.18)),
+                );
+            } else {
+                c.fill_rounded(
+                    ix - half,
+                    iy - half,
+                    2.0 * half,
+                    2.0 * half,
+                    12.0 * s,
+                    fa(p.accent.with_alpha(0.20)),
+                );
+            }
+            draw_preview(c, fonts, node, ix, iy, s, alpha);
+        }
+        Look::Icon(name) => {
+            let name = name.clone();
+            let img = node
+                .icon
+                .get_or_insert_with(|| common::icons::load(&name, icon_px));
+            draw_image(c, fonts, img.as_ref(), &node.name, ix, iy, s, alpha);
+        }
+        Look::Image(img) => {
+            // Icône d'appli tierce : à la taille des places
+            match img {
+                Some(img) => c.image_alpha(
+                    img,
+                    ix - half,
+                    iy - half,
+                    2.0 * half,
+                    2.0 * half,
+                    0.0,
+                    alpha,
                 ),
+                None => draw_image(c, fonts, None, &node.name, ix, iy, s, alpha),
             }
         }
-        return;
     }
-    let Some(item) = place.item.as_ref() else {
-        c.fill_circle(ix, iy, 18.0 * s, fa(p.ink(0.05)));
-        icons.icon(c, icon::PLUS, ix, iy, 15.0 * s, fa(p.ink(0.35)));
-        return;
-    };
-    let img = place
-        .icon
-        .get_or_insert_with(|| common::icons::load(&item.icon, icon_px));
+    // Action ou proposition : petit repère dans le coin
+    if node.marker {
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, fa(p.panel));
+        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, fa(p.accent));
+    }
+    if node.running {
+        c.fill_circle(ix, iy + half + 4.5 * s, 2.5 * s, fa(p.text_dim));
+    }
+    if let Some(b) = &node.badge {
+        draw_badge(c, fonts.bold, ix, iy, half, s, alpha, b);
+    }
+    // Le nom dessous, coupé à la largeur entre deux places voisines
+    let px = NAME_PX * s;
+    let name = fonts.regular.truncate(&node.name, px, NAME_W[level] * s);
+    fonts.regular.draw_centered(
+        c,
+        &name,
+        ix,
+        iy + (ICON / 2.0 + 7.0) * s,
+        13.0 * s,
+        px,
+        p.text.with_alpha(p.text.a * 0.9 * alpha),
+    );
+}
+
+/// Image d'une appli à sa taille exacte, centrée (nette ; une icône pas
+/// carrée garde ses proportions), ou son initiale sur une pastille de couleur
+#[allow(clippy::too_many_arguments)]
+fn draw_image(
+    c: &mut Canvas,
+    fonts: &Fonts,
+    img: Option<&Image>,
+    name: &str,
+    ix: f32,
+    iy: f32,
+    s: f32,
+    alpha: f32,
+) {
+    let half = ICON / 2.0 * s;
     match img {
-        // Taille exacte, centrée : nette (une icône pas carrée garde ses proportions)
         Some(img) => {
             let (w, h) = (img.width as f32, img.height as f32);
             c.image_alpha(img, ix - w / 2.0, iy - h / 2.0, w, h, 0.0, alpha)
         }
         None => {
-            // Sans icône : l'initiale sur une pastille de couleur
-            c.fill_circle(ix, iy, half, fa(initial_color(&item.name)));
-            let initial: String = item.name.chars().take(1).collect::<String>().to_uppercase();
-            bold.draw_centered(
+            let color = initial_color(name);
+            c.fill_circle(ix, iy, half, color.with_alpha(color.a * alpha));
+            let initial: String = name.chars().take(1).collect::<String>().to_uppercase();
+            fonts.bold.draw_centered(
                 c,
                 &initial,
                 ix,
                 iy - half,
                 2.0 * half,
                 18.0 * s,
-                fa(Rgba::hex(0x1d1916, 1.0)),
+                Rgba::hex(0x1d1916, alpha),
             );
         }
     }
-    // Action ou proposition : petit repère dans le coin
-    if item.app.is_none() {
-        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 8.0 * s, fa(p.panel));
-        c.fill_circle(ix + half * 0.8, iy + half * 0.8, 6.5 * s, fa(p.accent));
+}
+
+/// Aperçu d'un dossier ou du statut : ses quatre premières places en petit
+/// (icônes des applis, glyphes des entrées du statut), sur deux colonnes
+fn draw_preview(
+    c: &mut Canvas,
+    fonts: &Fonts,
+    node: &mut Node,
+    ix: f32,
+    iy: f32,
+    s: f32,
+    alpha: f32,
+) {
+    let p = theme::palette();
+    let shown: Vec<&mut Node> = node
+        .children
+        .iter_mut()
+        .filter(|n| !matches!(n.look, Look::Empty))
+        .take(4)
+        .collect();
+    if shown.is_empty() {
+        fonts.icons.icon(
+            c,
+            icon::FOLDER,
+            ix,
+            iy,
+            20.0 * s,
+            p.accent.with_alpha(p.accent.a * alpha),
+        );
+        return;
     }
-    if !place.windows.is_empty() {
-        c.fill_circle(ix, iy + half + 7.0 * s, 2.5 * s, fa(p.text_dim));
+    // Aperçus chargés à leur taille exacte : nets, sans réduction au dessin
+    let mini_px = (15.0 * s).round() as u32;
+    let mini = mini_px as f32;
+    let gap = 3.0 * s;
+    let cols = shown.len().min(2) as f32;
+    let rows = shown.len().div_ceil(2) as f32;
+    let x0 = ix - (cols * mini + (cols - 1.0) * gap) / 2.0;
+    let y0 = iy - (rows * mini + (rows - 1.0) * gap) / 2.0;
+    for (n, child) in shown.into_iter().enumerate() {
+        let (col, row) = ((n % 2) as f32, (n / 2) as f32);
+        let mx = x0 + col * (mini + gap);
+        let my = y0 + row * (mini + gap);
+        let (mcx, mcy) = (mx + mini / 2.0, my + mini / 2.0);
+        match &child.look {
+            Look::Glyph(g) => {
+                fonts
+                    .icons
+                    .icon(c, *g, mcx, mcy, 13.0 * s, p.text.with_alpha(0.9 * alpha))
+            }
+            Look::Icon(name) => {
+                let name = name.clone();
+                match child
+                    .mini
+                    .get_or_insert_with(|| common::icons::load(&name, mini_px))
+                {
+                    // Une icône pas carrée garde ses proportions, centrée
+                    Some(img) => {
+                        let (w, h) = (img.width as f32, img.height as f32);
+                        let (x, y) = (mx + (mini - w) / 2.0, my + (mini - h) / 2.0);
+                        c.image_alpha(img, x, y, w, h, 0.0, alpha)
+                    }
+                    None => {
+                        let color = initial_color(&child.name);
+                        c.fill_circle(mcx, mcy, mini / 2.0, color.with_alpha(alpha));
+                    }
+                }
+            }
+            Look::Image(Some(img)) => c.image_alpha(img, mx, my, mini, mini, 0.0, alpha),
+            _ => {
+                let color = initial_color(&child.name);
+                c.fill_circle(mcx, mcy, mini / 2.0, color.with_alpha(alpha));
+            }
+        }
+    }
+}
+
+/// Badge en haut à droite : un nombre ou « ! » (rouge s'il est urgent), ou un
+/// simple point
+#[allow(clippy::too_many_arguments)]
+fn draw_badge(
+    c: &mut Canvas,
+    bold: &Text,
+    ix: f32,
+    iy: f32,
+    half: f32,
+    s: f32,
+    alpha: f32,
+    badge: &node::Badge,
+) {
+    let p = theme::palette();
+    let color = if badge.urgent {
+        Rgba::hex(RED, 1.0)
+    } else {
+        p.accent
+    };
+    let br = if badge.text.is_empty() { 4.5 } else { 8.0 } * s;
+    let (bx, by) = (ix + half * 0.85, iy - half * 0.85);
+    c.fill_circle(bx, by, br + 1.5 * s, p.panel.with_alpha(alpha));
+    c.fill_circle(bx, by, br, color.with_alpha(alpha));
+    if !badge.text.is_empty() {
+        bold.draw_centered(
+            c,
+            &badge.text,
+            bx,
+            by - br,
+            2.0 * br,
+            10.5 * s,
+            Rgba::hex(0xffffff, alpha),
+        );
     }
 }
 
@@ -959,13 +1295,8 @@ impl CompositorHandler for Roue {
     ) {
         if factor != self.scale {
             self.scale = factor;
-            for place in &mut self.places {
-                place.icon = None;
-                place.mini = None;
-                for inner in place.folder.iter_mut().flat_map(|f| f.1.iter_mut()) {
-                    inner.icon = None;
-                    inner.mini = None;
-                }
+            for node in &mut self.nodes {
+                node.forget_icons();
             }
             self.draw();
         }
@@ -1137,6 +1468,7 @@ impl PointerHandler for Roue {
                 continue;
             }
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
+            self.pointer_at = Some((x, y));
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     // Sans position donnée par le compositeur : là où le pointeur entre
@@ -1144,28 +1476,43 @@ impl PointerHandler for Roue {
                         self.anchor = Some((x, y));
                     }
                     let t = self.target(x, y);
-                    if matches!(t, Target::Slot(_) | Target::Inner(_)) {
+                    if matches!(t, Target::Item(..)) {
                         self.travelled = true;
                     }
                     let hover = (t != Target::Outside).then_some(t);
-                    self.set_hover(hover);
+                    self.set_hover(hover, true);
                 }
                 PointerEventKind::Press {
                     button: BTN_LEFT, ..
                 } => match self.target(x, y) {
-                    Target::Slot(i) => self.activate(i),
-                    Target::Inner(j) => self.activate_inner(j),
+                    Target::Item(level, j) => self.activate(level, j),
                     _ => self.begin_close(),
                 },
+                PointerEventKind::Axis { vertical, .. } => {
+                    let steps = if vertical.discrete != 0 {
+                        self.scroll = 0.0;
+                        vertical.discrete
+                    } else {
+                        self.scroll += vertical.absolute;
+                        let n = (self.scroll / SCROLL_STEP).trunc();
+                        self.scroll -= n * SCROLL_STEP;
+                        n as i32
+                    };
+                    self.spin_by(steps);
+                }
                 // Clic du milieu maintenu, glissé vers une place puis relâché
                 PointerEventKind::Release {
                     button: BTN_MIDDLE, ..
-                } if self.travelled => match self.target(x, y) {
-                    // Relâché sur un dossier : il reste ouvert
-                    Target::Slot(i) if self.places[i].folder.is_none() => self.activate(i),
-                    Target::Inner(j) => self.activate_inner(j),
-                    _ => {}
-                },
+                } if self.travelled => {
+                    // Relâché sur un dossier (ou le statut) : il reste ouvert
+                    if let Target::Item(level, j) = self.target(x, y)
+                        && self
+                            .node(level, j)
+                            .is_some_and(|n| !matches!(n.act, Act::Open))
+                    {
+                        self.activate(level, j);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1202,3 +1549,6 @@ delegate_pointer!(Roue);
 delegate_shm!(Roue);
 delegate_layer!(Roue);
 delegate_registry!(Roue);
+delegate_subcompositor!(Roue);
+delegate_noop!(Roue: ignore wp_viewporter::WpViewporter);
+delegate_noop!(Roue: ignore wp_viewport::WpViewport);

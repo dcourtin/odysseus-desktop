@@ -10,6 +10,6 @@ name = "odysseus-roue"
 path = "src/main.rs"
 
 [dependencies]
-common.workspace = true
+common = { workspace = true, features = ["sni"] }
 smithay-client-toolkit.workspace = true
 serde_json.workspace = true

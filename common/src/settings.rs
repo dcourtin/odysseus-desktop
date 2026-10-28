@@ -47,6 +47,10 @@ pub struct Settings {
     pub dock_size: u32,
     /// Réception de fichiers depuis les autres appareils (LocalSend)
     pub reception: bool,
+    /// Icônes de la barre (notifications, panneaux, mises à jour, icônes des
+    /// applis) ; sans elles, tout est dans la place Statut de la roue et la
+    /// barre n'a qu'un point quand quelque chose demande l'attention
+    pub bar_icons: bool,
 }
 
 impl Default for Settings {
@@ -71,6 +75,7 @@ impl Default for Settings {
             dock_hide: "intelligent".into(),
             dock_size: 48,
             reception: false,
+            bar_icons: false,
         }
     }
 }
@@ -117,6 +122,7 @@ impl Settings {
                 }
                 "dock_taille" => s.dock_size = num().unwrap_or(48).clamp(32, 72),
                 "reception" => s.reception = value == "oui",
+                "barre_icones" => s.bar_icons = value == "oui",
                 // Les clés agent_* ont rejoint agent.json (common::agent)
                 _ => {}
             }
@@ -163,6 +169,10 @@ impl Settings {
         line(
             "reception",
             if self.reception { "oui" } else { "non" }.into(),
+        );
+        line(
+            "barre_icones",
+            if self.bar_icons { "oui" } else { "non" }.into(),
         );
         out
     }
@@ -231,6 +241,7 @@ mod tests {
             dock_hide: "toujours".into(),
             dock_size: 56,
             reception: true,
+            bar_icons: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         assert_eq!(Settings::parse(""), Settings::default());

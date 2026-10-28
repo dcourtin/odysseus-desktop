@@ -139,6 +139,7 @@ version = "0.1.0"
 dependencies = [
  "assistant",
  "common",
+ "dbus",
  "rusqlite",
  "serde_json",
  "wayland-client",
@@ -319,6 +320,7 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dbus",
  "fontdue",
  "image",
  "libc",
@@ -2063,7 +2065,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
- "dbus",
  "serde",
  "serde_json",
  "smithay-client-toolkit",

@@ -13,11 +13,14 @@
 //!
 //! - un dossier : il ouvre un second anneau autour de la roue, avec jusqu'à
 //!   huit places à lui (applications, actions, propositions ; pas de dossier
-//!   dans un dossier).
+//!   dans un dossier) ;
+//! - le statut : notifications, mises à jour, panneaux du bureau et icônes
+//!   des applications, en anneau. Il a toujours une place dans la roue (on
+//!   le déplace, on ne le retire pas) ; jamais dans un dossier.
 //!
 //! Fichier `~/.config/odysseus/roue` : une ligne par place, dans le sens des
 //! aiguilles d'une montre depuis le haut — « app:ID », « action:ID:CLÉ »,
-//! « entree:ID », « dossier:NOM » ou « - » (place vide). Les places d'un
+//! « entree:ID », « dossier:NOM », « statut » ou « - » (place vide). Les places d'un
 //! dossier suivent sa ligne, en retrait. Sans fichier : les favoris du Dock.
 
 use std::path::PathBuf;
@@ -33,6 +36,7 @@ pub enum Slot {
     Action(String, String),
     Entree(String),
     Dossier(Box<Folder>),
+    Statut,
 }
 
 /// Dossier : un nom et ses places, ouvertes en second anneau
@@ -58,6 +62,9 @@ impl Folder {
 
 impl Slot {
     pub fn parse(s: &str) -> Option<Slot> {
+        if s.trim() == "statut" {
+            return Some(Slot::Statut);
+        }
         let (kind, rest) = s.trim().split_once(':')?;
         let rest = rest.trim();
         match kind.trim() {
@@ -78,6 +85,7 @@ impl Slot {
             Slot::Action(id, key) => format!("action:{id}:{key}"),
             Slot::Entree(id) => format!("entree:{id}"),
             Slot::Dossier(f) => format!("dossier:{}", f.name),
+            Slot::Statut => "statut".into(),
         }
     }
 
@@ -120,7 +128,8 @@ pub fn parse(text: &str) -> Wheel {
             if let Some(folder) = folder
                 && inner < SLOTS
             {
-                folder.places[inner] = Slot::parse(line).filter(|s| s.folder().is_none());
+                folder.places[inner] =
+                    Slot::parse(line).filter(|s| s.folder().is_none() && *s != Slot::Statut);
                 inner += 1;
             }
             continue;
@@ -140,7 +149,7 @@ pub fn to_text(wheel: &Wheel) -> String {
     let mut out = String::from(
         "# Roue d'odysseus (Réglages > Roue) : une place par ligne, depuis le haut,\n\
          # dans le sens des aiguilles d'une montre — app:ID, action:ID:CLÉ, entree:ID,\n\
-         # dossier:NOM (ses places suivent, en retrait) ou -\n",
+         # dossier:NOM (ses places suivent, en retrait), statut ou -\n",
     );
     for place in wheel {
         out.push_str(&place.as_ref().map_or("-".into(), Slot::to_text));
@@ -162,11 +171,41 @@ pub fn to_text(wheel: &Wheel) -> String {
     out
 }
 
-/// Roue enregistrée, sinon les favoris du Dock
+/// Roue enregistrée, sinon les favoris du Dock ; le statut toujours à une place
 pub fn load(apps: &[App]) -> Wheel {
-    match config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+    let mut wheel = match config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
         Some(text) => parse(&text),
         None => default(apps),
+    };
+    with_status(&mut wheel);
+    wheel
+}
+
+/// Place d'où le statut part, s'il n'en a pas encore : en bas
+pub const STATUS_HOME: usize = SLOTS / 2;
+
+/// Le statut a toujours une place : s'il manque, la première libre depuis le
+/// bas ; roue pleine, il prend celle du bas, et ce qu'elle tenait va à la
+/// fin du premier dossier qui a de la place (sinon cette place se perd)
+pub fn with_status(wheel: &mut Wheel) {
+    if wheel.contains(&Some(Slot::Statut)) {
+        return;
+    }
+    let order = (0..SLOTS).map(|d| (STATUS_HOME + d) % SLOTS);
+    if let Some(i) = order.clone().find(|&i| wheel[i].is_none()) {
+        wheel[i] = Some(Slot::Statut);
+        return;
+    }
+    let displaced = wheel[STATUS_HOME].replace(Slot::Statut);
+    if let Some(slot) = displaced.filter(|s| s.folder().is_none()) {
+        let room = wheel
+            .iter_mut()
+            .flatten()
+            .filter_map(Slot::folder_mut)
+            .find_map(|f| f.places.iter_mut().find(|p| p.is_none()));
+        if let Some(room) = room {
+            *room = Some(slot);
+        }
     }
 }
 
@@ -195,9 +234,12 @@ pub fn default(apps: &[App]) -> Wheel {
     let present = pinned
         .into_iter()
         .filter(|id| apps.iter().any(|a| &a.id == id));
-    for (place, id) in wheel.iter_mut().zip(present) {
-        *place = Some(Slot::App(id));
+    // La place du bas reste au statut
+    let places = (0..SLOTS).filter(|&i| i != STATUS_HOME);
+    for (i, id) in places.zip(present) {
+        wheel[i] = Some(Slot::App(id));
     }
+    wheel[STATUS_HOME] = Some(Slot::Statut);
     wheel
 }
 
@@ -229,9 +271,16 @@ pub struct Item {
 /// Tout ce qu'on peut mettre dans la roue : propositions des applis, puis
 /// applications, puis leurs actions
 pub fn catalog(apps: &[App]) -> Vec<Item> {
-    let mut items: Vec<Item> = proposals()
-        .into_iter()
-        .map(|(id, p)| Item {
+    let status = Item {
+        slot: Slot::Statut,
+        name: "Statut".into(),
+        detail: "Notifications, mises à jour, panneaux et icônes des applis".into(),
+        icon: String::new(),
+        command: String::new(),
+        app: None,
+    };
+    let mut items: Vec<Item> = std::iter::once(status)
+        .chain(proposals().into_iter().map(|(id, p)| Item {
             slot: Slot::Entree(id),
             detail: if p.comment.is_empty() {
                 "Proposée par une appli".into()
@@ -242,7 +291,7 @@ pub fn catalog(apps: &[App]) -> Vec<Item> {
             name: p.name,
             icon: p.icon,
             app: None,
-        })
+        }))
         .collect();
     for (i, a) in apps.iter().enumerate().filter(|(_, a)| !a.id.is_empty()) {
         items.push(Item {
@@ -415,6 +464,31 @@ mod tests {
         );
         assert_eq!(Slot::parse("app:"), None);
         assert!(valid_id("com.exemple-1_x") && !valid_id("../x") && !valid_id(".x"));
+    }
+
+    #[test]
+    fn status() {
+        // Lu et écrit ; jamais dans un dossier
+        let w = parse("app:a\nstatut\ndossier:D\n  statut\n  app:b\n");
+        assert_eq!(w[1], Some(Slot::Statut));
+        let d = w[2].as_ref().and_then(Slot::folder).unwrap();
+        assert_eq!(d.places[0], None);
+        assert_eq!(parse(&to_text(&w)), w);
+        // Absent : la première place libre depuis le bas
+        let mut w = parse("app:a\n-\n-\n-\napp:b\n-\napp:c\n");
+        with_status(&mut w);
+        assert_eq!(w[5], Some(Slot::Statut));
+        // Roue pleine : la place du bas, ce qu'elle tenait va dans un dossier
+        let mut w: Wheel = std::array::from_fn(|i| Some(Slot::App(format!("app{i}"))));
+        w[0] = Some(Slot::Dossier(Box::new(Folder::new("D"))));
+        with_status(&mut w);
+        assert_eq!(w[STATUS_HOME], Some(Slot::Statut));
+        let d = w[0].as_ref().and_then(Slot::folder).unwrap();
+        assert_eq!(d.places[0], Some(Slot::App(format!("app{STATUS_HOME}"))));
+        // Déjà là : rien ne bouge
+        let before = w.clone();
+        with_status(&mut w);
+        assert_eq!(w, before);
     }
 
     #[test]

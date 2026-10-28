@@ -1,12 +1,12 @@
-//! Zone de notification (StatusNotifierItem) : les applications qui veulent une
-//! icône dans la barre (lanceurs, messageries, Steam…) s'inscrivent auprès du
-//! registre org.kde.StatusNotifierWatcher, que la barre tient elle-même ; la
-//! barre en est aussi l'hôte : elle lit leurs icônes, titres et menus
-//! (com.canonical.dbusmenu) et leur transmet les clics.
+//! Icônes des applications (StatusNotifierItem) : les applications qui en
+//! veulent une (lanceurs, messageries, Steam…) s'inscrivent auprès du registre
+//! org.kde.StatusNotifierWatcher, que la barre tient elle-même. La barre et la
+//! roue (place Statut) en sont les hôtes : elles lisent leurs icônes, titres et
+//! menus (com.canonical.dbusmenu) et leur transmettent les clics.
 //!
 //! Tout le travail D-Bus se fait dans un fil à part : une application lente à
-//! répondre ne fige jamais la barre. Le fil envoie la liste des icônes et les
-//! menus à afficher ; la barre lui renvoie les clics.
+//! répondre ne fige jamais l'interface. Le fil envoie la liste des icônes et
+//! les menus à afficher ; l'interface lui renvoie les clics.
 
 use std::{
     collections::HashSet,
@@ -14,13 +14,15 @@ use std::{
     time::Duration,
 };
 
-use common::draw::Image;
+use crate::draw::Image;
 use dbus::{
     Message,
     arg::{ArgType, PropMap, RefArg, Variant},
     channel::{BusType, Channel},
 };
-use smithay_client_toolkit::reexports::calloop::channel::Sender;
+
+/// Où le fil envoie ses nouvelles (liste des icônes, menus)
+pub type Sender = Box<dyn Fn(Update) + Send>;
 
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
@@ -69,6 +71,7 @@ pub struct Item {
 }
 
 /// Ligne d'un menu, déjà mise à plat (sous-menus en retrait sous leur titre)
+#[derive(Clone)]
 pub struct MenuEntry {
     pub id: i32,
     pub label: String,
@@ -100,12 +103,14 @@ pub enum Command {
     MenuEvent { key: String, id: i32 },
 }
 
-/// Lance le fil D-Bus ; renvoie de quoi lui passer les clics.
-pub fn spawn(tx: Sender<Update>) -> mpsc::Sender<Command> {
+/// Lance le fil D-Bus ; renvoie de quoi lui passer les clics. `watcher` :
+/// tenir le registre s'il est libre (la barre) ; sinon seulement s'inscrire
+/// comme hôte auprès de celui qui le tient (la roue, qui ne vit qu'un instant)
+pub fn spawn(tx: Sender, watcher: bool) -> mpsc::Sender<Command> {
     let (cmd_tx, cmd_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        if let Err(e) = run(tx, cmd_rx) {
-            eprintln!("shell-bar : zone de notification arrêtée ({e})");
+        if let Err(e) = run(tx, cmd_rx, watcher) {
+            eprintln!("icônes des applis : arrêt ({e})");
         }
     });
     cmd_tx
@@ -134,10 +139,12 @@ struct Host {
     /// La barre tient le registre (sinon, un autre programme le tient)
     watcher: bool,
     items: Vec<Known>,
-    tx: Sender<Update>,
+    tx: Sender,
+    /// Peut prendre le registre
+    may_watch: bool,
 }
 
-fn run(tx: Sender<Update>, rx: mpsc::Receiver<Command>) -> Result<(), String> {
+fn run(tx: Sender, rx: mpsc::Receiver<Command>, may_watch: bool) -> Result<(), String> {
     let channel = Channel::get_private(BusType::Session).map_err(|e| e.to_string())?;
     let mut host = Host {
         channel,
@@ -145,6 +152,7 @@ fn run(tx: Sender<Update>, rx: mpsc::Receiver<Command>) -> Result<(), String> {
         watcher: false,
         items: Vec::new(),
         tx,
+        may_watch,
     };
     host.add_match("type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged'");
     for iface in ITEM_IFACES {
@@ -273,12 +281,12 @@ fn named_icon(name: &str, theme_path: &str) -> Option<Image> {
         if let Some(img) = candidates
             .iter()
             .filter(|p| p.exists())
-            .find_map(|p| common::icons::load(&p.to_string_lossy(), ICON_PX))
+            .find_map(|p| crate::icons::load(&p.to_string_lossy(), ICON_PX))
         {
             return Some(img);
         }
     }
-    common::icons::load(name, ICON_PX)
+    crate::icons::load(name, ICON_PX)
 }
 
 /// Libellé dbusmenu : « _ » marque le raccourci clavier, « __ » est un « _ »
@@ -407,7 +415,7 @@ impl Host {
 
     /// Tenir le registre ; s'il est déjà tenu ailleurs, s'y inscrire comme hôte
     fn take_watcher(&mut self) {
-        self.watcher = self.request_name(WATCHER);
+        self.watcher = self.may_watch && self.request_name(WATCHER);
         if self.watcher {
             self.signal("StatusNotifierHostRegistered", None);
             return;
@@ -559,7 +567,7 @@ impl Host {
             .filter(|i| i.loaded && !i.passive)
             .map(|i| i.item.clone())
             .collect();
-        let _ = self.tx.send(Update::Items(items));
+        (self.tx)(Update::Items(items));
     }
 
     fn remove_where(&mut self, gone: impl Fn(&Known) -> bool) -> bool {
@@ -593,7 +601,7 @@ impl Host {
                         Ok(v) => v,
                         Err(_) => return false,
                     };
-                    if name == WATCHER && new.is_empty() && !self.watcher {
+                    if name == WATCHER && new.is_empty() && !self.watcher && self.may_watch {
                         // Le registre extérieur est parti : on le reprend
                         self.take_watcher();
                     }
@@ -781,7 +789,7 @@ impl Host {
             clean.pop();
         }
         if !clean.is_empty() {
-            let _ = self.tx.send(Update::Menu {
+            (self.tx)(Update::Menu {
                 key: key.to_string(),
                 entries: clean,
             });

@@ -6,13 +6,13 @@
 //! applications (zone de notification StatusNotifierItem, menu au clic droit).
 
 mod sway;
-mod tray;
 
 use std::os::fd::AsFd;
 use std::time::Duration;
 
 use chrono::{Datelike, Local, Timelike};
 use common::draw::{Canvas, Text};
+use common::sni as tray;
 use common::theme::{self, icon};
 use smithay_client_toolkit::reexports::client::{
     Connection, QueueHandle,
@@ -111,6 +111,8 @@ struct Bar {
     /// Compteurs du processeur à la mesure précédente (charge de l'icône du moniteur)
     cpu_prev: (u64, u64),
     bell_zone: (f64, f64),
+    /// Point d'attention (sans les icônes) : ouvre la roue sur le statut
+    attention_zone: (f64, f64),
     clock_zone: (f64, f64),
     /// Icônes des applications, leurs zones cliquables (début, fin, clé)
     tray: Vec<tray::Item>,
@@ -159,7 +161,12 @@ fn main() {
         .unwrap_or_default();
     let watch_sway = ipc.is_some();
     let (tray_tx, tray_rx) = channel::channel::<tray::Update>();
-    let tray_cmd = tray::spawn(tray_tx);
+    let tray_cmd = tray::spawn(
+        Box::new(move |u| {
+            let _ = tray_tx.send(u);
+        }),
+        true,
+    );
 
     let mut bar = Bar {
         registry_state: RegistryState::new(&globals),
@@ -186,6 +193,7 @@ fn main() {
         update_zone: (0.0, 0.0),
         cpu_prev: (0, 0),
         bell_zone: (0.0, 0.0),
+        attention_zone: (0.0, 0.0),
         clock_zone: (0.0, 0.0),
         tray: Vec::new(),
         tray_zones: Vec::new(),
@@ -473,6 +481,11 @@ impl Bar {
         if button != BTN_LEFT {
             return;
         }
+        if x >= self.attention_zone.0 && x < self.attention_zone.1 {
+            let cx = ((self.attention_zone.0 + self.attention_zone.1) / 2.0).to_string();
+            spawn_sibling("odysseus-roue", &["--statut", "--x", &cx, "--y", "0"]);
+            return;
+        }
         let bell = x >= self.bell_zone.0 && x < self.bell_zone.1;
         if bell || (x >= self.clock_zone.0 && x < self.clock_zone.1) {
             spawn_sibling("odysseus-notify", &["--center"]);
@@ -615,58 +628,88 @@ impl Bar {
         let cy = h as f32 / 2.0;
         let bx = clock_x - 14.0 * sf - step / 2.0;
         let (dnd, unseen) = notification_state();
-        let bell_color = highlight(&mut canvas, bx, cy, sf, panel_open("notifications"));
-        self.icons.icon(
-            &mut canvas,
-            if dnd { icon::BELL_OFF } else { icon::BELL },
-            bx,
-            cy,
-            icon_px,
-            bell_color,
-        );
-        if unseen && !dnd {
-            canvas.fill_circle(
-                bx + 6.0 * sf,
-                cy - 6.0 * sf,
-                3.5 * sf,
-                theme::palette().accent,
+        // Sans les icônes (Réglages > Roue), tout est dans la place Statut de la
+        // roue : ici, un point quand quelque chose demande l'attention
+        let icons = common::settings::Settings::load().bar_icons;
+        self.updates.refresh();
+        self.attention_zone = (0.0, 0.0);
+        let ax = if icons {
+            let bell_color = highlight(&mut canvas, bx, cy, sf, panel_open("notifications"));
+            self.icons.icon(
+                &mut canvas,
+                if dnd { icon::BELL_OFF } else { icon::BELL },
+                bx,
+                cy,
+                icon_px,
+                bell_color,
             );
-        }
-        self.bell_zone = (
-            ((bx - step / 2.0) / sf) as f64,
-            ((clock_x - 6.0 * sf) / sf) as f64,
-        );
-        let ix = bx - step;
-        let right = ix + step / 2.0;
-        let color = highlight(&mut canvas, ix, cy, sf, panel_open("control"));
-        self.icons
-            .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, color);
-        // Moniteur système : jauge colorée selon la charge (processeur ou mémoire)
-        let mx = ix - step;
-        let color = if panel_open("moniteur") {
-            highlight(&mut canvas, mx, cy, sf, true)
-        } else if load >= 0.9 {
-            theme::palette().danger
-        } else if load >= 0.7 {
-            theme::palette().accent
+            if unseen && !dnd {
+                canvas.fill_circle(
+                    bx + 6.0 * sf,
+                    cy - 6.0 * sf,
+                    3.5 * sf,
+                    theme::palette().accent,
+                );
+            }
+            self.bell_zone = (
+                ((bx - step / 2.0) / sf) as f64,
+                ((clock_x - 6.0 * sf) / sf) as f64,
+            );
+            let ix = bx - step;
+            let right = ix + step / 2.0;
+            let color = highlight(&mut canvas, ix, cy, sf, panel_open("control"));
+            self.icons
+                .icon(&mut canvas, icon::CONTROLS, ix, cy, icon_px, color);
+            // Moniteur système : jauge colorée selon la charge (processeur ou mémoire)
+            let mx = ix - step;
+            let color = if panel_open("moniteur") {
+                highlight(&mut canvas, mx, cy, sf, true)
+            } else if load >= 0.9 {
+                theme::palette().danger
+            } else if load >= 0.7 {
+                theme::palette().accent
+            } else {
+                theme::palette().text
+            };
+            self.icons
+                .icon(&mut canvas, icon::GAUGE, mx, cy, icon_px + sf, color);
+            self.monitor_zone = (
+                ((mx - step / 2.0) / sf) as f64,
+                ((mx + step / 2.0) / sf) as f64,
+            );
+            // Assistant (agent choisi dans Réglages > Agent)
+            let ax = mx - step;
+            let color = highlight(&mut canvas, ax, cy, sf, panel_open("assistant"));
+            self.icons
+                .icon(&mut canvas, icon::SPARKLES, ax, cy, icon_px, color);
+            self.assistant_zone = (
+                ((ax - step / 2.0) / sf) as f64,
+                ((ax + step / 2.0) / sf) as f64,
+            );
+            let ix = ix - step;
+            self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
+            ax
         } else {
-            theme::palette().text
+            self.bell_zone = (0.0, 0.0);
+            self.monitor_zone = (0.0, 0.0);
+            self.assistant_zone = (0.0, 0.0);
+            self.status_zone = (0.0, 0.0);
+            let p = theme::palette();
+            let tray_attention = self.tray.iter().any(|i| i.attention);
+            if (unseen && !dnd) || self.updates.pending > 0 || tray_attention {
+                let color = if self.updates.security {
+                    p.danger
+                } else {
+                    p.accent
+                };
+                canvas.fill_circle(bx, cy, 4.0 * sf, color);
+            }
+            self.attention_zone = (
+                ((bx - step / 2.0) / sf) as f64,
+                ((clock_x - 6.0 * sf) / sf) as f64,
+            );
+            bx
         };
-        self.icons
-            .icon(&mut canvas, icon::GAUGE, mx, cy, icon_px + sf, color);
-        self.monitor_zone = (
-            ((mx - step / 2.0) / sf) as f64,
-            ((mx + step / 2.0) / sf) as f64,
-        );
-        // Assistant (agent choisi dans Réglages > Agent)
-        let ax = mx - step;
-        let color = highlight(&mut canvas, ax, cy, sf, panel_open("assistant"));
-        self.icons
-            .icon(&mut canvas, icon::SPARKLES, ax, cy, icon_px, color);
-        self.assistant_zone = (
-            ((ax - step / 2.0) / sf) as f64,
-            ((ax + step / 2.0) / sf) as f64,
-        );
         // Témoin : un agent capture l'écran en ce moment (odysseus-mcp)
         if agent_watching() {
             let ex = ax - step;
@@ -682,8 +725,6 @@ impl Bar {
             self.icons
                 .icon(&mut canvas, icon::EYE, ex, cy, icon_px, danger);
         }
-        let ix = ix - step;
-        self.status_zone = (((ix + step / 2.0) / sf) as f64, (right / sf) as f64);
 
         // Témoin : l'écran (ou une fenêtre) est partagé ; un clic arrête le partage
         let mut left = ax - step - if agent_watching() { step } else { 0.0 };
@@ -721,10 +762,9 @@ impl Bar {
         }
 
         // Mises à jour à décider : l'icône n'apparaît qu'alors (rouge : sécurité)
-        self.updates.refresh();
         let mut tx = left - 6.0 * sf;
         self.update_zone = (0.0, 0.0);
-        if self.updates.pending > 0 {
+        if icons && self.updates.pending > 0 {
             let color = if self.updates.security {
                 theme::palette().danger
             } else {
@@ -744,7 +784,7 @@ impl Bar {
         let size = 16.0 * sf;
         self.tray_zones.clear();
         let menu_key = self.menu.as_ref().map(|m| m.key.clone());
-        for item in self.tray.iter().rev() {
+        for item in self.tray.iter().rev().filter(|_| icons) {
             highlight(
                 &mut canvas,
                 tx,

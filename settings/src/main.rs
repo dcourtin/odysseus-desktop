@@ -358,6 +358,8 @@ enum Hit {
     RoueOpen,
     RoueBack,
     RoueRename,
+    /// Icônes de la barre, ou tout dans la place Statut de la roue
+    BarIcons,
     Suspend(u32),
     DockToggle,
     DockHide(&'static str),
@@ -1503,6 +1505,10 @@ impl App {
                 self.settings.suspend_min = min;
                 self.save();
             }
+            Hit::BarIcons => {
+                self.settings.bar_icons = !self.settings.bar_icons;
+                self.save();
+            }
             Hit::DockToggle => {
                 self.settings.dock = !self.settings.dock;
                 self.save();
@@ -1868,10 +1874,34 @@ impl App {
                 Some(c) => c.draw(ui, cx, top, cw),
                 None => top,
             },
-            Page::Roue => match self.roue.as_ref() {
-                Some(r) => r.draw(ui, cx, top, cw),
-                None => top,
-            },
+            Page::Roue => {
+                let p = theme::palette();
+                ui.card(cx, top, cw, ROW_H);
+                ui.text(
+                    "Icônes aussi dans la barre",
+                    cx + 18.0,
+                    top,
+                    ROW_H,
+                    13.5,
+                    p.text,
+                );
+                ui.switch(
+                    cx + cw - 18.0 - 40.0,
+                    top + 14.0,
+                    self.settings.bar_icons,
+                    Hit::BarIcons,
+                );
+                let y = ui.note(
+                    cx,
+                    top + ROW_H + 8.0,
+                    cw,
+                    "La place Statut de la roue tient les notifications, les mises à jour, le centre de contrôle, le moniteur, l'Assistant et les icônes des applis. Sans les icônes, la barre n'en garde qu'un point, quand quelque chose demande votre attention : un clic ouvre la roue sur le statut.",
+                ) + 14.0;
+                match self.roue.as_ref() {
+                    Some(r) => r.draw(ui, cx, y, cw),
+                    None => y,
+                }
+            }
             Page::Reception => self.page_reception(ui, cx, top, cw),
             Page::Automatismes => self.page_automatismes(ui, cx, top, cw),
             Page::Trousseau => self.page_trousseau(ui, cx, top, cw),

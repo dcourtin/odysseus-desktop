@@ -17,6 +17,8 @@ pub mod net;
 pub mod settings;
 pub mod roue;
 pub mod shortcuts;
+#[cfg(feature = "sni")]
+pub mod sni;
 pub mod stats;
 pub mod sysinfo;
 pub mod text;

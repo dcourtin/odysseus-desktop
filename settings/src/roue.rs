@@ -1,6 +1,7 @@
 //! Réglages > Roue : les huit places de la roue (odysseus-roue), choisies
 //! parmi les entrées proposées par les applis, les actions des applis et les
 //! applications, ou des dossiers qui en tiennent huit autres (second anneau).
+//! Le statut a toujours une place : on le déplace, on ne le retire pas.
 //! Chaque changement est enregistré aussitôt (`~/.config/odysseus/roue`) ;
 //! la roue le lit à chaque ouverture.
 
@@ -206,6 +207,35 @@ impl RouePage {
             }
             Hit::RoueAdd(ci) => {
                 let slot = self.catalog.get(*ci)?.slot.clone();
+                if slot == Slot::Statut && self.folder.is_some() {
+                    return Some("Le statut va dans la roue, pas dans un dossier".into());
+                }
+                // Le statut ne se perd pas : il prend la place libérée par ce
+                // qu'on ajoute, sinon la suivante libre
+                let selected = self.selected;
+                let displaces_status =
+                    self.places()[selected] == Some(Slot::Statut) && slot != Slot::Statut;
+                if displaces_status {
+                    let home = match self.place_of(&slot) {
+                        Some((None, i)) => Some(i),
+                        _ => (1..SLOTS)
+                            .map(|d| (selected + d) % SLOTS)
+                            .find(|&i| self.wheel[i].is_none()),
+                    };
+                    let Some(home) = home else {
+                        return Some(
+                            "La roue est pleine : libérez une place pour le statut".into(),
+                        );
+                    };
+                    self.wheel[home] = Some(Slot::Statut);
+                    if let Some((Some(f), j)) = self.place_of(&slot)
+                        && let Some(folder) = self.wheel[f].as_mut().and_then(Slot::folder_mut)
+                    {
+                        folder.places[j] = None;
+                    }
+                    self.wheel[selected] = Some(slot);
+                    return self.save();
+                }
                 // Une seule place par élément : il quitte l'ancienne
                 match self.place_of(&slot) {
                     Some((None, i)) => self.wheel[i] = None,
@@ -229,6 +259,11 @@ impl RouePage {
             }
             Hit::RoueRemove => {
                 let selected = self.selected;
+                if self.places()[selected] == Some(Slot::Statut) {
+                    return Some(
+                        "Le statut reste dans la roue : déplacez-le avec les flèches".into(),
+                    );
+                }
                 self.places_mut()[selected] = None;
                 self.save()
             }
@@ -243,7 +278,7 @@ impl RouePage {
                 if self.folder.is_some()
                     || self.wheel[self.selected]
                         .as_ref()
-                        .is_some_and(|s| s.folder().is_some())
+                        .is_some_and(|s| s.folder().is_some() || *s == Slot::Statut)
                 {
                     return msg;
                 }
@@ -277,6 +312,7 @@ impl RouePage {
             }
             Hit::RoueReset => {
                 self.wheel = roue::default(&self.apps);
+                roue::with_status(&mut self.wheel);
                 self.selected = 0;
                 self.folder = None;
                 self.save()
@@ -299,6 +335,9 @@ impl RouePage {
     }
 
     fn draw_icon(&self, ui: &mut Ui, it: &Item, cx: f32, cy: f32, size: f32) {
+        if it.slot == Slot::Statut {
+            return Self::draw_status(ui, cx, cy, size);
+        }
         match self.icons.get(&it.icon).and_then(Option::as_ref) {
             Some(img) => ui.image(img, cx - size / 2.0, cy - size / 2.0, size, size, 0.0),
             None => {
@@ -316,6 +355,29 @@ impl RouePage {
                 );
             }
         }
+    }
+
+    /// Statut : pastille liserée d'accent, icône des panneaux
+    fn draw_status(ui: &mut Ui, cx: f32, cy: f32, size: f32) {
+        let p = theme::palette();
+        let r = size * 0.3;
+        ui.rounded(
+            cx - size / 2.0 - 1.5,
+            cy - size / 2.0 - 1.5,
+            size + 3.0,
+            size + 3.0,
+            r + 1.5,
+            p.accent.with_alpha(0.55),
+        );
+        ui.rounded(
+            cx - size / 2.0,
+            cy - size / 2.0,
+            size,
+            size,
+            r,
+            p.panel.mix(p.accent, 0.18),
+        );
+        ui.icon(icon::CONTROLS, cx, cy, size * 0.5, p.text);
     }
 
     /// Dossier : pastille d'accent et icône de dossier
@@ -416,6 +478,7 @@ impl RouePage {
                     let kind = match &it.slot {
                         Slot::Action(..) => format!("Action de {}", it.detail),
                         Slot::Entree(_) => "Proposée par une appli".to_string(),
+                        Slot::Statut => it.detail.clone(),
                         _ => "Application".to_string(),
                     };
                     let kind = ui.truncate(&kind, 12.5, dw);
@@ -444,7 +507,8 @@ impl RouePage {
         dy += 40.0;
         ui.button(dx, dy, 40.0, "←", false, Hit::RoueMove(-1));
         ui.button(dx + 48.0, dy, 40.0, "→", false, Hit::RoueMove(1));
-        if current.is_some() {
+        let is_status = current == Some(&Slot::Statut);
+        if current.is_some() && !is_status {
             ui.button(dx + 96.0, dy, 96.0, "Retirer", false, Hit::RoueRemove);
         }
         dy += 42.0;
@@ -454,11 +518,13 @@ impl RouePage {
         } else if is_folder {
             ui.button(dx, dy, 88.0, "Ouvrir", true, Hit::RoueOpen);
             ui.button(dx + 96.0, dy, 104.0, "Renommer", false, Hit::RoueRename);
-        } else {
+        } else if !is_status {
             ui.button(dx, dy, 150.0, "En faire un dossier", false, Hit::RoueFolder);
         }
         dy += 50.0;
-        let tip = if open.is_some() {
+        let tip = if is_status {
+            "Le statut a toujours une place dans la roue : les flèches le déplacent. Il s'ouvre en anneau, et chaque entrée peut en ouvrir un autre (le menu d'une icône d'appli)."
+        } else if open.is_some() {
             "Ces places s'ouvrent en second anneau, autour de la roue, quand on passe sur le dossier."
         } else if is_folder {
             "Un dossier ouvre un second anneau autour de la roue. Ouvrez-le pour choisir ses places."
@@ -484,7 +550,8 @@ impl RouePage {
         y += 34.0 + 28.0;
 
         // Ce qu'on peut y mettre, par groupe
-        let groups: [(&str, fn(&Slot) -> bool); 3] = [
+        let groups: [(&str, fn(&Slot) -> bool); 4] = [
+            ("Bureau", |s| matches!(s, Slot::Statut)),
             ("Proposées par les applis", |s| {
                 matches!(s, Slot::Entree(_))
             }),

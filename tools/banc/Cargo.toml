@@ -14,8 +14,13 @@ path = "src/entree.rs"
 name = "banc-donnees"
 path = "src/donnees.rs"
 
+[[bin]]
+name = "banc-sni"
+path = "src/sni.rs"
+
 [dependencies]
 common.workspace = true
+dbus.workspace = true
 assistant = { path = "../../assistant" }
 rusqlite = "0.37"
 serde_json.workspace = true

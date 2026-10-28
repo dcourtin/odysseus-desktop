@@ -5,8 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-common.workspace = true
-dbus.workspace = true
+common = { workspace = true, features = ["sni"] }
 smithay-client-toolkit.workspace = true
 chrono.workspace = true
 serde.workspace = true
